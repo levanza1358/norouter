@@ -3195,6 +3195,7 @@ async function loadTokenSaver() {
     if (note) note.textContent = err.message;
   } finally {
     tokenSaverLoading = false;
+    renderTokenSaver();
   }
 }
 
