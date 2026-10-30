@@ -193,7 +193,7 @@ const handler = async (req, res) => {
     res.writeHead(401, { 'content-type': 'application/json' });
     return res.end(JSON.stringify({ error: { message: 'stub: revoked credential' } }));
   }
-  if (token === 'limited-token') {
+  if (token === 'limited-token' || token.startsWith('limited-token-')) {
     res.writeHead(429, {
       'content-type': 'application/json',
       'retry-after': '1',

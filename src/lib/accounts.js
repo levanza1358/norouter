@@ -21,6 +21,10 @@ const DEFAULT_COOLDOWN_MS = 60_000;
 const AUTH_COOLDOWN_MS = 5 * 60_000;
 const MAX_ATTEMPTS = 4;
 
+export function accountAttemptLimit(providerId) {
+  return Math.max(MAX_ATTEMPTS, candidateIds(providerId).length);
+}
+
 const cursorByProvider = new Map();
 const idsByProvider = new Map();
 const inflightRefresh = new Map();
@@ -649,7 +653,7 @@ export function poolReady(providerId) {
 // One credential for calls that are not chat (model discovery, a probe), with
 // the same cooldown behaviour as the chat path.
 export async function poolToken(provider) {
-  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < accountAttemptLimit(provider.id); attempt += 1) {
     const row = pickAccount(provider.id, provider.accountStrategy);
     if (!row) return { token: '', row: null };
     const { token } = await accessTokenFor(provider, row);

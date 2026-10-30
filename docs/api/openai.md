@@ -77,7 +77,7 @@ Example:
 }
 ```
 
-The router resolves `cbcn`, `codebuddy-cn`, or a bare unambiguous model. The request body is otherwise forwarded with the resolved model.
+The router resolves `cbcn`, `codebuddy-cn`, or a bare unambiguous model. The request body is otherwise forwarded with the resolved model. For account-backed providers, a rate-limited, rejected, or failed account is parked temporarily and the same request is retried with each remaining healthy account. A request-shaped `400` is not retried across accounts.
 
 ### Streaming
 

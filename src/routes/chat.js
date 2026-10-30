@@ -1,4 +1,5 @@
 import {
+  accountAttemptLimit,
   accountCounts,
   accessTokenFor,
   earliestCooldown,
@@ -245,7 +246,7 @@ async function resolveCredential(provider) {
   const pooled = accountCounts(provider.id).total > 0;
 
   if (pooled) {
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    for (let attempt = 0; attempt < accountAttemptLimit(provider.id); attempt += 1) {
       const row = pickAccount(provider.id, provider.accountStrategy);
       if (!row) break;
       const { token } = await accessTokenFor(provider, row);
@@ -384,13 +385,21 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
     // the fallback ever runs.
     const maxRounds = comboName ? 1 : MAX_ATTEMPTS;
 
-    for (let round = 0; round < maxRounds; round += 1) {
+    for (let round = 0; round < (comboName ? maxRounds : accountAttemptLimit(provider.id)); round += 1) {
       if (round > 0) {
         attempt = await resolveCredential(provider);
         if (!attempt.token) break;
       }
 
-      let response = await callUpstream(upstreamBody, attempt.token);
+      let response;
+      try {
+        response = await callUpstream(upstreamBody, attempt.token);
+      } catch (err) {
+        if (clientGone || err.name === 'AbortError') throw err;
+        markFailure(attempt.row?.id, { message: err.message || 'Upstream request failed.', cooldownMs: DEFAULT_COOLDOWN_MS });
+        failure = { status: 502, text: err.message || 'Upstream request failed.' };
+        continue;
+      }
 
       // Some gateways reject stream_options outright. Drop it and retry once
       // rather than failing a request that would otherwise work.
@@ -439,8 +448,16 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
         continue;
       }
 
-      // 400/404/500 are request or provider problems; another account would
-      // fail the same way, so stop retrying and relay the real error.
+      // A request-shaped 400 is deterministic and should not burn every account.
+      // Other upstream failures park this account, then try every remaining
+      // healthy account before returning the last upstream error.
+      if (attempt.row && response.status !== 400) {
+        markFailure(attempt.row.id, {
+          message: text.slice(0, 200) || `Upstream returned ${response.status}.`,
+          cooldownMs: response.status === 429 ? retryAfterMs(response, text) : DEFAULT_COOLDOWN_MS,
+        });
+        continue;
+      }
       break;
     }
 
@@ -618,6 +635,12 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
         res.end();
       }
       return { ok: false, status: 499, message: 'Request aborted', model, fallback: false, aborted: true };
+    }
+    if (attempt.row) {
+      markFailure(attempt.row.id, {
+        message: err.message || 'Upstream request failed.',
+        cooldownMs: DEFAULT_COOLDOWN_MS,
+      });
     }
     noteError(err.message, {
       upstream: true,

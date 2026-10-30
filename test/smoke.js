@@ -2195,6 +2195,30 @@ await test('a rate-limited account cools down and the next account serves', asyn
   assert.equal(pool.counts.cooldown, 1);
 });
 
+await test('account failover tries every account before stopping', async () => {
+  for (;;) {
+    const page = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+    if (!page.items.length) break;
+    for (const row of page.items) await fetch(`${base}/api/providers/codebuddy-cn/accounts/${row.id}`, { method: 'DELETE' });
+  }
+  for (const token of ['limited-token-1', 'limited-token-2', 'good-token']) {
+    const res = await fetch(`${base}/api/providers/codebuddy-cn/accounts`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ access_token: token }),
+    });
+    assert.equal(res.status, 201);
+  }
+  const chat = await fetch(`${base}/v1/chat/completions`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'cbcn/glm-5.3', messages: [{ role: 'user', content: 'failover' }] }),
+  });
+  const body = await chat.json();
+  assert.equal(chat.status, 200, JSON.stringify(body));
+  const pool = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+  assert.equal(pool.items.find((row) => row.label === 'Account 3').requests, 1);
+  assert.equal(pool.items.filter((row) => row.status === 'cooldown').length, 2);
+});
+
 await test('usage history persists requests through the chat route', async () => {
   for (;;) {
     const page = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();

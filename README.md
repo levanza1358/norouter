@@ -77,7 +77,7 @@ Sumber credential yang didukung:
    - `access_token` (API key aliases are normalized into this field)
    - `refresh_token`
 
-Token account dimasukkan manual oleh operator. Pool mendukung tiga strategi per provider — `round-robin` (default), `sequential`, dan `highest-quota` — plus cooldown saat rate limit, pause/resume, pagination server-side, duplicate fingerprint, bulk import hingga 5.000 row, dan preview sebelum konfirmasi. Strategi diatur di tab Accounts pada detail provider. API/UI hanya mengembalikan token masked; token mentah tidak boleh masuk response atau dokumentasi.
+Token account dimasukkan manual oleh operator. Pool mendukung tiga strategi per provider — `round-robin` (default), `sequential`, dan `highest-quota` — plus cooldown saat rate limit, failover otomatis ke seluruh akun sehat yang tersedia, pause/resume, pagination server-side, duplicate fingerprint, bulk import hingga 5.000 row, dan preview sebelum konfirmasi. Error, rate limit, credential rejection, serta kegagalan upstream memarkir akun sementara; request lanjut ke akun sehat berikutnya. Jika tidak ada akun sehat, router mengembalikan error dengan waktu cooldown bila tersedia. Strategi diatur di tab Accounts pada detail provider. API/UI hanya mengembalikan token masked; token mentah tidak boleh masuk response atau dokumentasi.
 
 Refresh CodeBuddy memakai refresh token yang operator simpan di account pool. `.env` hanya menyimpan konfigurasi proxy, endpoint override untuk test, dan router API key; bukan credential upstream. Router **tidak** melakukan OAuth auto-login, device-code polling, browser login, MITM root CA, atau reuse credential subscription dari aplikasi lain.
 

@@ -61,7 +61,7 @@ curl http://<server-ip>:5555/api/status
 curl http://<server-ip>:5555/v1/models
 ```
 
-`/v1/models` needs the router API key only when `REQUIRE_API_KEY=true`.
+`/v1/models` needs the router API key only when `REQUIRE_API_KEY=true`. During chat, rate-limited, rejected, or failed accounts are parked temporarily and the router tries every remaining healthy account. It stops only after no healthy account remains or the request itself is invalid.
 
 ## Logs
 
