@@ -1,6 +1,7 @@
 import net from 'node:net';
 
 import { sendError, sendJson } from '../lib/http.js';
+import { installAutostart, uninstallAutostart, autostartStatus } from '../lib/autostart.js';
 import { validPort } from '../lib/local-config.js';
 
 function canBind(host, port) {
@@ -17,6 +18,21 @@ function canBind(host, port) {
 
 export function handlePortGet(req, res, settings) {
   return sendJson(res, 200, { host: settings.host, port: settings.port });
+}
+
+export function handleAutostartGet(req, res) {
+  return sendJson(res, 200, autostartStatus());
+}
+
+export async function handleAutostartUpdate(req, res, readJson) {
+  let body;
+  try { body = await readJson(req, 16 * 1024); } catch (err) { return sendError(res, err.status || 400, err.message); }
+  if (typeof body?.enabled !== 'boolean') return sendError(res, 400, 'enabled must be boolean.');
+  try {
+    return sendJson(res, 200, body.enabled ? installAutostart() : uninstallAutostart());
+  } catch (err) {
+    return sendError(res, 409, err.message);
+  }
 }
 
 export async function handlePortUpdate(req, res, settings, readJson, rebind) {

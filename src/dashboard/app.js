@@ -3269,6 +3269,23 @@ function renderDashboardConnect() {
   if (button) button.disabled = !dashboardApiKeySecret;
 }
 
+async function loadAutostart() {
+  const toggle = $('autostartToggle');
+  const note = $('autostartNote');
+  if (!toggle) return;
+  try {
+    const res = await fetch('/api/settings/autostart', { cache: 'no-store' });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error?.message || 'Could not load autostart status.');
+    toggle.checked = body.enabled;
+    toggle.disabled = !body.supported;
+    if (!body.supported) detailNote(note, `Autostart is not supported on ${body.platform}.`, 'bad');
+  } catch (err) {
+    toggle.disabled = true;
+    detailNote(note, err.message, 'bad');
+  }
+}
+
 async function loadDashboardApiKey() {
   try {
     const res = await fetch('/api/keys', { cache: 'no-store' });
@@ -3298,6 +3315,7 @@ function renderSettings(data) {
   renderDashboardAuth();
   renderTokenSaver();
   loadDashboardAuth();
+  loadAutostart();
 }
 
 /* ---------------- add provider ---------------- */
@@ -5350,6 +5368,26 @@ async function copyBase() {
     setTimeout(() => { button.textContent = 'Copy'; }, 1400);
   }
 }
+
+$('autostartToggle')?.addEventListener('change', async (event) => {
+  const toggle = event.currentTarget;
+  const note = $('autostartNote');
+  const enabled = toggle.checked;
+  toggle.disabled = true;
+  detailNote(note, enabled ? 'Enabling autostart…' : 'Disabling autostart…');
+  try {
+    const res = await fetch('/api/settings/autostart', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled }) });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error?.message || `Autostart update failed (${res.status})`);
+    toggle.checked = body.enabled;
+    detailNote(note, body.enabled ? 'Autostart enabled.' : 'Autostart disabled.', 'ok');
+  } catch (err) {
+    toggle.checked = !enabled;
+    detailNote(note, err.message, 'bad');
+  } finally {
+    toggle.disabled = false;
+  }
+});
 
 $('saveServerPort')?.addEventListener('click', async () => {
   const input = $('serverPort');

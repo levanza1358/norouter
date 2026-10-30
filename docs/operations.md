@@ -13,9 +13,7 @@ Windows PowerShell:
 ```powershell
 git clone https://github.com/levanza1358/norouter.git
 cd norouter
-Copy-Item .env.example .env
-npm link
-norouter start
+.\install.ps1
 ```
 
 Linux:
@@ -23,10 +21,11 @@ Linux:
 ```bash
 git clone https://github.com/levanza1358/norouter.git
 cd norouter
-cp .env.example .env
-npm link
-norouter start
+chmod +x install.sh
+./install.sh
 ```
+
+The installer creates `.env` only when missing, preserves local state, links the CLI, and starts the managed server. Node.js 22.5+ remains required; the installer does not silently install system packages.
 
 Commands:
 
@@ -38,11 +37,18 @@ norouter update     fast-forward from origin and restart if updated
 norouter dev        server with --watch
 norouter test       smoke suite
 norouter version    package version
+norouter install     create missing config and start server
+norouter autostart-on  enable native autostart
+norouter autostart-off disable native autostart
+norouter autostart-status show native autostart status
+norouter uninstall   confirm and remove this checkout
 ```
 
 `norouter.cmd` is the Windows launcher. On Linux, use `norouter` after `npm link`, or `node bin/norouter.js <command>` from the checkout. `npm start`, `npm run dev`, and `npm test` remain supported.
 
 `norouter update` requires a clean Git checkout and a configured `origin`. It never overwrites local changes or performs a non-fast-forward merge. A running managed server is restarted only after a new commit is installed.
+
+`norouter autostart-on` uses Windows Task Scheduler or a Linux per-user `systemd` unit. Linux boot-time use may require `loginctl enable-linger <user>`. `norouter uninstall` stops only the managed process, removes norouter autostart, then asks for exact `y` or `yes`; confirmation deletes this checkout, `.env`, local config, and SQLite data. A non-interactive uninstall is refused.
 
 ## Start/stop
 

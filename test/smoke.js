@@ -48,6 +48,7 @@ assert.equal(DB_FILE, TEST_DB_FILE, 'smoke tests must use the throwaway database
 const { createServer } = await import('../src/server.js');
 const { SESSION_TTL_MS } = await import('../src/lib/dashboard-session.js');
 const { validPort } = await import('../src/lib/local-config.js');
+const { autostartPlatform, autostartSupported, autostartPlan } = await import('../src/lib/autostart.js');
 
 const results = [];
 
@@ -73,7 +74,7 @@ function streamFrom(text) {
 await test('norouter CLI exposes start, dev, test and version', () => {
   const cli = join(import.meta.dirname, '..', 'bin', 'norouter.js');
   const help = execFileSync(process.execPath, [cli, 'help'], { encoding: 'utf8' });
-  for (const command of ['start', 'restart', 'stop', 'update', 'dev', 'test', 'version']) {
+  for (const command of ['start', 'restart', 'stop', 'update', 'dev', 'test', 'install', 'autostart-on', 'autostart-off', 'autostart-status', 'uninstall']) {
     assert.match(help, new RegExp(`^\\s+${command}\\b`, 'm'), `${command} must be listed`);
   }
   const version = execFileSync(process.execPath, [cli, 'version'], { encoding: 'utf8' }).trim();
@@ -192,6 +193,22 @@ await test('in-stream error frame is captured, not swallowed', async () => {
 const { server } = createServer({ port: 0, host: '127.0.0.1', logRequests: false });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
+
+await test('autostart planner stays platform-local and secret-free', () => {
+  const plan = autostartPlan();
+  assert.equal(plan.platform, autostartPlatform());
+  assert.equal(plan.supported, autostartSupported());
+  assert.ok(!JSON.stringify(plan).includes('ROUTER_API_KEY'));
+});
+
+await test('autostart settings route reports support and validates updates', async () => {
+  const status = await fetch(`${base}/api/settings/autostart`);
+  const body = await status.json();
+  assert.equal(status.status, 200);
+  assert.equal(body.platform, autostartPlatform());
+  const invalid = await fetch(`${base}/api/settings/autostart`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: 'yes' }) });
+  assert.equal(invalid.status, 400);
+});
 
 await test('port configuration validates and settings route reports the listener', async () => {
   assert.equal(validPort(5555), 5555);

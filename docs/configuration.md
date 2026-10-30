@@ -13,7 +13,8 @@
 | `ENABLE_REQUEST_LOGS` | enabled | Only exact `false` disables request logs |
 | `UPSTREAM_TIMEOUT_MS` | `300000` | Chat upstream timeout |
 | `NOROUTER_DB` | `data/norouter.db` | SQLite file path |
-| `config.local.json` | `port: 5555` | Ignored local Settings override; created when the dashboard port is changed |
+| `config.local.json` | `port: 5555` | Ignored local Settings override; created when the dashboard port or autostart setting changes |
+| `autostart` in `config.local.json` | `false` | Desired local autostart state; actual registration is checked against the OS |
 
 ## Local traffic budget
 

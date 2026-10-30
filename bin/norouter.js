@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { clearManagedPid, isProcessAlive, readManagedPid } from '../src/lib/process-control.js';
+import { installAutostart, uninstallAutostart, autostartStatus as getAutostartStatus } from '../src/lib/autostart.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SERVER = join(ROOT, 'src', 'server.js');
@@ -17,6 +19,11 @@ const COMMANDS = {
   update: { label: 'Fast-forward from the configured Git remote' },
   dev: { script: SERVER, nodeArgs: ['--watch'], label: 'Start the server with file watching' },
   test: { script: SMOKE, label: 'Run the smoke test suite' },
+  install: { label: 'Create local configuration and start the server' },
+  'autostart-on': { label: 'Enable operating-system autostart' },
+  'autostart-off': { label: 'Disable operating-system autostart' },
+  'autostart-status': { label: 'Show operating-system autostart status' },
+  uninstall: { label: 'Confirm and remove this norouter checkout' },
 };
 
 function packageVersion() {
@@ -32,7 +39,7 @@ function usage() {
     'Usage: norouter <command>',
     '',
     'Commands:',
-    ...Object.entries(COMMANDS).map(([name, meta]) => `  ${name.padEnd(8)}${meta.label}`),
+    ...Object.entries(COMMANDS).map(([name, meta]) => `  ${name.padEnd(18)}${meta.label}`),
     '  help    Show this help',
     '  version Show the package version',
   ].join('\n'));
@@ -69,6 +76,56 @@ async function stopManagedServer({ quiet = false } = {}) {
 async function restart() {
   await stopManagedServer({ quiet: true });
   run(SERVER);
+}
+
+function ensureLocalSetup() {
+  const envFile = join(ROOT, '.env');
+  const example = join(ROOT, '.env.example');
+  if (!existsSync(envFile)) writeFileSync(envFile, readFileSync(example), { mode: 0o600 });
+  mkdirSync(join(ROOT, 'data'), { recursive: true });
+  console.log(`norouter: ready at ${envFile}`);
+}
+
+async function install() {
+  ensureLocalSetup();
+  run(SERVER);
+}
+
+function autostartOn() {
+  console.log(JSON.stringify(installAutostart(), null, 2));
+}
+
+function autostartOff() {
+  console.log(JSON.stringify(uninstallAutostart(), null, 2));
+}
+
+function autostartStatus() {
+  console.log(JSON.stringify(getAutostartStatus(), null, 2));
+}
+
+function askConfirmation(question) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return Promise.resolve(false);
+  const input = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => input.question(question, (answer) => { input.close(); resolve(/^(y|yes)$/i.test(answer.trim())); }));
+}
+
+function scheduleRemoval() {
+  const target = ROOT;
+  if (process.platform === 'win32') {
+    const command = `ping 127.0.0.1 -n 3 >nul & rmdir /s /q "${target}"`;
+    spawn('cmd.exe', ['/d', '/c', command], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+  } else {
+    spawn('sh', ['-c', `sleep 1; rm -rf -- ${JSON.stringify(target)}`], { detached: true, stdio: 'ignore' }).unref();
+  }
+}
+
+async function uninstall() {
+  console.log(`This removes the norouter checkout, .env, config.local.json, and data/ SQLite files:\n  ${ROOT}`);
+  if (!(await askConfirmation('Type y or yes to continue: '))) throw new Error('Uninstall cancelled.');
+  await stopManagedServer({ quiet: true });
+  try { uninstallAutostart(); } catch (err) { console.error(`norouter: autostart removal: ${err.message}`); }
+  scheduleRemoval();
+  console.log('norouter: uninstall scheduled.');
 }
 
 function git(args) {
@@ -135,7 +192,17 @@ if (command === 'help' || command === '--help' || command === '-h') {
     console.error(`norouter: ${err.message}`);
     process.exit(1);
   });
-} else if (COMMANDS[command]) {
+} else if (command === 'install') {
+  install();
+} else if (command === 'autostart-on') {
+  try { autostartOn(); } catch (err) { console.error(`norouter: ${err.message}`); process.exit(1); }
+} else if (command === 'autostart-off') {
+  try { autostartOff(); } catch (err) { console.error(`norouter: ${err.message}`); process.exit(1); }
+} else if (command === 'autostart-status') {
+  autostartStatus();
+} else if (command === 'uninstall') {
+  uninstall().catch((err) => { console.error(`norouter: ${err.message}`); process.exit(1); });
+} else if (COMMANDS[command]?.script) {
   const { script, nodeArgs = [] } = COMMANDS[command];
   run(script, nodeArgs, rest);
 } else {

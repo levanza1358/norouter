@@ -23,6 +23,15 @@ Token Saver defaults to `{ ponytail: { enabled: false } }`. PATCH accepts `{ pon
 
 Managed keys are stored as plaintext in SQLite so the dashboard can show, hide, copy, and edit them. Create accepts `name`, optional custom `secret`, optional future `expiresAt`, `requestLimit`, and `tokenLimit`; token limits accept integer counts or compact suffixes `K`, `M`, `B`, and `T` (for example `1M` = 1,000,000 tokens); the dashboard exposes these as a unit dropdown; `None` disables token-limit input, and request limits use a separate enable toggle. Omitted limits are unlimited. Request limits count admitted chat requests; token limits count reported prompt plus completion tokens. The dashboard page may require its optional page password, but `/api` routes remain unauthenticated; protect the all-interface bind with a firewall/reverse proxy or set `HOST=127.0.0.1`, and treat its database, WAL/SHM, and backups as secret material.
 
+## Autostart
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/settings/autostart` | Returns actual OS registration status, support, and platform. |
+| PATCH | `/api/settings/autostart` | `{ "enabled": true|false }`; registers or removes native Windows Task Scheduler or Linux user-systemd autostart. |
+
+Autostart definitions contain only the executable and repository path. They do not contain `.env` values or credentials.
+
 ## Dashboard port
 
 | Method | Path | Notes |

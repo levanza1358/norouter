@@ -14,6 +14,7 @@
 - Dashboard themes, accents, splash, route/modal/toast transitions.
 - In-memory global usage/activity stats.
 - Managed API keys with custom/automatic secrets, expiry, request/token limits, and daily usage history.
+- Native Windows/Linux autostart settings and confirmation-gated uninstall CLI.
 - Local upstream stub and smoke suite at last verification.
 
 ## Deliberately absent

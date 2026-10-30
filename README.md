@@ -18,9 +18,7 @@ Runtime:
 ```powershell
 git clone https://github.com/levanza1358/norouter.git
 cd norouter
-Copy-Item .env.example .env
-npm link
-norouter start
+.\install.ps1
 ```
 
 ### Windows Command Prompt
@@ -28,9 +26,7 @@ norouter start
 ```bat
 git clone https://github.com/levanza1358/norouter.git
 cd norouter
-copy .env.example .env
-npm link
-norouter start
+install.ps1
 ```
 
 ### Linux
@@ -38,12 +34,11 @@ norouter start
 ```bash
 git clone https://github.com/levanza1358/norouter.git
 cd norouter
-cp .env.example .env
-npm link
-norouter start
+chmod +x install.sh
+./install.sh
 ```
 
-Isi credential provider secara manual lewat dashboard atau account API. Jangan commit `.env`, database, WAL/SHM, token, atau log.
+The installer checks Node.js 22.5+, creates `.env` only when missing, creates the local data directory, registers the CLI, then starts norouter. It never overwrites existing `.env`, database, or local settings. Enter provider credentials manually through the dashboard or account API. Never commit `.env`, database, WAL/SHM, tokens, or logs.
 
 Alamat default:
 
@@ -65,6 +60,10 @@ norouter update     Fetch + fast-forward dari GitHub, lalu restart jika perlu
 norouter dev        Start dengan Node watch mode
 norouter test       Jalankan smoke suite
 norouter version    Tampilkan versi
+norouter install     Siapkan konfigurasi dan start server
+norouter autostart-on  Aktifkan start otomatis saat login
+norouter autostart-off Nonaktifkan start otomatis
+norouter uninstall   Hapus checkout setelah konfirmasi y/yes
 ```
 
 `norouter update` hanya berjalan pada checkout Git dengan working tree bersih. Update memakai `git fetch --prune origin` dan `git merge --ff-only origin/<branch>`; merge konflik atau perubahan lokal tidak dipaksa. Jika server sedang berjalan melalui `norouter start`, update otomatis me-restart server setelah commit baru masuk.

@@ -38,7 +38,7 @@ import { handleAsset, handleDashboard } from './routes/dashboard.js';
 import { handleModels } from './routes/models.js';
 import { handleAddModel, handleCreateProvider, handleDeleteProvider, handleFetchModels, handleProviderDetail, handleRemoveModel, handleSetModelEnabled, handleTestModels, handleUpdateProvider } from './routes/provider.js';
 import { handleStatus } from './routes/status.js';
-import { handlePortGet, handlePortUpdate } from './routes/settings.js';
+import { handleAutostartGet, handleAutostartUpdate, handlePortGet, handlePortUpdate } from './routes/settings.js';
 import { writeLocalConfig } from './lib/local-config.js';
 import { handleUsage } from './routes/usage.js';
 import { handleGetTokenSaver, handleUpdateTokenSaver } from './routes/token-saver.js';
@@ -54,6 +54,7 @@ import {
 } from './routes/dashboard-auth.js';
 import { isDashboardPasswordEnabled } from './lib/dashboard-auth.js';
 import { clearManagedPid, writeManagedPid } from './lib/process-control.js';
+import { closeDb } from './lib/db.js';
 import {
   handleCreateApiKey,
   handleDeleteApiKey,
@@ -116,6 +117,12 @@ export function createServer(overrides = {}) {
       }
       if (path === '/api/status') {
         return handleStatus(req, res);
+      }
+      if (path === '/api/settings/autostart' && req.method === 'GET') {
+        return handleAutostartGet(req, res);
+      }
+      if (path === '/api/settings/autostart' && req.method === 'PATCH') {
+        return await handleAutostartUpdate(req, res, readJson);
       }
       if (path === '/api/settings/port' && req.method === 'GET') {
         return handlePortGet(req, res, settings);
@@ -329,8 +336,12 @@ if (isMain) {
     console.log(`  base URL:  ${base}/v1`);
   });
 
+  let shuttingDown = false;
   const shutdown = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     clearManagedPid();
+    closeDb();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 1000).unref();
   };

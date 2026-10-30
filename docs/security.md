@@ -14,6 +14,7 @@ Norouter assumes a single trusted local operator supplies provider credentials. 
 - Custom provider URLs can target arbitrary hosts, localhost/private networks, or plaintext HTTP.
 - Test URL overrides can redirect credential-bearing calls.
 - No TLS termination, rate limiting, CSRF protection, RBAC, or audit log exists.
+- Autostart runs the local checkout as the current user; protect the account and repository permissions.
 - Error/event content can contain upstream text; review logs before sharing.
 
 These are current facts, not recommended production controls.
