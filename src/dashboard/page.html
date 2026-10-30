@@ -1,0 +1,1030 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-accent="violet">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>norouter · dashboard</title>
+<script>
+  // Applied before first paint so a saved theme never flashes light.
+  try {
+    var t = localStorage.getItem('norouter.theme');
+    var a = localStorage.getItem('norouter.accent');
+    if (t) document.documentElement.dataset.theme = t;
+    if (a) document.documentElement.dataset.accent = a;
+  } catch (e) {}
+  document.documentElement.classList.add('dashboard-booting');
+</script>
+<style>
+  html.dashboard-booting { overflow: hidden; }
+  html.dashboard-booting .app { visibility: hidden; }
+</style>
+<link rel="icon" type="image/svg+xml" href="/assets/icon.svg">
+<link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+<style>
+  #dashboardLogin[hidden] { display: none; }
+  body.dashboard-locked {
+    --lock-pointer-x: 50%;
+    --lock-pointer-y: 35%;
+    isolation: isolate;
+    overflow: hidden;
+    margin: 0;
+    min-height: 100vh;
+    background:
+      radial-gradient(520px circle at var(--lock-pointer-x) var(--lock-pointer-y), #6540d82b, transparent 68%),
+      #0d0d12;
+    color: #f5f5f5;
+    font: 14px system-ui, sans-serif;
+  }
+  body.dashboard-locked::before,
+  body.dashboard-locked::after {
+    content: '';
+    position: fixed;
+    inset: -28%;
+    z-index: -1;
+    pointer-events: none;
+  }
+  body.dashboard-locked::before {
+    background:
+      radial-gradient(38% 34% at 18% 22%, #6540d826, transparent 72%),
+      radial-gradient(34% 38% at 82% 74%, #2f7cf626, transparent 72%),
+      radial-gradient(28% 30% at 54% 92%, #b14cff18, transparent 72%);
+    filter: blur(34px);
+    animation: dashboard-lock-drift 18s ease-in-out infinite alternate;
+  }
+  body.dashboard-locked::after {
+    background-image: linear-gradient(#ffffff08 1px, transparent 1px), linear-gradient(90deg, #ffffff08 1px, transparent 1px);
+    background-size: 42px 42px;
+    mask-image: radial-gradient(ellipse at center, #000 18%, transparent 78%);
+    opacity: .18;
+  }
+  @keyframes dashboard-lock-drift {
+    from { transform: translate3d(-3%, -2%, 0) scale(1); }
+    to { transform: translate3d(3%, 2%, 0) scale(1.08); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    body.dashboard-locked::before { animation: none; }
+  }
+  body.dashboard-locked .app { display: none; }
+  body.dashboard-locked #dashboardLogin { display: none; }
+  body.dashboard-locked.dashboard-lock-ready .splash { display: none; }
+  body.dashboard-locked.dashboard-lock-ready #dashboardLogin { display: grid; place-items: center; min-height: 100vh; padding: 24px; box-sizing: border-box; background: #111; }
+  body.dashboard-locked:not(.dashboard-lock-ready) .splash {
+    position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
+    background: #111; color: #f5f5f5;
+  }
+  body.dashboard-locked:not(.dashboard-lock-ready) .splash-card {
+    display: flex; align-items: center; gap: 12px; min-width: 218px;
+    padding: 14px 16px; border: 1px solid #333; border-radius: 16px;
+    background: #1b1b1b; box-shadow: 0 20px 60px #0008; box-sizing: border-box;
+  }
+  body.dashboard-locked:not(.dashboard-lock-ready) .splash-mark {
+    width: 38px; height: 38px; flex: 0 0 38px; border-radius: 13px; overflow: hidden;
+  }
+  body.dashboard-locked:not(.dashboard-lock-ready) .splash-mark svg { display: block; width: 100%; height: 100%; }
+  body.dashboard-locked:not(.dashboard-lock-ready) .splash-copy { display: flex; flex-direction: column; }
+  body.dashboard-locked:not(.dashboard-lock-ready) .splash-copy strong { font-size: 14px; }
+  body.dashboard-locked:not(.dashboard-lock-ready) .splash-copy span { margin-top: 1px; color: #aaa; font-size: 11px; }
+  body.dashboard-locked:not(.dashboard-lock-ready) .splash-loader { width: 42px; height: 4px; margin-left: auto; border-radius: 999px; background: #333; overflow: hidden; }
+  body.dashboard-locked:not(.dashboard-lock-ready) .splash-loader span { display: block; width: 100%; height: 100%; border-radius: inherit; background: #6540d8; }
+  body.dashboard-locked .dashboard-login-card { width: min(390px, 100%); padding: 28px; border: 1px solid #333; border-radius: 16px; background: #1b1b1b; box-shadow: 0 20px 60px #0008; box-sizing: border-box; }
+  body.dashboard-locked .dashboard-login-logo { display: block; width: 48px; height: 48px; margin: 0 0 18px; border-radius: 13px; }
+  body.dashboard-locked .dashboard-login-card h1 { margin: 0 0 8px; font-size: 24px; }
+  body.dashboard-locked .dashboard-login-card p { margin: 0 0 20px; color: #aaa; }
+  body.dashboard-locked .dashboard-login-card form { display: grid; gap: 10px; }
+  body.dashboard-locked .dashboard-login-card input { min-height: 42px; padding: 9px 11px; border: 1px solid #555; border-radius: 9px; color: #fff; background: #111; font: inherit; box-sizing: border-box; }
+  body.dashboard-locked .dashboard-login-card button { min-height: 42px; border: 0; border-radius: 9px; color: #fff; background: #6540d8; font: inherit; font-weight: 650; cursor: pointer; }
+  body.dashboard-locked .dashboard-login-card span { min-height: 18px; color: #ff8f8f; font-size: 12px; }
+</style>
+<div class="dashboard-login" id="dashboardLogin" hidden>
+  <div class="dashboard-login-card" role="dialog" aria-modal="true" aria-labelledby="dashboardLoginTitle">
+    <svg class="dashboard-login-logo" viewBox="0 0 64 64" role="img" aria-label="norouter"><rect width="64" height="64" rx="16" fill="#000"/><path d="M20 45V19l24 26V19" fill="none" stroke="#fff" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <h1 id="dashboardLoginTitle">Dashboard locked</h1>
+    <p>Enter the dashboard password to continue.</p>
+    <form id="dashboardLoginForm">
+      <label for="dashboardLoginPassword">Password</label>
+      <input id="dashboardLoginPassword" name="password" type="password" autocomplete="current-password" minlength="4" required>
+      <button type="submit">Unlock dashboard</button>
+      <span id="dashboardLoginNote" role="status" aria-live="polite"></span>
+    </form>
+  </div>
+</div>
+<script>
+  (() => {
+    const overlay = document.getElementById('dashboardLogin');
+    const form = document.getElementById('dashboardLoginForm');
+    const input = document.getElementById('dashboardLoginPassword');
+    const note = document.getElementById('dashboardLoginNote');
+    const show = (message = '') => {
+      document.body.classList.add('dashboard-locked', 'dashboard-lock-ready');
+      overlay.hidden = false;
+      note.textContent = message;
+      input.focus();
+    };
+    if (document.body.dataset.dashboardLocked === 'true') {
+      const supportsMotion = !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      if (supportsMotion && window.matchMedia?.('(pointer: fine)').matches) {
+        let frame = 0;
+        let x = 50;
+        let y = 35;
+        window.addEventListener('pointermove', (event) => {
+          x = (event.clientX / Math.max(window.innerWidth, 1)) * 100;
+          y = (event.clientY / Math.max(window.innerHeight, 1)) * 100;
+          if (frame) return;
+          frame = requestAnimationFrame(() => {
+            frame = 0;
+            document.body.style.setProperty('--lock-pointer-x', `${x}%`);
+            document.body.style.setProperty('--lock-pointer-y', `${y}%`);
+          });
+        }, { passive: true });
+      }
+      window.setTimeout(() => show(), 260);
+    } else {
+      fetch('/api/auth/status', { cache: 'no-store' }).then((response) => response.json()).then((body) => {
+        if (body.enabled && !body.authenticated) show();
+      }).catch(() => {});
+    }
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      note.textContent = 'Checking…';
+      const response = await fetch('/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: input.value }) });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) { note.textContent = body.error?.message || 'Could not unlock dashboard.'; input.select(); return; }
+      location.reload();
+    });
+  })();
+</script>
+<div class="pointer-glow" aria-hidden="true"></div>
+<div class="splash" id="appSplash" role="status" aria-live="polite">
+  <div class="splash-card">
+    <div class="splash-mark"><svg viewBox="0 0 64 64" role="img" aria-label="norouter"><rect width="64" height="64" rx="16" fill="#000"/><path d="M20 45V19l24 26V19" fill="none" stroke="#fff" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <div class="splash-copy">
+      <strong>norouter</strong>
+      <span>Opening local gateway</span>
+    </div>
+    <div class="splash-loader" aria-hidden="true"><span></span></div>
+  </div>
+</div>
+<div class="app">
+
+  <aside class="rail">
+    <div class="rail-logo"><svg viewBox="0 0 64 64" role="img" aria-label="norouter"><rect width="64" height="64" rx="16" fill="#000"/><path d="M20 45V19l24 26V19" fill="none" stroke="#fff" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <nav class="rail-nav">
+      <a class="rail-btn" href="/" data-route="/" title="Dashboard" aria-label="Dashboard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9.5 21v-6h5v6"/></svg>
+      </a>
+      <a class="rail-btn" href="/chat" data-route="/chat" title="Chat" aria-label="Chat">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5.5h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H11l-4.5 3v-3H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"/><path d="M7.5 10h9M7.5 13h5"/></svg>
+      </a>
+      <a class="rail-btn" href="/providers" data-route="/providers" title="Providers" aria-label="Providers">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="6" rx="2"/><rect x="3.5" y="14" width="17" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg>
+      </a>
+      <a class="rail-btn" href="/usage" data-route="/usage" title="Usage" aria-label="Usage">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M9.5 19V5M15 19v-6M20.5 19v-9"/></svg>
+      </a>
+      <a class="rail-btn" href="/api-keys" data-route="/api-keys" title="API Keys" aria-label="API Keys">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m11 12 8-8M16 7l2 2M14 9l2 2"/></svg>
+      </a>
+      <a class="rail-btn" href="/combos" data-route="/combos" title="Combos" aria-label="Combos">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h6M4 12h6M4 18h6"/><path d="M14 6h6M14 12h6M14 18h6"/><path d="m10 6 2 6-2 6"/></svg>
+      </a>
+      <a class="rail-btn" href="/settings" data-route="/settings" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 1 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.5-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 4.6a2 2 0 1 1 4 0A1.7 1.7 0 0 0 16.9 6l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 21 11a2 2 0 1 1 0 4z"/></svg>
+      </a>
+    </nav>
+  </aside>
+
+  <main class="main">
+
+    <header class="topbar">
+      <div>
+<h1 id="pageTitle">Dashboard</h1>
+      <p id="tagline">Monitor gateway health, traffic, and recent activity.</p>
+      </div>
+      <div class="topbar-right">
+        <div class="today">
+          <span class="today-label" id="todayLabel">—</span>
+          <span class="today-alt" id="todayAlt"></span>
+        </div>
+        <div class="topbar-connect" id="topbarConnect" hidden>
+          <div class="topbar-connect-item">
+            <span class="topbar-connect-label">Base URL</span>
+            <code id="baseUrl">—</code>
+            <button class="btn btn-ghost btn-xs" id="copyBase" type="button">Copy</button>
+          </div>
+          <div class="topbar-connect-item">
+            <span class="topbar-connect-label">API key</span>
+            <code id="dashboardApiKey">Not configured</code>
+            <button class="btn btn-ghost btn-xs" id="copyApiKey" type="button" disabled>Copy</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- ============ DASHBOARD ============ -->
+    <section class="page" data-page="/" hidden>
+
+      <div class="grid">
+        <div class="col">
+          <article class="card">
+            <div class="card-head">
+              <div><h2 class="card-title">Statistics</h2></div>
+              <span class="chip chip-quiet" id="statRangeChip">since start</span>
+            </div>
+            <div class="pair">
+              <div>
+                <div class="stat-big" id="statIn">0</div>
+                <div class="stat-cap">tokens in</div>
+              </div>
+              <div>
+                <div class="stat-big" id="statOut">0</div>
+                <div class="stat-cap">tokens out</div>
+              </div>
+            </div>
+            <div class="tiles">
+              <div class="tile">
+                <span class="tile-label">Last latency</span>
+                <span class="tile-value" id="statLatency">—</span>
+              </div>
+              <div class="tile">
+                <span class="tile-label">Errors</span>
+                <span class="tile-value" id="statErrors">0</span>
+              </div>
+            </div>
+            <div class="dashboard-history" aria-label="Historical usage">
+              <div class="dashboard-history-head"><strong>History</strong><span class="chip chip-quiet" id="dashboardHistoryRange">today</span></div>
+              <div class="dashboard-history-pair"><span><b id="dashboardHistoryIn">—</b><small>tokens in</small></span><span><b id="dashboardHistoryOut">—</b><small>tokens out</small></span><span><b id="dashboardHistoryErrors">—</b><small>errors</small></span></div>
+              <p class="dashboard-history-note" id="dashboardHistoryStatsNote" role="status" aria-live="polite">Loading historical usage…</p>
+            </div>
+          </article>
+
+          <article class="card card-models">
+            <div class="card-head">
+              <h2 class="card-title">Models</h2>
+              <span class="chip chip-quiet" id="modelCount">—</span>
+            </div>
+            <div class="mlist" id="modelList"></div>
+          </article>
+
+        </div>
+
+        <div class="col">
+          <div class="dashboard-range-bar">
+            <div class="dtabs" id="dashboardRangeTabs" role="tablist" aria-label="Dashboard historical usage range">
+              <button class="dtab is-active" id="dashboardRangeDay" type="button" role="tab" data-dashboard-range="day" aria-selected="true" aria-controls="dashboardHistoryPanel">Daily</button>
+              <button class="dtab" id="dashboardRangeWeek" type="button" role="tab" data-dashboard-range="week" aria-selected="false" aria-controls="dashboardHistoryPanel" tabindex="-1">Weekly</button>
+              <button class="dtab" id="dashboardRangeMonth" type="button" role="tab" data-dashboard-range="month" aria-selected="false" aria-controls="dashboardHistoryPanel" tabindex="-1">Monthly</button>
+              <button class="dtab" id="dashboardRangeAll" type="button" role="tab" data-dashboard-range="all" aria-selected="false" aria-controls="dashboardHistoryPanel" tabindex="-1">All time</button>
+            </div>
+            <span class="chip chip-quiet" id="dashboardHistorySource">History</span>
+          </div>
+          <article class="card dashboard-primary" id="dashboardHistoryPanel" role="tabpanel" aria-labelledby="dashboardRangeDay">
+            <div class="card-head">
+              <div><h2 class="card-title">Requests</h2></div>
+              <div class="head-chips">
+                <span class="chip chip-quiet" id="reqRangeChip">since start</span>
+                <span class="chip chip-quiet" id="uptimeChip">up —</span>
+              </div>
+            </div>
+            <div class="big-row">
+              <div class="stat-huge" id="statRequests">0</div>
+              <div class="chips">
+                <span class="chip chip-quiet" id="successChip">—</span>
+                <span class="chip chip-quiet" id="inOutChip">no traffic</span>
+              </div>
+            </div>
+            <div class="spark" id="spark" role="img" aria-label="Request activity chart"></div>
+            <p class="spark-summary" id="sparkSummary"></p>
+            <div class="spark-foot">
+              <span>oldest</span>
+              <span id="sparkWindow">recent requests</span>
+              <span>newest</span>
+            </div>
+            <div class="dashboard-history-request"><span><b id="dashboardHistoryRequests">—</b><small>historical requests</small></span><span><b id="dashboardHistorySuccess">—</b><small>historical success</small></span><p class="dashboard-history-note" id="dashboardHistoryRequestsNote" role="status" aria-live="polite">Loading historical usage…</p></div>
+          </article>
+
+          <article class="card card-fill-card dashboard-primary">
+            <div class="card-head">
+              <h2 class="card-title">Recent requests</h2>
+              <span class="chip chip-quiet" id="recentCount">0</span>
+            </div>
+            <div class="table-wrap">
+              <table class="tbl tbl-compact">
+                <thead>
+                  <tr>
+                    <th>Model</th>
+                    <th class="r">Tokens</th>
+                    <th class="r">Latency</th>
+                    <th class="r">Status</th>
+                  </tr>
+                </thead>
+                <tbody id="recentTable"></tbody>
+              </table>
+            </div>
+          </article>
+        </div>
+
+        <div class="col">
+          <article class="card dashboard-primary">
+            <div class="card-head">
+              <h2 class="card-title">Activity</h2>
+              <span class="chip chip-quiet" id="eventCount">0</span>
+            </div>
+            <div class="evlist" id="eventList"></div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ PROVIDERS ============ -->
+    <section class="page" data-page="/providers" id="providersContent" hidden>
+      <header class="pghead">
+        <div>
+          <h2 class="card-title">Provider registry</h2>
+          <p class="page-intro">Manage upstream endpoints, accounts, and available models.</p>
+        </div>
+        <span class="chip chip-quiet" id="pgCount">—</span>
+      </header>
+
+      <div class="pgrid" id="providerCards"></div>
+
+      <article class="card addprovider" id="addProviderCard" hidden>
+        <div class="card-head">
+          <h2 class="card-title">Add an [OI]-compatible provider</h2>
+          <button class="iconbtn" id="closeAddProvider" type="button" aria-label="Close">×</button>
+        </div>
+        <form class="apform" id="addProviderForm" autocomplete="off">
+          <label class="apfield">
+            <span>Name</span>
+            <input name="name" placeholder="Ollama (local)" required maxlength="60">
+          </label>
+          <label class="apfield">
+            <span>Prefix</span>
+            <input name="prefix" placeholder="ollama" required maxlength="40" pattern="[a-z0-9][a-z0-9-]{0,39}" spellcheck="false">
+          </label>
+          <label class="apfield">
+            <span>Base URL</span>
+            <input name="baseUrl" placeholder="http://127.0.0.1:11434/v1" required maxlength="300" spellcheck="false">
+          </label>
+          <label class="apfield">
+            <span>Chat path</span>
+            <input name="chatPath" value="/chat/completions" maxlength="120" spellcheck="false">
+          </label>
+          <label class="apfield apwide">
+            <span>Models <em>space or comma separated</em></span>
+            <input name="models" placeholder="llama3.3, qwen2.5-coder" required spellcheck="false">
+          </label>
+          <div class="apactions">
+            <button class="btn btn-primary" type="submit">Create provider</button>
+            <span class="toolnote" id="addProviderNote" role="status" aria-live="polite"></span>
+          </div>
+        </form>
+      </article>
+
+    </section>
+
+    <!-- ============ USAGE ============ -->
+    <section class="page" data-page="/usage" id="usageContent" hidden>
+      <div class="usage-bar">
+        <div class="dtabs" id="usageRangeTabs" role="tablist" aria-label="Usage range">
+              <button class="dtab is-active" id="usageTabDay" type="button" role="tab" data-usage-range="day" aria-selected="true" aria-controls="usageContent">Daily</button>
+              <button class="dtab" id="usageTabWeek" type="button" role="tab" data-usage-range="week" aria-selected="false" aria-controls="usageContent" tabindex="-1">Weekly</button>
+              <button class="dtab" id="usageTabMonth" type="button" role="tab" data-usage-range="month" aria-selected="false" aria-controls="usageContent" tabindex="-1">Monthly</button>
+              <button class="dtab" id="usageTabAll" type="button" role="tab" data-usage-range="all" aria-selected="false" aria-controls="usageContent" tabindex="-1">All time</button>
+        </div>
+        <div class="usage-bar-status">
+          <span class="chip chip-quiet" id="usageLive" role="status" aria-live="polite">connecting</span>
+          <span class="chip chip-quiet" id="usageRangeNote">saved history</span>
+        </div>
+      </div>
+
+      <div class="ugrid">
+        <article class="card ukpi">
+          <span class="tile-label">Requests</span>
+          <span class="ukpi-value" id="uRequests">0</span>
+          <span class="tile-label" id="uRange">—</span>
+        </article>
+        <article class="card ukpi">
+          <span class="tile-label">Tokens in</span>
+          <span class="ukpi-value" id="uTokIn">0</span>
+          <span class="tile-label" id="uTokInNote">—</span>
+        </article>
+        <article class="card ukpi">
+          <span class="tile-label">Tokens out</span>
+          <span class="ukpi-value" id="uTokOut">0</span>
+          <span class="tile-label" id="uTokOutNote">—</span>
+        </article>
+        <article class="card ukpi">
+          <span class="tile-label">Success rate</span>
+          <span class="ukpi-value" id="uSuccess">—</span>
+          <span class="tile-label" id="uErrors">no errors</span>
+        </article>
+      </div>
+
+      <article class="card uchart-card">
+        <div class="card-head uchart-head">
+          <h2 class="card-title">Usage over time</h2>
+          <div class="uchart-tools">
+            <div class="dtabs uchart-switch" id="uChartTypes" role="tablist" aria-label="Chart type">
+              <button class="dtab is-active" id="usageChartHeatmap" type="button" role="tab" data-usage-chart="heatmap" aria-selected="true" aria-controls="uSpark">Heatmap</button>
+              <button class="dtab" id="usageChartBars" type="button" role="tab" data-usage-chart="bars" aria-selected="false" aria-controls="uSpark" tabindex="-1">Bars</button>
+              <button class="dtab" id="usageChartLine" type="button" role="tab" data-usage-chart="line" aria-selected="false" aria-controls="uSpark" tabindex="-1">Line</button>
+              <button class="dtab" id="usageChartArea" type="button" role="tab" data-usage-chart="area" aria-selected="false" aria-controls="uSpark" tabindex="-1">Area</button>
+            </div>
+            <span class="chip chip-quiet" id="uBucket">hourly</span>
+          </div>
+        </div>
+        <div class="spark spark-tall" id="uSpark" role="img" aria-label="Token usage chart"></div>
+        <div class="spark-foot">
+          <span id="uSparkStart">oldest</span>
+          <span id="uSparkLegend">color intensity = tokens, red = failed</span>
+          <span id="uSparkEnd">newest</span>
+        </div>
+      </article>
+
+      <div class="usage-detail-grid">
+        <article class="card">
+          <div class="card-head">
+            <h2 class="card-title">Breakdown by model</h2>
+            <span class="chip chip-quiet" id="uModelCount">0</span>
+          </div>
+          <div class="table-wrap">
+            <table class="tbl">
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th>Provider</th>
+                  <th class="r">Requests</th>
+                  <th class="r">Tokens in</th>
+                  <th class="r">Tokens out</th>
+                  <th class="r">Avg latency</th>
+                </tr>
+              </thead>
+              <tbody id="uTable"></tbody>
+            </table>
+          </div>
+          <nav class="usage-pager" id="uModelPager" aria-label="Breakdown by model pages">
+            <span class="usage-pager-info" id="uModelPageInfo">0 models</span>
+            <div class="usage-pager-btns" id="uModelPageBtns"></div>
+          </nav>
+        </article>
+
+        <article class="card uactivity-card">
+          <div class="card-head">
+            <h2 class="card-title">Activity</h2>
+            <span class="chip chip-quiet" id="uActivityCount">0</span>
+          </div>
+          <div class="table-wrap">
+            <table class="tbl tbl-activity">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Model</th>
+                  <th>Provider</th>
+                  <th>Account</th>
+                  <th class="r">Tokens</th>
+                  <th class="r">Latency</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="uActivityTable"></tbody>
+            </table>
+          </div>
+          <nav class="usage-pager" id="uActivityPager" aria-label="Activity pages">
+            <span class="usage-pager-info" id="uActivityPageInfo">0 entries</span>
+            <div class="usage-pager-btns" id="uActivityPageBtns"></div>
+          </nav>
+        </article>
+      </div>
+    </section>
+
+    <!-- ============ SETTINGS ============ -->
+    <section class="page" data-page="/settings" id="settingsContent" hidden>
+      <div class="dtabs settings-tabs" id="settingsTabs" role="tablist" aria-label="Settings sections">
+        <button class="dtab is-active" id="settingsTabGeneral" type="button" role="tab" data-settings-tab="general" aria-selected="true" aria-controls="settingsPanelGeneral">General</button>
+        <button class="dtab" id="settingsTabAppearance" type="button" role="tab" data-settings-tab="appearance" aria-selected="false" aria-controls="settingsPanelAppearance" tabindex="-1">Appearance</button>
+        <button class="dtab" id="settingsTabTokenSaver" type="button" role="tab" data-settings-tab="token-saver" aria-selected="false" aria-controls="settingsPanelTokenSaver" tabindex="-1">Token Saver</button>
+        <button class="dtab" id="settingsTabReply" type="button" role="tab" data-settings-tab="reply" aria-selected="false" aria-controls="settingsPanelReply" tabindex="-1">Reply style</button>
+      </div>
+      <div class="settings-panel" data-settings-panel="general" id="settingsPanelGeneral" role="tabpanel" aria-labelledby="settingsTabGeneral">
+        <div class="sgrid"><div class="scol"><article class="card"><div class="card-head"><h2 class="card-title">Connection</h2></div><p class="desc">Clients use the endpoint below. Provider credentials stay in the local account pool.</p><div class="kv"><span class="k">Base URL</span><code class="v" id="sBaseUrl">—</code></div><div class="kv"><span class="k">Providers</span><span class="v" id="sProviders">—</span></div><div class="kv"><span class="k">Credential var</span><code class="v" id="sTokenEnv">—</code></div><div class="kv"><span class="k">Status</span><span class="v" id="sStatus">—</span></div><div class="kv"><span class="k">Uptime</span><span class="v" id="sUptime">—</span></div><div class="kv"><span class="k">Listening</span><span class="v" id="sPort">—</span></div><div class="kv"><span class="k">API key protection</span><span class="v" id="sRequireKey">—</span></div></article></div><div class="scol"><article class="card"><div class="card-head"><h2 class="card-title">Reset</h2></div><p class="desc">Restore the default light theme and violet accent.</p><button class="btn btn-ghost" id="resetAppearance" type="button">Reset appearance</button></article><article class="card dashboard-auth-card"><div class="card-head"><div><h2 class="card-title">Dashboard password</h2><p class="desc">Protect dashboard pages, assets, and admin API routes.</p></div><label class="key-toggle"><input id="dashboardAuthToggle" type="checkbox"><span></span><b>Enabled</b></label></div><p class="toolnote" id="dashboardAuthWarning" role="status" aria-live="polite"></p><div class="dashboard-auth-password"><label class="apfield"><span class="key-field-label">Change password</span><input id="dashboardAuthPassword" type="password" minlength="4" autocomplete="new-password" placeholder="At least 4 characters"></label><button class="btn btn-ghost" id="saveDashboardAuthPassword" type="button">Save password</button></div><p class="toolnote" id="dashboardAuthNote" role="status" aria-live="polite"></p></article></div></div>
+      <div class="settings-panel" data-settings-panel="appearance" id="settingsPanelAppearance" role="tabpanel" aria-labelledby="settingsTabAppearance" hidden>
+        <div class="sgrid"><div class="scol"><article class="card"><div class="card-head"><h2 class="card-title">Appearance</h2><span class="chip chip-quiet" id="themeNote">light</span></div><p class="desc">Pick how the dashboard renders. The choice is stored in this browser only.</p><div class="theme-grid" id="themeGrid"><button class="theme-opt" data-theme-value="light" type="button"><span class="theme-prev" data-prev="light"><span class="tp-rail"></span><span class="tp-body"><span class="tp-card"></span><span class="tp-card"></span></span></span><span class="theme-name">Light</span><span class="theme-desc">Soft lavender</span></button><button class="theme-opt" data-theme-value="dark" type="button"><span class="theme-prev" data-prev="dark"><span class="tp-rail"></span><span class="tp-body"><span class="tp-card"></span><span class="tp-card"></span></span></span><span class="theme-name">Dark</span><span class="theme-desc">Slate at night</span></button><button class="theme-opt" data-theme-value="black" type="button"><span class="theme-prev" data-prev="black"><span class="tp-rail"></span><span class="tp-body"><span class="tp-card"></span><span class="tp-card"></span></span></span><span class="theme-name">Black</span><span class="theme-desc">True black OLED</span></button></div></article></div><div class="scol"><article class="card"><div class="card-head"><h2 class="card-title">Accent</h2><span class="chip chip-quiet" id="accentNote">violet</span></div><p class="desc">Used for the active nav pill, buttons, bars and chart fills.</p><div class="accent-row" id="accentRow"><button class="accent-dot" data-accent-value="violet" type="button" style="--dot:#7b5cf0" title="Violet" aria-label="Violet"></button><button class="accent-dot" data-accent-value="blue" type="button" style="--dot:#2563eb" title="Blue" aria-label="Blue"></button><button class="accent-dot" data-accent-value="teal" type="button" style="--dot:#0d9488" title="Teal" aria-label="Teal"></button><button class="accent-dot" data-accent-value="amber" type="button" style="--dot:#b45309" title="Amber" aria-label="Amber"></button><button class="accent-dot" data-accent-value="rose" type="button" style="--dot:#be185d" title="Rose" aria-label="Rose"></button></div></article></div></div>
+      </div>
+      <div class="settings-panel" data-settings-panel="token-saver" id="settingsPanelTokenSaver" role="tabpanel" aria-labelledby="settingsTabTokenSaver" hidden>
+        <div class="sgrid token-saver-grid"><div class="scol"><article class="card token-saver-card"><div class="card-head"><div><h2 class="card-title">Ponytail</h2><p class="desc">Bias code toward YAGNI, stdlib/native features, and minimal diffs.</p></div><label class="key-toggle"><input id="tokenSaverPonytail" type="checkbox"><span></span><b>Enabled</b></label></div><p class="card-note">RTK and Headroom are not included: they require an external proxy or dependency.</p></article></div></div><p class="toolnote" id="tokenSaverNote" role="status" aria-live="polite"></p>
+      </div>
+      <div class="settings-panel" data-settings-panel="reply" id="settingsPanelReply" role="tabpanel" aria-labelledby="settingsTabReply" hidden>
+        <div class="sgrid"><div class="scol"><article class="card"><div class="card-head"><h2 class="card-title">Reply style</h2><span class="chip chip-quiet">system prompt</span></div><p class="desc">Inserted into every <code>/v1/chat/completions</code> request, including Cursor and the CLI. Defaults leave requests unchanged except matching your language.</p><div class="reply-fields"><div class="apfield"><span class="key-field-label">Language</span><button class="reply-language-trigger" id="replyLanguageTrigger" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="replyLanguagePopup"><span class="reply-language-flag" id="replyLanguageFlag" aria-hidden="true">🌐</span><span id="replyLanguageLabel">Auto · match user</span><span aria-hidden="true">⌄</span></button><span class="desc">Choose a reply language, or let Auto follow the user's prompt.</span></div><div class="apfield"><label class="key-field-label" for="replyVerbosity">Detail level</label><select id="replyVerbosity" aria-label="Reply detail level" data-custom-select><option value="balanced">Balanced (default)</option><option value="concise">Concise</option><option value="detailed">Detailed</option></select><span class="desc">How much explanation the model gives.</span></div><div class="apfield"><label class="key-toggle" for="replyCoding"><input id="replyCoding" type="checkbox"><span></span><b>Coding focus</b></label><span class="desc">Prefer short, minimal code without extra comments.</span></div></div><p class="toolnote" id="replyFiltersNote" role="status" aria-live="polite"></p></article></div></div>
+        <div class="reply-language-popup" id="replyLanguagePopup" role="dialog" aria-modal="true" aria-labelledby="replyLanguageTitle" hidden>
+          <div class="reply-language-backdrop" data-reply-language-close></div>
+          <div class="reply-language-dialog">
+            <div class="reply-language-head"><div><h2 class="card-title" id="replyLanguageTitle">Reply language</h2><p class="desc">Search and choose the language for model replies.</p></div><button class="btn btn-ghost btn-xs" type="button" data-reply-language-close aria-label="Close language picker">Close</button></div>
+            <label class="sr-only" for="replyLanguageSearch">Search languages</label>
+            <input class="reply-language-search" id="replyLanguageSearch" type="search" placeholder="Search languages…" autocomplete="off">
+            <div class="reply-language-grid" id="replyLanguageGrid" role="listbox" aria-label="Reply languages"></div>
+            <p class="toolnote" id="replyLanguageEmpty" role="status" aria-live="polite" hidden>No matching languages.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ API KEYS ============ -->
+    <section class="page" data-page="/api-keys" id="apiKeysContent" hidden>
+      <div class="key-actions">
+                <button class="btn btn-primary" id="openCreateKey" type="button">+ Create API key</button>
+      </div>
+      <div class="key-kpis">
+        <article class="card key-kpi"><span class="tile-label">Total keys</span><strong id="keyTotal">0</strong><span class="tile-label">All issued keys</span></article>
+        <article class="card key-kpi"><span class="tile-label">Active</span><strong id="keyActive">0</strong><span class="tile-label">Ready for requests</span></article>
+        <article class="card key-kpi"><span class="tile-label">Protection</span><strong id="keyProtection">Not protected</strong><span class="tile-label">Status of the /v1 guard</span></article>
+      </div>
+      <article class="card key-endpoint">
+        <div class="card-head"><div><h2 class="card-title">API endpoint</h2></div><button class="btn btn-ghost" id="copyKeyEndpoint" type="button">Copy URL</button></div>
+        <code id="keyEndpoint">—</code>
+      </article>
+      <article class="card curl-card">
+        <div class="card-head">
+          <div><h2 class="card-title">Try it</h2></div>
+          <button class="btn btn-ghost" id="copyCurl" type="button">Copy example</button>
+        </div>
+        <pre class="curl" id="curlBlock">—</pre>
+      </article>
+      <article class="card key-vault">
+        <div class="card-head key-vault-head"><div><h2 class="card-title">Issued credentials</h2><p class="desc">Secrets appear once when created. Store them in your client now.</p></div><label class="key-toggle"><input id="requireKeyToggle" type="checkbox"><span></span>Require API key</label></div>
+        <p class="toolnote" id="keyNote" role="status" aria-live="polite"></p>
+        <div class="key-list" id="keyList"></div>
+      </article>
+    </section>
+
+    <!-- ============ CHAT ============ -->
+    <section class="page chat-page" data-page="/chat" hidden>
+      <div class="chat-layout">
+        <aside class="chat-sidebar card" id="chatSidebar" aria-label="Chat sessions">
+          <div class="chat-sidebar-head">
+            <strong>Chats</strong>
+            <button class="btn btn-primary btn-xs" id="newChat" type="button">New chat</button>
+          </div>
+          <label class="sr-only" for="chatSessionSearch">Search chats</label>
+          <input class="chat-session-search" id="chatSessionSearch" type="search" placeholder="Search chats" autocomplete="off">
+          <div class="chat-session-list" id="chatSessionList" role="list"></div>
+        </aside>
+        <div class="chat-main">
+      <div class="chat-head">
+        <div class="chat-model-field">
+          <label class="chat-label" for="chatModel">Model</label>
+          <select id="chatModel" aria-label="Chat model" data-custom-select></select>
+        </div>
+        <div class="chat-head-actions">
+          <span class="chip chip-quiet" id="chatConnection" role="status" aria-live="polite">Loading models…</span>
+        </div>
+      </div>
+      <div class="chat-empty card" id="chatEmpty" hidden>
+        <strong>No active models</strong>
+        <span>Enable a provider account or open provider, then return here.</span>
+        <a class="btn btn-primary" href="/providers">Open Providers</a>
+      </div>
+      <div class="chat-transcript card" id="chatTranscript" role="log" aria-live="polite" aria-relevant="additions text">
+        <div class="chat-welcome" id="chatWelcome">
+          <span class="chat-welcome-mark" aria-hidden="true">N</span>
+          <strong>Start a conversation</strong>
+          <span>Send a message to the selected model through your local router.</span>
+        </div>
+      </div>
+      <div class="chat-composer-wrap">
+        <form class="chat-composer card" id="chatComposer">
+          <div class="chat-attachment-row" id="chatAttachments" hidden></div>
+          <label class="sr-only" for="chatInput">Message</label>
+          <textarea id="chatInput" rows="1" maxlength="32000" placeholder="Message your model…"></textarea>
+          <div class="chat-composer-foot">
+            <span class="toolnote" id="chatNote" role="status" aria-live="polite">Enter to send · Shift+Enter for a new line</span>
+            <div class="chat-send-actions">
+              <label class="btn btn-ghost chat-file-button" for="chatFileInput">Attach</label>
+              <input id="chatFileInput" class="sr-only" type="file" accept="image/png,image/jpeg,image/webp,image/gif,text/plain,text/markdown,application/json,text/csv,.js,.ts,.py,.java,.c,.cpp,.html,.css,.md,.txt,.json,.csv" multiple>
+              <button class="btn btn-ghost" id="stopChat" type="button" hidden>Stop</button>
+              <button class="btn btn-primary" id="sendChat" type="submit">Send</button>
+            </div>
+          </div>
+        </form>
+      </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ COMBOS ============ -->
+    <section class="page" data-page="/combos" hidden>
+      <div class="key-actions">
+        <p class="desc">Create virtual model names with ordered fallback.</p>
+        <button class="btn btn-primary" id="openCreateCombo" type="button">+ Create combo</button>
+      </div>
+
+      <article class="card">
+        <div class="card-head">
+          <div>
+            <h2 class="card-title">Combos</h2>
+                      </div>
+          <span class="chip chip-quiet" id="comboCount">0 total</span>
+        </div>
+        <p class="toolnote" id="comboNote" role="status" aria-live="polite"></p>
+        <div class="combo-list" id="comboList"></div>
+      </article>
+    </section>
+
+    <div class="key-modal" id="comboModal" hidden>
+      <div class="key-modal-backdrop" data-combo-close></div>
+      <section class="key-dialog" role="dialog" aria-modal="true" aria-labelledby="comboDialogTitle">
+        <div class="card-head"><h2 class="card-title" id="comboDialogTitle">Create combo</h2><button class="iconbtn" type="button" data-combo-close aria-label="Close">×</button></div>
+        <form class="combo-form" id="comboForm" autocomplete="off">
+          <label class="apfield key-field">
+            <span class="key-field-label">Combo name</span>
+            <input name="name" maxlength="60" placeholder="premium-coding" required spellcheck="false">
+          </label>
+          <p class="toolnote">Plain name only — no <code>/</code>. Clients send this name as the model id.</p>
+          <div class="combo-add-row">
+            <label class="apfield key-field combo-add-field">
+              <span class="key-field-label">Add a model <em>enabled models only</em></span>
+              <select name="modelEntry" id="comboModelEntry" aria-label="Choose a model to add" data-custom-select></select>
+            </label>
+            <button class="btn btn-ghost" id="comboAddModel" type="button">Add to chain</button>
+          </div>
+          <div class="combo-chain-head"><span class="key-field-label">Fallback order</span><span class="toolnote" id="comboChainNote"></span></div>
+          <ol class="combo-chain" id="comboChain"></ol>
+          <div class="key-form-footer"><span class="toolnote" id="comboFormNote" role="status" aria-live="polite"></span><button class="btn btn-primary" type="submit">Save combo</button></div>
+        </form>
+      </section>
+    </div>
+
+    <div class="key-modal" id="createKeyModal" hidden>
+      <div class="key-modal-backdrop" data-key-close></div>
+      <section class="key-dialog" role="dialog" aria-modal="true" aria-labelledby="keyDialogTitle">
+        <div class="card-head"><h2 class="card-title" id="keyDialogTitle">Create API key</h2><button class="iconbtn" type="button" data-key-close aria-label="Close">×</button></div>
+        <form class="key-create-form" id="createKeyForm">
+          <label class="apfield key-field"><span class="key-field-label">Name</span><input name="name" maxlength="80" placeholder="Desktop client" required></label>
+          <label class="apfield key-field"><span class="key-field-label">Secret <em>generated now; editable before saving</em></span><span class="key-secret-row"><input name="secret" maxlength="160" placeholder="nr_live_custom_name" spellcheck="false"><button class="btn btn-ghost" id="generateKeySecret" type="button">Generate new</button></span></label>
+          <label class="apfield key-field"><span class="key-field-label">Expires <em>optional; date and time</em></span><input name="expiresAt" type="datetime-local"></label>
+          <div class="key-limit-grid">
+            <div class="apfield key-field key-limit-field"><label class="key-field-label" for="requestLimit">Request limit</label><input id="requestLimit" name="requestLimit" type="number" min="0" placeholder="Requests" disabled><label class="mini-toggle"><input name="requestLimitEnabled" type="checkbox"><span></span><b>Enable limit</b></label></div>
+            <div class="apfield key-field key-limit-field"><label class="key-field-label" for="tokenLimit">Token limit</label><input id="tokenLimit" name="tokenLimit" type="number" min="0" step="any" inputmode="decimal" placeholder="Select a unit first" disabled><select name="tokenLimitUnit" aria-label="Token limit unit" data-custom-select><option value="">None</option><option value="tokens">tokens</option><option value="K">K tokens</option><option value="M">M tokens</option><option value="B">B tokens</option><option value="T">T tokens</option></select></div>
+          </div>
+          <div class="key-form-footer"><span class="toolnote" id="createKeyNote" role="status" aria-live="polite"></span><button class="btn btn-primary" type="submit">Create key</button></div>
+        </form>
+      </section>
+    </div>
+
+    <div class="key-modal" id="editKeyModal" hidden>
+      <div class="key-modal-backdrop" data-edit-key-close></div>
+      <section class="key-dialog" role="dialog" aria-modal="true" aria-labelledby="editKeyDialogTitle">
+        <div class="card-head"><h2 class="card-title" id="editKeyDialogTitle">Edit API key</h2><button class="iconbtn" type="button" data-edit-key-close aria-label="Close">×</button></div>
+        <form class="key-create-form" id="editKeyForm">
+          <label class="apfield key-field"><span class="key-field-label">Name</span><input name="name" maxlength="80" required></label>
+          <label class="apfield key-field"><span class="key-field-label">Token <em>editable; leave legacy keys unchanged</em></span><span class="key-secret-row"><input name="secret" maxlength="160" spellcheck="false"><button class="btn btn-ghost" id="generateEditSecret" type="button">Generate new</button></span></label>
+          <label class="apfield key-field"><span class="key-field-label">Expires <em>optional; date and time</em></span><input name="expiresAt" type="datetime-local"></label>
+          <div class="key-limit-grid">
+            <div class="apfield key-field key-limit-field"><label class="key-field-label" for="editRequestLimit">Request limit</label><input id="editRequestLimit" name="requestLimit" type="number" min="0" placeholder="Requests" disabled><label class="mini-toggle"><input name="requestLimitEnabled" type="checkbox"><span></span><b>Enable limit</b></label></div>
+            <div class="apfield key-field key-limit-field"><label class="key-field-label" for="editTokenLimit">Token limit</label><input id="editTokenLimit" name="tokenLimit" type="number" min="0" step="any" inputmode="decimal" placeholder="Select a unit first" disabled><select name="tokenLimitUnit" aria-label="Token limit unit" data-custom-select><option value="">None</option><option value="tokens">tokens</option><option value="K">K tokens</option><option value="M">M tokens</option><option value="B">B tokens</option><option value="T">T tokens</option></select></div>
+          </div>
+          <div class="key-form-footer"><span class="toolnote" id="editKeyNote" role="status" aria-live="polite"></span><button class="btn btn-primary" type="submit">Save changes</button></div>
+        </form>
+        <section class="key-rotate" aria-labelledby="rotateTokenTitle"><div class="key-rotate-head"><strong id="rotateTokenTitle">Rotate token</strong><p>Invalidates the current token immediately.</p></div><label class="apfield key-field"><span class="key-field-label">Replacement token <em>optional; blank = automatic</em></span><input id="rotateCustomSecret" maxlength="160" placeholder="Generated replacement token" spellcheck="false"></label><div class="key-rotate-actions"><button class="btn btn-ghost" id="generateRotateSecret" type="button">Generate new</button><button class="btn btn-ghost" id="rotateKeySecret" type="button">Rotate token</button></div></section>
+      </section>
+    </div>
+
+    <div class="key-modal" id="confirmModal" hidden>
+      <div class="key-modal-backdrop" data-confirm-close></div>
+      <section class="key-dialog confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
+        <h2 class="card-title" id="confirmTitle">Confirm action</h2>
+        <p class="desc" id="confirmMessage"></p>
+        <div class="key-form-footer"><button class="btn btn-ghost" id="cancelConfirm" type="button">Cancel</button><button class="btn btn-primary" id="acceptConfirm" type="button">Confirm</button></div>
+      </section>
+    </div>
+
+    <div class="key-modal" id="accountActionsModal" hidden>
+      <div class="key-modal-backdrop" data-account-actions-close></div>
+      <section class="key-dialog account-actions-dialog" role="dialog" aria-modal="true" aria-labelledby="accountActionsTitle" aria-describedby="accountActionsMessage">
+        <div class="card-head"><div><h2 class="card-title" id="accountActionsTitle">Account actions</h2><p class="desc" id="accountActionsMessage"></p></div><button class="iconbtn" type="button" data-account-actions-close aria-label="Close account actions">×</button></div>
+        <div class="account-action-list" id="accountActionsList"></div>
+      </section>
+    </div>
+
+    <div class="key-modal" id="historyModal" hidden>
+      <div class="key-modal-backdrop" data-history-close></div>
+      <section class="key-dialog key-history-dialog" role="dialog" aria-modal="true" aria-labelledby="historyDialogTitle">
+        <div class="card-head"><div><h2 class="card-title" id="historyDialogTitle">Usage history</h2><p class="desc" id="historyKeyName"></p></div><button class="iconbtn" type="button" data-history-close aria-label="Close">×</button></div>
+        <div class="key-history-list" id="historyModalList"></div>
+      </section>
+    </div>
+
+    <div class="key-modal" id="secretModal" hidden>
+      <div class="key-modal-backdrop"></div>
+      <section class="key-dialog" role="dialog" aria-modal="true" aria-labelledby="secretDialogTitle">
+        <div class="card-head"><h2 class="card-title" id="secretDialogTitle">Copy your API key</h2></div>
+        <p class="desc">Keep this secret private. You can show or copy it from the API Keys page later.</p>
+        <code class="secret-value is-hidden" id="secretValue">—</code>
+        <div class="apactions"><button class="btn btn-ghost" id="toggleSecret" type="button">Show token</button><button class="btn btn-primary" id="copySecret" type="button">Copy token</button><button class="btn btn-ghost" id="closeSecret" type="button">Done</button></div>
+      </section>
+    </div>
+
+    <!-- ============ PROVIDER DETAIL ============ -->
+    <section class="page" data-page="detail" hidden>
+      <div class="dmeta" id="detailMeta" aria-live="polite"></div>
+      <div class="dtabs" id="dTabs" role="tablist" aria-label="Provider detail sections">
+        <button class="dtab is-active" id="tabAccounts" type="button" data-tab="accounts" role="tab" aria-selected="true" aria-controls="panelAccounts">
+          Accounts <span class="tabcount" id="tabAccountCount">0</span>
+        </button>
+        <button class="dtab" id="tabModels" type="button" data-tab="models" role="tab" aria-selected="false" aria-controls="panelModels" tabindex="-1">
+          Models <span class="tabcount" id="tabModelCount">0</span>
+        </button>
+        <button class="dtab" id="tabQuota" type="button" data-tab="quota" role="tab" aria-selected="false" aria-controls="panelQuota" tabindex="-1">Quota</button>
+      </div>
+
+      <section class="dpanel" id="panelAccounts" data-panel="accounts" role="tabpanel" aria-labelledby="tabAccounts">
+        <article class="card">
+          <div class="card-head aphead">
+            <div class="aphead-text">
+              <h2 class="card-title">Account pool</h2>
+            </div>
+            <div class="dtools">
+              <button class="btn btn-ghost" id="editProvider" type="button">Edit</button>
+              <button class="btn btn-ghost danger" id="removeProvider" type="button" hidden>Remove</button>
+              <button class="btn btn-ghost" id="openBulk" type="button">Bulk add</button>
+              <button class="btn btn-primary" id="openAddAccount" type="button">Add account</button>
+            </div>
+          </div>
+
+          <div class="strategy-bar">
+            <div class="strategy-text">
+              <span class="strategy-title" title="Choose how requests move across active accounts.">Strategy</span>
+              <p class="strategy-desc" id="strategyDesc" hidden></p>
+            </div>
+            <div class="strategy-controls">
+              <select id="accountStrategy" aria-label="Account strategy" data-custom-select>
+                <option value="round-robin">Round-robin</option>
+                <option value="sequential">Sequential</option>
+                <option value="highest-quota">Highest quota first</option>
+              </select>
+              <button class="btn btn-ghost" id="saveStrategy" type="button" disabled>Save</button>
+            </div>
+          </div>
+          <p class="toolnote" id="strategyNote" role="status" aria-live="polite"></p>
+
+          <div class="afilters">
+            <div class="afilter" id="accountFilters">
+              <button class="afchip is-active" type="button" data-status="all">All <span id="cAll">0</span></button>
+              <button class="afchip" type="button" data-status="active">Active <span id="cActive">0</span></button>
+              <button class="afchip" type="button" data-status="cooldown">Cooling <span id="cCooldown">0</span></button>
+              <button class="afchip" type="button" data-status="error">Error <span id="cError">0</span></button>
+              <button class="afchip" type="button" data-status="disabled">Paused <span id="cDisabled">0</span></button>
+            </div>
+            <input class="ainput" id="accountSearch" type="search" placeholder="Search label or uid" maxlength="80" spellcheck="false">
+          </div>
+
+          <p class="toolnote" id="accountNote" role="status" aria-live="polite"></p>
+
+          <div class="abulk" id="bulkActions" hidden>
+            <span class="abulk-count" id="bulkCount">0 selected</span>
+            <button class="btn btn-ghost" type="button" data-bulk="enable">Resume</button>
+            <button class="btn btn-ghost" type="button" data-bulk="disable">Pause</button>
+            <button class="btn btn-ghost danger" type="button" data-bulk="delete">Delete</button>
+          </div>
+
+          <div class="dtable-wrap atable-wrap">
+            <table class="tbl atbl">
+              <thead>
+                <tr>
+                  <th class="acheck"><input type="checkbox" id="selectAllAccounts" aria-label="Select all on this page"></th>
+                  <th>Account</th>
+                  <th>Status</th>
+                  <th>Quota</th>
+                  <th class="r">Usage</th>
+                  <th class="r">Last used</th>
+                  <th class="r"></th>
+                </tr>
+              </thead>
+              <tbody id="dAccounts"></tbody>
+            </table>
+          </div>
+
+          <div class="apager">
+            <span class="apageinfo" id="accountPageInfo">No accounts yet</span>
+            <div class="apagebtns">
+              <select id="accountPageSize" class="aselect" aria-label="Rows per page" data-custom-select>
+                <option value="20">20 / page</option>
+                <option value="50">50 / page</option>
+                <option value="100">100 / page</option>
+              </select>
+              <button class="btn btn-ghost" id="accountPrev" type="button" aria-label="Previous page">←</button>
+              <button class="btn btn-ghost" id="accountNext" type="button" aria-label="Next page">→</button>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="dpanel" id="panelModels" data-panel="models" role="tabpanel" aria-labelledby="tabModels" hidden>
+        <article class="card dmodels">
+          <div class="card-head dhead">
+            <div class="dhead-text">
+                <h2 class="card-title">Models</h2>
+            </div>
+            <div class="dtools">
+              <span class="chip chip-quiet" id="dModelCount">—</span>
+              <button class="btn btn-ghost" id="fetchModels" type="button">
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v4.5h-4.5"/></svg>
+                <span id="fetchLabel">Fetch from provider</span>
+              </button>
+              <button class="btn btn-primary" id="testAllModels" type="button">
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.2v13.6L19 12 8 5.2Z"/></svg>
+                <span>Test all models</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="model-toolbar">
+            <form class="addrow" id="addModelForm" autocomplete="off">
+              <input id="newModelInput" name="model" placeholder="Add a model id, e.g. glm-5.3-air" spellcheck="false" maxlength="120">
+              <button class="btn btn-primary" type="submit"><span aria-hidden="true">＋</span> Add custom model</button>
+            </form>
+            <div class="model-toolbar-notes"><span class="toolnote" id="fetchNote" role="status" aria-live="polite"></span><span class="toolnote" id="modelTestNote" role="status" aria-live="polite"></span><span class="toolnote" id="addNote" role="status" aria-live="polite"></span></div>
+          </div>
+
+          <div class="model-grid" id="dModels" role="list" aria-label="Available models"></div>
+        </article>
+      </section>
+
+      <section class="dpanel" id="panelQuota" data-panel="quota" role="tabpanel" aria-labelledby="tabQuota" hidden>
+          <article class="card card-upstream">
+            <div class="card-head dhead">
+              <div class="dhead-text">
+                <h2 class="card-title">Quota</h2>
+              </div>
+              <div class="dtools">
+                <details class="quota-view">
+                  <summary class="btn btn-ghost">Columns</summary>
+                  <div class="quota-view-menu" role="group" aria-label="Quota card columns">
+                    <button class="btn btn-ghost btn-xs" type="button" data-quota-columns="1" aria-pressed="false">1</button>
+                    <button class="btn btn-ghost btn-xs" type="button" data-quota-columns="2" aria-pressed="false">2</button>
+                    <button class="btn btn-ghost btn-xs" type="button" data-quota-columns="3" aria-pressed="true">3</button>
+                    <button class="btn btn-ghost btn-xs" type="button" data-quota-columns="4" aria-pressed="false">4</button>
+                    <button class="btn btn-ghost btn-xs" type="button" data-quota-columns="5" aria-pressed="false">5</button>
+                  </div>
+                </details>
+                <button class="btn btn-ghost" id="refreshQuotaOrder" type="button">Refresh order</button>
+                <button class="btn btn-primary" id="refreshUpstreamQuota" type="button">Refresh quota</button>
+              </div>
+            </div>
+            <p class="hint" id="upstreamQuotaNote" role="status" aria-live="polite"></p>
+            <div id="dUpstreamQuota" class="quota-account-list"></div>
+            <div class="apager quota-pager">
+              <span class="apageinfo" id="quotaPageInfo">No accounts</span>
+              <div class="apagebtns">
+                <button class="btn btn-ghost" id="quotaPrev" type="button" aria-label="Previous quota page">←</button>
+                <button class="btn btn-ghost" id="quotaNext" type="button" aria-label="Next quota page">→</button>
+              </div>
+            </div>
+          </article>
+      </section>
+    </section>
+
+    <div class="key-modal" id="modelInfoModal" hidden>
+      <div class="key-modal-backdrop" data-model-info-close></div>
+      <section class="key-dialog model-info-dialog" role="dialog" aria-modal="true" aria-labelledby="modelInfoTitle">
+        <div class="card-head"><div><h2 class="card-title" id="modelInfoTitle">Model capabilities</h2><p class="desc" id="modelInfoSubtitle"></p></div><button class="iconbtn" type="button" data-model-info-close aria-label="Close">×</button></div>
+        <div class="model-info-grid" id="modelInfoBody"></div>
+        <div class="model-info-footer"><span class="toolnote">Capability source is shown per model.</span><button class="btn btn-primary" id="closeModelInfo" type="button">Close</button></div>
+      </section>
+    </div>
+
+    <div class="key-modal" id="modelTestModeModal" hidden>
+      <div class="key-modal-backdrop" data-model-test-mode-close></div>
+      <section class="key-dialog confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="modelTestModeTitle" aria-describedby="modelTestModeMessage">
+        <h2 class="card-title" id="modelTestModeTitle">Test all models</h2>
+        <p class="desc" id="modelTestModeMessage">Models are tested one at a time. Progress appears in the table.</p>
+        <div class="model-test-mode-actions">
+          <button class="btn btn-ghost" id="cancelModelTestMode" type="button">Cancel</button>
+          <button class="btn btn-ghost" id="testAllOnly" type="button">Test all only</button>
+          <button class="btn btn-primary" id="testAllWithDisable" type="button">Test all + disable errors</button>
+        </div>
+      </section>
+    </div>
+
+    <div class="key-modal" id="editProviderModal" hidden>
+      <div class="key-modal-backdrop" data-edit-provider-close></div>
+      <section class="key-dialog provider-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="editProviderDialogTitle">
+        <div class="card-head"><div><h2 class="card-title" id="editProviderDialogTitle">Edit provider</h2><p class="desc">Update this provider's complete routing configuration.</p></div><button class="iconbtn" type="button" data-edit-provider-close aria-label="Close">×</button></div>
+        <form class="apform provider-edit-form" id="editProviderForm" autocomplete="off">
+          <label class="apfield"><span>ID</span><input name="id" required maxlength="40" pattern="[a-z0-9][a-z0-9-]{0,39}" spellcheck="false"></label>
+          <label class="apfield"><span>Name</span><input name="name" required maxlength="120"></label>
+          <label class="apfield"><span>Prefix <em>one lowercase token</em></span><input name="prefix" required maxlength="40" pattern="[a-z0-9][a-z0-9-]{0,39}" spellcheck="false"></label>
+          <label class="apfield"><span>Website</span><input name="website" type="url" maxlength="300" spellcheck="false"></label>
+          <label class="apfield"><span>Base URL</span><input name="baseUrl" type="url" required maxlength="500" spellcheck="false"></label>
+          <label class="apfield"><span>Chat path</span><input name="chatPath" required maxlength="200" spellcheck="false"></label>
+          <label class="apfield"><span>Format</span><input name="format" required maxlength="80" spellcheck="false"></label>
+          <label class="apfield"><span>Base URL env name</span><input name="baseUrlEnv" maxlength="120" spellcheck="false"></label>
+          <label class="apfield apwide"><span>Models <em>comma or one per line</em></span><textarea name="models" rows="4" required spellcheck="false"></textarea></label>
+          <label class="apfield apwide"><span>Request headers <em>JSON object</em></span><textarea name="headers" rows="4" spellcheck="false">{}</textarea></label>
+          <label class="apfield"><span>Refresh URL</span><input name="refreshUrl" type="url" maxlength="500" spellcheck="false"></label>
+          <label class="apfield"><span>Refresh headers <em>JSON object</em></span><textarea name="refreshHeaders" rows="3" spellcheck="false">{}</textarea></label>
+          <label class="apfield"><span>Quota URL</span><input name="quotaUrl" type="url" maxlength="500" spellcheck="false"></label>
+          <label class="apfield"><span>Quota parser</span><input name="quotaParser" maxlength="120" spellcheck="false"></label>
+          <label class="apfield"><span>Checkin URL</span><input name="checkinUrl" type="url" maxlength="500" spellcheck="false"></label>
+          <label class="apfield apwide"><span>Reasoning config <em>JSON; applied only when requested</em></span><textarea name="reasoning" rows="4" spellcheck="false">{}</textarea></label>
+          <div class="provider-edit-toggles apwide"><label class="key-toggle"><input name="forceStream" type="checkbox"><span></span>Force stream</label><label class="key-toggle"><input name="requiresAccount" type="checkbox"><span></span>Requires account</label></div>
+          <div class="apactions"><span class="toolnote" id="editProviderNote" role="status" aria-live="polite"></span><button class="btn btn-ghost" type="button" data-edit-provider-close>Cancel</button><button class="btn btn-primary" type="submit">Save changes</button></div>
+        </form>
+      </section>
+    </div>
+
+    <div class="account-modal" id="accountModal" hidden>
+      <div class="account-modal-backdrop" data-modal-close></div>
+      <section class="account-dialog" role="dialog" aria-modal="true" aria-labelledby="accountModalTitle" aria-describedby="accountModalSubtitle">
+        <div class="account-dialog-head">
+          <div>
+            <h2 id="accountModalTitle">Add account</h2>
+            <p id="accountModalSubtitle">Store an operator-supplied CodeBuddy credential in the local pool.</p>
+          </div>
+          <button class="iconbtn account-dialog-close" id="closeAccountModal" type="button" aria-label="Close account dialog">×</button>
+        </div>
+
+        <div class="account-modal-view" id="codexAccountChoice" hidden>
+          <div class="oauth-choice-grid">
+            <button class="oauth-choice" id="startCodexOAuth" type="button">
+              <strong>Login with ChatGPT</strong>
+              <span>OAuth with PKCE. Recommended for Codex.</span>
+            </button>
+            <button class="oauth-choice" id="chooseCodexApiKey" type="button">
+              <strong>API key</strong>
+              <span>Use the official OpenAI API endpoint, separate from Codex OAuth.</span>
+            </button>
+          </div>
+            <div class="oauth-choice-actions"><button class="btn btn-ghost" id="cancelCodexOAuth" type="button">Cancel login</button><span class="toolnote" id="codexOAuthNote" role="status" aria-live="polite"></span></div>
+        </div>
+
+        <div class="account-modal-view" id="addAccountPanel" hidden>
+          <form class="apform" id="addAccountForm" autocomplete="off">
+            <label class="apfield">
+              <span>Label</span>
+              <input name="label" placeholder="Laptop CLI" maxlength="80">
+            </label>
+            <label class="apfield">
+              <span>Type</span>
+              <select name="kind" data-custom-select>
+                <option value="access_token">Access token</option>
+                <option value="refresh_token">Refresh token</option>
+                <option value="api_key">API key</option>
+              </select>
+            </label>
+            <label class="apfield apwide">
+              <span>Access token</span>
+              <textarea name="accessToken" rows="2" placeholder="Paste the access token" spellcheck="false"></textarea>
+            </label>
+            <label class="apfield apwide">
+              <span>Refresh token <em>optional, enables automatic refresh</em></span>
+              <textarea name="refreshToken" rows="2" placeholder="Paste the refresh token" spellcheck="false"></textarea>
+            </label>
+            <label class="apfield">
+              <span>uid <em>optional</em></span>
+              <input name="uid" placeholder="Tencent account id" maxlength="120" spellcheck="false">
+            </label>
+            <div class="apactions">
+              <button class="btn btn-primary" type="submit">Check duplicates</button>
+              <button class="btn btn-ghost" type="button" id="cancelAddAccount">Cancel</button>
+              <span class="toolnote" id="addAccountNote" role="status" aria-live="polite"></span>
+            </div>
+          </form>
+        </div>
+
+        <div class="account-modal-view" id="bulkPanel" hidden>
+          <div class="apform" id="bulkEditView">
+            <label class="apfield apwide">
+              <span>Paste JSON or one token per line</span>
+              <textarea id="bulkInput" rows="6" spellcheck="false"
+                placeholder='[{"access_token":"eyJ..."},{"refresh_token":"...","uid":"123456"}]'></textarea>
+            </label>
+            <div class="apactions">
+              <input type="file" id="bulkFile" class="afile" accept=".json,.txt">
+              <button class="btn btn-primary" id="importBulk" type="button">Check duplicates</button>
+              <button class="btn btn-ghost" id="cancelBulk" type="button">Close</button>
+              <span class="toolnote" id="bulkNote" role="status" aria-live="polite"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="account-preview" id="accountPreview" hidden>
+          <div class="account-preview-summary" id="accountPreviewSummary"></div>
+          <div class="account-preview-list" id="accountPreviewList"></div>
+          <p class="toolnote" id="accountPreviewNote"></p>
+          <div class="apactions">
+            <button class="btn btn-primary" id="confirmAccountImport" type="button">Confirm import</button>
+            <button class="btn btn-ghost" id="backAccountEdit" type="button">Back to edit</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+  </main>
+</div>
+  <div class="model-test-toasts" id="modelTestToasts" role="status" aria-live="polite" aria-atomic="false"></div>
+
+<script src="/assets/app.js"></script>
+</body>
+</html>
