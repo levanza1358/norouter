@@ -23,6 +23,15 @@ Token Saver defaults to `{ ponytail: { enabled: false } }`. PATCH accepts `{ pon
 
 Managed keys are stored as plaintext in SQLite so the dashboard can show, hide, copy, and edit them. Create accepts `name`, optional custom `secret`, optional future `expiresAt`, `requestLimit`, and `tokenLimit`; token limits accept integer counts or compact suffixes `K`, `M`, `B`, and `T` (for example `1M` = 1,000,000 tokens); the dashboard exposes these as a unit dropdown; `None` disables token-limit input, and request limits use a separate enable toggle. Omitted limits are unlimited. Request limits count admitted chat requests; token limits count reported prompt plus completion tokens. The dashboard page may require its optional page password, but `/api` routes remain unauthenticated; keep the server on loopback and treat its database, WAL/SHM, and backups as secret material.
 
+## Dashboard port
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/settings/port` | Current bind host and port |
+| PATCH | `/api/settings/port` | `{ "port": 5555 }`; probes availability, persists to ignored `config.local.json`, then rebinds the server. Returns 409 when occupied. |
+
+The default port is `5555`. The browser reconnects to the new port after a successful change.
+
 ## Status/provider
 
 | Method | Path | Notes |

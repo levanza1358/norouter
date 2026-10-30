@@ -181,6 +181,7 @@ export function statusSnapshot() {
     lastError: stats.lastError,
     lastLatency: stats.lastLatency,
     requireApiKey: getRequireApiKey(config.requireApiKey),
+    port: config.port,
     successRate:
       stats.requests === 0
         ? null

@@ -3,7 +3,7 @@ import { pathToFileURL } from 'node:url';
 
 import { config } from './config.js';
 import { authorizeManagedKey, getRequireApiKey } from './lib/api-keys.js';
-import { CORS_HEADERS, sendError, sendJson } from './lib/http.js';
+import { CORS_HEADERS, readJson, sendError, sendJson } from './lib/http.js';
 import { providers } from './providers/index.js';
 import {
   handleAccountCheckin,
@@ -38,6 +38,8 @@ import { handleAsset, handleDashboard } from './routes/dashboard.js';
 import { handleModels } from './routes/models.js';
 import { handleAddModel, handleCreateProvider, handleDeleteProvider, handleFetchModels, handleProviderDetail, handleRemoveModel, handleSetModelEnabled, handleTestModels, handleUpdateProvider } from './routes/provider.js';
 import { handleStatus } from './routes/status.js';
+import { handlePortGet, handlePortUpdate } from './routes/settings.js';
+import { writeLocalConfig } from './lib/local-config.js';
 import { handleUsage } from './routes/usage.js';
 import { handleGetTokenSaver, handleUpdateTokenSaver } from './routes/token-saver.js';
 import { handleGetReplyFilters, handleUpdateReplyFilters } from './routes/reply-filters.js';
@@ -114,6 +116,30 @@ export function createServer(overrides = {}) {
       }
       if (path === '/api/status') {
         return handleStatus(req, res);
+      }
+      if (path === '/api/settings/port' && req.method === 'GET') {
+        return handlePortGet(req, res, settings);
+      }
+      if (path === '/api/settings/port' && req.method === 'PATCH') {
+        return await handlePortUpdate(req, res, settings, readJson, async (port) => {
+          const previous = settings.port;
+          await new Promise((resolve, reject) => {
+            server.close((error) => {
+              if (error) return reject(error);
+              settings.port = port;
+              server.listen(settings.port, settings.host, () => {
+                config.port = port;
+                writeManagedPid();
+                resolve();
+              });
+            });
+          }).catch((error) => {
+            settings.port = previous;
+            throw error;
+          });
+          writeLocalConfig({ port });
+          writeManagedPid();
+        });
       }
       if (path === '/api/usage' && req.method === 'GET') {
         return handleUsage(req, res, url);

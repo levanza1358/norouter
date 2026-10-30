@@ -47,8 +47,9 @@ Isi credential provider secara manual lewat dashboard atau account API. Jangan c
 
 Alamat default:
 
-- Dashboard: `http://127.0.0.1:1463/`
-- Client base URL: `http://127.0.0.1:1463/v1`
+- Dashboard: `http://127.0.0.1:5555/`
+- Client base URL: `http://127.0.0.1:5555/v1`
+- Port default: `5555`; change it in Settings > General. The port must be free, then the server rebinds automatically.
 
 `npm link` membuat command `norouter` tersedia global dari checkout ini. Tanpa `npm link`, jalankan `norouter.cmd` di Windows atau `./norouter.cmd`/`node bin/norouter.js` sesuai platform.
 
@@ -87,7 +88,7 @@ SQLite default: `data/norouter.db`. Override dengan `NOROUTER_DB`.
 Streaming:
 
 ```bat
-curl -N http://127.0.0.1:1463/v1/chat/completions ^
+curl -N http://127.0.0.1:5555/v1/chat/completions ^
   -H "Content-Type: application/json" ^
   -d "{\"model\":\"cbcn/deepseek-v4.1-flash\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"halo\"}]}"
 ```
@@ -95,7 +96,7 @@ curl -N http://127.0.0.1:1463/v1/chat/completions ^
 Non-streaming:
 
 ```bat
-curl http://127.0.0.1:1463/v1/chat/completions ^
+curl http://127.0.0.1:5555/v1/chat/completions ^
   -H "Content-Type: application/json" ^
   -d "{\"model\":\"cbcn/glm-5.3\",\"messages\":[{\"role\":\"user\",\"content\":\"halo\"}]}"
 ```

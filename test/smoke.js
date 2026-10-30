@@ -47,6 +47,7 @@ const {
 assert.equal(DB_FILE, TEST_DB_FILE, 'smoke tests must use the throwaway database');
 const { createServer } = await import('../src/server.js');
 const { SESSION_TTL_MS } = await import('../src/lib/dashboard-session.js');
+const { validPort } = await import('../src/lib/local-config.js');
 
 const results = [];
 
@@ -191,6 +192,19 @@ await test('in-stream error frame is captured, not swallowed', async () => {
 const { server } = createServer({ port: 0, host: '127.0.0.1', logRequests: false });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
+
+await test('port configuration validates and settings route reports the listener', async () => {
+  assert.equal(validPort(5555), 5555);
+  assert.equal(validPort(0), null);
+  assert.equal(validPort(65536), null);
+  const port = await fetch(`${base}/api/settings/port`);
+  const body = await port.json();
+  assert.equal(port.status, 200);
+  assert.equal(body.host, '127.0.0.1');
+  assert.equal(body.port, 0);
+  const occupied = await fetch(`${base}/api/settings/port`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ port: server.address().port }) });
+  assert.equal(occupied.status, 409);
+});
 
 await test('GET / health and /v1/models', async () => {
   const health = await fetch(`${base}/health`);

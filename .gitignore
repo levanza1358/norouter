@@ -15,6 +15,9 @@ data/*.json.migrated
 # Scratch screenshots from layout checks.
 .shots/
 
+# Local runtime config written by Settings (never commit operator port changes).
+config.local.json
+
 # Local agent/session metadata and shell scratch artifacts.
 .agents/
 .mesaCode/

@@ -46,7 +46,7 @@ norouter version    package version
 
 ## Start/stop
 
-Default bind: `127.0.0.1:1463`. `norouter stop` terminates only the PID marker created by a managed `norouter start`; it does not search for or kill unrelated Node processes. Ctrl+C remains supported. Graceful shutdown closes HTTP server and SQLite handle.
+Default bind: `127.0.0.1:5555`. Change the port in Settings > General; norouter probes availability, persists the value in ignored `config.local.json`, and rebinds automatically. `norouter stop` terminates only the PID marker created by a managed `norouter start`; it does not search for or kill unrelated Node processes. Ctrl+C remains supported. Graceful shutdown closes HTTP server and SQLite handle.
 
 Keep `HOST=127.0.0.1` for local use. Changing it exposes unauthenticated dashboard/admin surfaces unless an external boundary is added.
 

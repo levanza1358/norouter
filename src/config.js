@@ -1,8 +1,10 @@
 import { readFileSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
-export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+import { ROOT } from './config-root.js';
+import { readLocalConfig, validPort } from './lib/local-config.js';
+
+export { ROOT };
 
 function loadEnvFile(path) {
   if (!existsSync(path)) return;
@@ -23,8 +25,13 @@ function loadEnvFile(path) {
 
 loadEnvFile(join(ROOT, '.env'));
 
+const localConfig = readLocalConfig();
+const configuredPort = validPort(localConfig.port)
+  || validPort(process.env.PORT)
+  || 5555;
+
 export const config = {
-  port: Number(process.env.PORT || 1463),
+  port: configuredPort,
   host: process.env.HOST || '127.0.0.1',
   requireApiKey: process.env.REQUIRE_API_KEY === 'true',
   apiKey: process.env.ROUTER_API_KEY || '',

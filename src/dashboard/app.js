@@ -3291,6 +3291,8 @@ function renderSettings(data) {
   $('sStatus').textContent = ready === data.providers.length ? 'ready' : `${ready} of ${data.providers.length} providers ready`;
   $('sUptime').textContent = uptime(data.uptimeSeconds);
   $('sPort').textContent = location.host;
+  const portInput = $('serverPort');
+  if (portInput && document.activeElement !== portInput) portInput.value = data.port || Number(location.port) || 5555;
   $('sRequireKey').textContent = data.requireApiKey ? 'enabled' : 'disabled';
   paintSettingsTabs();
   renderDashboardAuth();
@@ -5348,6 +5350,29 @@ async function copyBase() {
     setTimeout(() => { button.textContent = 'Copy'; }, 1400);
   }
 }
+
+$('saveServerPort')?.addEventListener('click', async () => {
+  const input = $('serverPort');
+  const note = $('serverPortNote');
+  const button = $('saveServerPort');
+  const port = Number(input?.value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    detailNote(note, 'Port must be an integer between 1 and 65535.', 'bad');
+    return;
+  }
+  button.disabled = true;
+  detailNote(note, 'Checking port…');
+  try {
+    const res = await fetch('/api/settings/port', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ port }) });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error?.message || `Port change failed (${res.status})`);
+    detailNote(note, `Port changed to ${port}. Reconnecting…`, 'ok');
+    window.setTimeout(() => location.href = `${location.protocol}//${location.hostname}:${port}${location.pathname}`, 500);
+  } catch (err) {
+    detailNote(note, err.message, 'bad');
+    button.disabled = false;
+  }
+});
 
 $('copyBase')?.addEventListener('click', copyBase);
 $('copyApiKey')?.addEventListener('click', async () => {
