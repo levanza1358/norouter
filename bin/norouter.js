@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import { clearManagedPid, isProcessAlive, readManagedPid } from '../src/lib/process-control.js';
 import { installAutostart, uninstallAutostart, autostartStatus as getAutostartStatus } from '../src/lib/autostart.js';
+import { updateNeedsStash } from '../src/lib/git-update.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SERVER = join(ROOT, 'src', 'server.js');
@@ -142,9 +143,18 @@ function git(args) {
   return execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
+function stashLocalChanges() {
+  const status = git(['status', '--porcelain']);
+  if (!updateNeedsStash(status)) return false;
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  git(['stash', 'push', '--include-untracked', '--message', `norouter update backup ${stamp}`]);
+  console.log('norouter: local source changes saved to Git stash; runtime config and data were not touched.');
+  return true;
+}
+
 async function update() {
   if (!existsSync(join(ROOT, '.git'))) throw new Error('This installation is not a Git checkout.');
-  if (git(['status', '--porcelain'])) throw new Error('Working tree is not clean; commit or stash local changes before update.');
+  stashLocalChanges();
   const branch = git(['branch', '--show-current']);
   if (!branch) throw new Error('Detached HEAD cannot be updated automatically.');
   const wasRunning = Boolean(readManagedPid() && isProcessAlive(readManagedPid()));

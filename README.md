@@ -65,7 +65,7 @@ norouter autostart-off Nonaktifkan start otomatis
 norouter uninstall   Hapus checkout setelah konfirmasi y/yes
 ```
 
-`norouter update` hanya berjalan pada checkout Git dengan working tree bersih. Update memakai `git fetch --prune origin` dan `git merge --ff-only origin/<branch>`; merge konflik atau perubahan lokal tidak dipaksa. Jika server sedang berjalan melalui `norouter start`, update otomatis me-restart server setelah commit baru masuk.
+`norouter update` memakai `git fetch --prune origin` dan `git merge --ff-only origin/<branch>`. Perubahan source lokal otomatis dibackup ke named Git stash sebelum update; tidak ada reset hard atau penghapusan otomatis. `.env`, `config.local.json`, database, WAL, dan SHM tetap tidak disentuh. Jika server berjalan melalui `norouter start`, update otomatis me-restart server background setelah commit baru masuk.
 
 Alternatif tanpa CLI: `npm start`, `npm run dev`, dan `npm test`. `run.cmd` tetap tersedia sebagai launcher Windows lama.
 

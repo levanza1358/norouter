@@ -49,6 +49,7 @@ const { createServer } = await import('../src/server.js');
 const { SESSION_TTL_MS } = await import('../src/lib/dashboard-session.js');
 const { validPort } = await import('../src/lib/local-config.js');
 const { autostartPlatform, autostartSupported, autostartPlan } = await import('../src/lib/autostart.js');
+const { updateNeedsStash } = await import('../src/lib/git-update.js');
 
 const results = [];
 
@@ -80,6 +81,8 @@ await test('norouter CLI exposes start, dev, test and version', () => {
   const version = execFileSync(process.execPath, [cli, 'version'], { encoding: 'utf8' }).trim();
   assert.match(version, /^\d+\.\d+\.\d+/);
   assert.match(help, /background/i);
+  assert.equal(updateNeedsStash(''), false);
+  assert.equal(updateNeedsStash(' M src/server.js'), true);
   assert.throws(
     () => execFileSync(process.execPath, [cli, 'nope'], { encoding: 'utf8', stdio: 'pipe' }),
     /Unknown command/,
