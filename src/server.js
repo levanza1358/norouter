@@ -40,6 +40,8 @@ import { handleAddModel, handleCreateProvider, handleDeleteProvider, handleFetch
 import { handleStatus } from './routes/status.js';
 import { handleAutostartGet, handleAutostartUpdate, handlePortGet, handlePortUpdate } from './routes/settings.js';
 import { handleAccountExport, handleAccountRestore } from './routes/account-backup.js';
+import { handleRequestLog, handleRequestLogClear } from './routes/request-log.js';
+import { handleWebhookGet, handleWebhookUpdate } from './routes/webhook.js';
 import { writeLocalConfig } from './lib/local-config.js';
 import { handleUsage } from './routes/usage.js';
 import { handleGetTokenSaver, handleUpdateTokenSaver } from './routes/token-saver.js';
@@ -130,6 +132,18 @@ export function createServer(overrides = {}) {
       }
       if (path === '/api/settings/accounts/restore' && req.method === 'POST') {
         return await handleAccountRestore(req, res);
+      }
+      if (path === '/api/request-log' && req.method === 'GET') {
+        return handleRequestLog(req, res);
+      }
+      if (path === '/api/request-log' && req.method === 'DELETE') {
+        return handleRequestLogClear(req, res);
+      }
+      if (path === '/api/webhook' && req.method === 'GET') {
+        return handleWebhookGet(req, res);
+      }
+      if (path === '/api/webhook' && req.method === 'PATCH') {
+        return await handleWebhookUpdate(req, res);
       }
       if (path === '/api/settings/port' && req.method === 'GET') {
         return handlePortGet(req, res, settings);

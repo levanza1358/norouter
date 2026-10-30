@@ -22,6 +22,8 @@ import {
 import { recordUsageActivity, recordUsageError, recordUsageRequest } from '../lib/usage.js';
 import { applyTokenSaver, getTokenSaverSettings } from '../lib/token-saver.js';
 import { applyReplyFilters, getReplyFiltersSettings } from '../lib/reply-filters.js';
+import { recordRequestLog } from '../lib/request-log.js';
+import { notifyWebhook } from '../lib/webhook.js';
 import { wireFor } from '../providers/index.js';
 import { fromResponsesResponse, fromResponsesStream, toResponsesRequest } from '../lib/responses-format.js';
 
@@ -125,6 +127,24 @@ function isFallbackStatus(status) {
 // recorded together here instead of at each call site.
 function noteRequest({ provider, model, usage, ms, account = '', status = 200 }) {
   recordRequest({ provider, model, usage, ms });
+  recordRequestLog({
+    provider,
+    model,
+    account,
+    tokensIn: usage?.prompt_tokens || 0,
+    tokensOut: usage?.completion_tokens || 0,
+    ms,
+    status,
+  });
+  notifyWebhook('request', {
+    provider: provider || null,
+    model: model || null,
+    account: account || null,
+    tokensIn: usage?.prompt_tokens || 0,
+    tokensOut: usage?.completion_tokens || 0,
+    ms,
+    status,
+  });
   try {
     recordUsageRequest({ provider, model, usage, ms });
     recordUsageActivity({
@@ -151,6 +171,8 @@ function noteError(message, {
   activityModel = model,
 } = {}) {
   recordError(message, { upstream, model, provider });
+  recordRequestLog({ provider, model, account, status, error: message });
+  notifyWebhook('error', { provider: provider || null, model: model || null, account: account || null, status, message });
   try {
     recordUsageError({ provider, model });
     recordUsageActivity({ provider, model: activityModel, account, status, ok: false, error: message });

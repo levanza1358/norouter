@@ -17,9 +17,14 @@ Dashboard password, when enabled, gates dashboard HTML pages only. `/api/*`, ass
 | GET | `/api/keys/:id/usage?days=30` | Daily request/token history |
 | POST | `/api/keys/:id/rotate` | Replace the token; raw replacement `secret` returns once |
 | GET/PATCH | `/api/auth-settings` | Read or set `requireApiKey` for `/v1` |
-| GET/PATCH | `/api/token-saver` | Read or set the dependency-free Ponytail prompt transform |
+| GET/PATCH | `/api/token-saver` | Read or set the dependency-free token-saver transforms |
 
-Token Saver defaults to `{ ponytail: { enabled: false } }`. PATCH accepts `{ ponytail: { enabled: boolean } }`. The transform only applies to Chat Completions requests with a `messages` array, and changes system instructions without changing user or assistant messages. RTK and Headroom are not included because they require an external proxy or dependency.
+Token Saver defaults to `{ ponytail: { enabled: false }, rtk: { enabled: false }, caveman: { enabled: false } }`. PATCH accepts `{ ponytail: { enabled } }`, `{ rtk: { enabled } }`, and `{ caveman: { enabled } }` (any subset). The transforms only apply to Chat Completions requests with a `messages` array, and change system instructions without changing user or assistant messages.
+
+- **RTK** compresses tool output (git diff context lines, grep/list dedup, repeated log lines, oversized-output truncation) before the request reaches the model. Pure string transforms, no dependency, and every filter fails open — it never makes a request larger or breaks it.
+- **Ponytail** injects a lazy-senior-dev (YAGNI) system instruction.
+- **Caveman** injects a terse-output instruction; it stacks with Ponytail.
+- **Headroom** is intentionally not included: it requires an external proxy (`pip install`).
 
 Managed keys are stored as plaintext in SQLite so the dashboard can show, hide, copy, and edit them. Create accepts `name`, optional custom `secret`, optional future `expiresAt`, `requestLimit`, and `tokenLimit`; token limits accept integer counts or compact suffixes `K`, `M`, `B`, and `T` (for example `1M` = 1,000,000 tokens); the dashboard exposes these as a unit dropdown; `None` disables token-limit input, and request limits use a separate enable toggle. Omitted limits are unlimited. Request limits count admitted chat requests; token limits count reported prompt plus completion tokens. The dashboard page may require its optional page password, but `/api` routes remain unauthenticated; protect the all-interface bind with a firewall/reverse proxy or set `HOST=127.0.0.1`, and treat its database, WAL/SHM, and backups as secret material.
 
@@ -52,6 +57,24 @@ The export is an operator backup file — it contains **plaintext** `access_toke
 
 Restore accepts either a bare account array or an `{ "accounts": [...] }` wrapper, at most 5,000 rows. It merges by provider and fingerprint: existing accounts are untouched, duplicates are skipped, and unknown provider IDs are counted without being written. The response is `{ added, duplicates, invalid, unknownProviders, total }`. Accounts with `expires_at` in the past are imported without an expiry rather than forced into cooldown.
 
+## Request log
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/request-log` | Last 200 chat requests as redacted metadata (no tokens, keys, or bodies). |
+| DELETE | `/api/request-log` | Clear the in-memory ring buffer. |
+
+The log is an in-memory ring buffer: it survives no restart and never touches SQLite. Each entry carries `at`, `status`, `provider`, `model`, `account` (label), `tokensIn`, `tokensOut`, `ms`, and a redacted `error`. Credentials and message bodies are never captured, so there is nothing sensitive to scrub on the way out.
+
+## Webhook
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/webhook` | Read `{ enabled, url, events }`. |
+| PATCH | `/api/webhook` | `{ "enabled": true, "url": "https://example.com/hook" }`; validates the URL is http(s). |
+
+When enabled, norouter POSTs a JSON notification to `url` on three events — `request` (a completed chat), `error` (a recorded error), and `cooldown` (an account parked). Payloads are metadata only: provider, model, account label, status, latency, and token counts — never credentials or message bodies. Delivery is fire-and-forget with a 5s timeout; failures are swallowed so a notification can never slow or break the request it describes.
+
 ## Status/provider
 
 | Method | Path | Notes |
@@ -77,6 +100,8 @@ Errors use the shared `{ error: { message, type } }` shape: 400 for validation, 
 
 Combo routing behavior (fallback statuses, streaming safety, attribution) is documented in [`openai.md`](openai.md#combos).
 | GET | `/api/usage?range=day\|week\|month\|all` | Persistent usage report from SQLite |
+
+The usage report returns a `cost` field on `totals` and on each model row, an estimate in USD computed from per-model list prices. Models without a price (combos and custom models) report `null`, and the dashboard shows `—` rather than inventing a number. Cost is a comparison/savings figure only — norouter never bills anyone; you pay providers directly.
 | GET | `/api/providers/:id` | Provider snapshot, pool counts, local quota, models |
 | POST | `/api/providers` | Create custom provider; returns 201 |
 | PATCH | `/api/providers/:id` | Persist provider configuration; ID changes migrate accounts/models atomically |

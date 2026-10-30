@@ -331,6 +331,7 @@ await test('usage report exposes ranges with a stable shape', async () => {
   assert.equal(report.series.length, 24, 'a day is 24 hourly buckets');
   assert.ok(report.timeZone, 'the report names the local timezone');
   for (const key of ['requests', 'errors', 'tokensIn', 'tokensOut']) assert.equal(typeof report.totals[key], 'number');
+  assert.equal(typeof report.totals.cost, 'number');
   assert.equal(report.totals.requests, 0, 'no successful request yet');
   assert.deepEqual(report.models, []);
   for (const item of report.series) {
@@ -370,20 +371,47 @@ await test('usage report exposes ranges with a stable shape', async () => {
 
 await test('Token Saver settings validate and persist', async () => {
   const initial = await (await fetch(`${base}/api/token-saver`)).json();
-  assert.deepEqual(initial, { ponytail: { enabled: false } });
+  assert.deepEqual(initial, { ponytail: { enabled: false }, rtk: { enabled: false }, caveman: { enabled: false } });
   const saved = await fetch(`${base}/api/token-saver`, {
     method: 'PATCH', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ ponytail: { enabled: true } }),
+    body: JSON.stringify({ ponytail: { enabled: true }, rtk: { enabled: true }, caveman: { enabled: true } }),
   });
   assert.equal(saved.status, 200);
-  assert.deepEqual(await saved.json(), { ponytail: { enabled: true } });
-  assert.deepEqual(await (await fetch(`${base}/api/token-saver`)).json(), { ponytail: { enabled: true } });
-  const invalidLegacy = await fetch(`${base}/api/token-saver`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ caveman: { enabled: true } }) });
+  assert.deepEqual(await saved.json(), { ponytail: { enabled: true }, rtk: { enabled: true }, caveman: { enabled: true } });
+  assert.deepEqual(await (await fetch(`${base}/api/token-saver`)).json(), { ponytail: { enabled: true }, rtk: { enabled: true }, caveman: { enabled: true } });
+  const invalidLegacy = await fetch(`${base}/api/token-saver`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ headroom: { enabled: true } }) });
   assert.equal(invalidLegacy.status, 400);
   const invalidBoolean = await fetch(`${base}/api/token-saver`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ponytail: { enabled: 'yes' } }) });
   assert.equal(invalidBoolean.status, 400);
-  const reset = await fetch(`${base}/api/token-saver`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ponytail: { enabled: false } }) });
+  const reset = await fetch(`${base}/api/token-saver`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ponytail: { enabled: false }, rtk: { enabled: false }, caveman: { enabled: false } }) });
   assert.equal(reset.status, 200);
+});
+
+await test('RTK compresses tool output and fails open', async () => {
+  const { compressToolOutput, applyRtk } = await import('../src/lib/rtk.js');
+  // Duplicate log lines collapse.
+  const log = 'INFO ok\nINFO ok\nINFO ok\nERROR boom\nERROR boom\n';
+  const deduped = compressToolOutput(log);
+  assert.ok(deduped.length < log.length, 'repeated lines must shrink');
+  assert.match(deduped, /\(×3\)/);
+  assert.match(deduped, /ERROR boom/);
+  // git diff strips context lines.
+  const diff = 'diff --git a/x b/x\nindex 111..222 100644\n--- a/x\n+++ b/x\n@@ -1,3 +1,3 @@\n keep\n-removed\n+added\n keep\n';
+  const compact = compressToolOutput(diff);
+  assert.ok(compact.length < diff.length);
+  assert.doesNotMatch(compact, /^ keep$/m);
+  assert.match(compact, /-removed/);
+  assert.match(compact, /\+added/);
+  // A short, unique message is untouched (fail-open, never grows).
+  const short = 'hello world';
+  assert.equal(compressToolOutput(short), short);
+  // applyRtk mutates only tool messages and respects the enabled flag.
+  const body = { messages: [{ role: 'tool', content: log }, { role: 'user', content: 'hi' }] };
+  const on = applyRtk(body, { rtk: { enabled: true } });
+  assert.ok(on.messages[0].content.length < log.length);
+  assert.equal(on.messages[1].content, 'hi');
+  const off = applyRtk(body, { rtk: { enabled: false } });
+  assert.equal(off, body);
 });
 
 await test('reply style filters validate, persist and stay idempotent', async () => {
@@ -620,11 +648,77 @@ await test('dashboard icon is linked and served as SVG', async () => {
   assert.match(await icon.text(), /<svg[^>]*viewBox="0 0 64 64"/);
 });
 
+await test('cost estimation bills known models and leaves unknowns null', async () => {
+  const { modelPricing, estimateCost } = await import('../src/lib/pricing.js');
+  const glm = modelPricing('glm-5.3');
+  assert.ok(glm, 'glm-5.3 has a rate');
+  assert.ok(glm.input > 0 && glm.output > 0);
+  // Case-insensitive lookup for the catalog's lowercase ids.
+  assert.ok(modelPricing('GLM-5.3'));
+  // 1M in + 1M out at input 1.0 / output 4.0 = $5.00.
+  assert.equal(estimateCost(1_000_000, 1_000_000, modelPricing('glm-5.3')), 5);
+  // Unknown and combo models have no invented rate.
+  assert.equal(modelPricing('not-a-model'), null);
+  assert.equal(estimateCost(1000, 1000, null), null);
+});
+
+await test('request log records and clears redacted metadata', async () => {
+  const { recordRequestLog, requestLogs, redact } = await import('../src/lib/request-log.js');
+  const before = requestLogs().length;
+  recordRequestLog({
+    provider: 'codebuddy-cn',
+    model: 'glm-5.3',
+    account: 'Account 1',
+    tokensIn: 12,
+    tokensOut: 3,
+    ms: 40,
+    status: 200,
+  });
+  recordRequestLog({ provider: 'codebuddy-cn', model: 'x', status: 502, error: 'Bearer abc123 failed' });
+  const logs = requestLogs();
+  assert.equal(logs.length, before + 2);
+  assert.equal(logs[logs.length - 1].status, 502);
+  assert.doesNotMatch(logs[logs.length - 1].error, /abc123/, 'tokens must be redacted');
+  assert.match(logs[logs.length - 1].error, /\[redacted\]/);
+
+  // The HTTP route reads and clears; run it against a real server instance.
+  const clear = await fetch(`${base}/api/request-log`, { method: 'DELETE' });
+  assert.equal(clear.status, 200);
+  const after = await (await fetch(`${base}/api/request-log`)).json();
+  assert.ok(Array.isArray(after.requests));
+
+  // Secret redaction is content-independent of the buffer.
+  assert.equal(redact('Bearer eyJhbGciOiJIUzI1NiJ9.secret'), 'Bearer [redacted]');
+});
+
+await test('webhook settings validate and persist', async () => {
+  const initial = await (await fetch(`${base}/api/webhook`)).json();
+  assert.equal(initial.enabled, false);
+  const saved = await fetch(`${base}/api/webhook`, {
+    method: 'PATCH', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ enabled: true, url: 'http://127.0.0.1:1/hook' }),
+  });
+  assert.equal(saved.status, 200);
+  const body = await saved.json();
+  assert.equal(body.enabled, true);
+  assert.equal(body.url, 'http://127.0.0.1:1/hook');
+  const bad = await fetch(`${base}/api/webhook`, {
+    method: 'PATCH', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ url: 'not-a-url' }),
+  });
+  assert.equal(bad.status, 400);
+  const reset = await fetch(`${base}/api/webhook`, {
+    method: 'PATCH', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ enabled: false, url: '' }),
+  });
+  assert.equal(reset.status, 200);
+});
+
 await test('settings exposes accessible tabs and Token Saver controls', async () => {
   const html = await (await fetch(`${base}/settings`)).text();
   assert.match(html, /id="settingsTabs"[^>]*role="tablist"/);
-  assert.equal((html.match(/data-settings-tab=/g) || []).length, 4);
-  assert.equal((html.match(/id="settingsTab[^" ]+"[^>]*role="tab"/g) || []).length, 4);
+  assert.equal((html.match(/data-settings-tab=/g) || []).length, 5);
+  assert.equal((html.match(/id="settingsTab[^" ]+"[^>]*role="tab"/g) || []).length, 5);
   assert.match(html, /id="settingsTabAppearance"[^>]*aria-controls="settingsPanelAppearance"/);
   assert.match(html, /id="settingsPanelAppearance"[^>]*role="tabpanel"/);
   assert.match(html, /id="settingsTabTokenSaver"[^>]*aria-controls="settingsPanelTokenSaver"/);
@@ -637,9 +731,13 @@ await test('settings exposes accessible tabs and Token Saver controls', async ()
   assert.match(html, /id="replyVerbosity"[^>]*data-custom-select/);
   assert.match(html, /id="replyCoding"[^>]*type="checkbox"/);
   assert.match(html, /id="replyFiltersNote"[^>]*role="status"/);
-  assert.doesNotMatch(html, /caveman/i);
   assert.match(html, /id="tokenSaverPonytail"[^>]*type="checkbox"/);
+  assert.match(html, /id="tokenSaverRtk"[^>]*type="checkbox"/);
+  assert.match(html, /id="tokenSaverCaveman"[^>]*type="checkbox"/);
   assert.match(html, /id="tokenSaverNote"[^>]*role="status"/);
+  assert.match(html, /id="webhookToggle"[^>]*type="checkbox"/);
+  assert.match(html, /id="webhookUrl"[^>]*type="url"/);
+  assert.match(html, /id="requestLogTable"/);
   const js = await (await fetch(`${base}/assets/app.js`)).text();
   assert.match(js, /ArrowRight/);
   assert.match(js, /settingsTab/);

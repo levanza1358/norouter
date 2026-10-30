@@ -132,6 +132,8 @@ Model dapat ditulis sebagai `cbcn/<model>`, `codebuddy-cn/<model>`, atau bare ID
 | PATCH | `/api/auth/password` | Ganti password dashboard |
 | GET | `/api/settings/accounts/export` | Backup account pool ke `.json` (token mentah) |
 | POST | `/api/settings/accounts/restore` | Restore account pool via merge, skip duplikat |
+| GET/DELETE | `/api/request-log` | Baca/hapus request log teredaksi (in-memory) |
+| GET/PATCH | `/api/webhook` | Baca/atur webhook notifikasi |
 | GET | `/v1/models` | OpenAI-compatible model list |
 | POST | `/v1/chat/completions` | OpenAI-compatible chat |
 
@@ -145,9 +147,12 @@ Detail request/response: [`docs/api/openai.md`](docs/api/openai.md) dan [`docs/a
 - **Accounts**: pagination, search, status filter, pause/resume/delete, check account, bulk import. Provider credentials come only from this local SQLite pool.
 - **Preview import**: mendeteksi duplicate existing, duplicate dalam paste, invalid row; confirm baru menulis SQLite.
 - **Model test**: wajib memakai account active; test per model atau test all; opsi disable account saat error; jawaban prompt diagnostik muncul di toast kanan bawah yang dapat ditutup.
-- **Usage**: riwayat request/token persisten di SQLite dengan tab Harian, Mingguan, Bulanan, dan All time; tiap tab menampilkan total, grafik bucket, dan breakdown per model. Bucket mengikuti timezone komputer server.
+- **Usage**: riwayat request/token persisten di SQLite dengan tab Harian, Mingguan, Bulanan, dan All time; tiap tab menampilkan total, grafik bucket, dan breakdown per model. Bucket mengikuti timezone komputer server. Estimasi biaya dihitung dari harga list per model.
 - **API Keys**: multiple managed keys, automatic/custom plaintext token, Show/Hide/Copy, edit/rotate, expiry, request/token limits, enable/disable/revoke, and daily usage history.
 - **Settings**: light/dark/black dan accent violet/blue/teal/amber/rose di `localStorage` browser.
+- **Token Saver**: RTK (kompres output tool), Ponytail (YAGNI), dan Caveman (balasan terse) — semua lokal, tanpa dependency, bisa di-stack.
+- **Request log**: ringkasan 200 chat request terakhir yang sudah teredaksi (tanpa token/key/isi pesan), tampil di Settings > Request log; in-memory, hilang saat restart.
+- **Webhook**: POST notifikasi (metadata saja) ke URL saat request, error, atau akun masuk cooldown.
 - **Backup & restore**: ekspor account pool ke `.json` dan restore via merge. File berisi token mentah; perlakukan seperti database dan jangan di-commit/diunggah.
 
 Splash screen, route transition, modal transition, dan toast menghormati `prefers-reduced-motion`.

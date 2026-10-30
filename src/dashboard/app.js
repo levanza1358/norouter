@@ -100,6 +100,13 @@ const ROUTES = {
 
 const fmtFull = (n) => Number(n || 0).toLocaleString('en-US');
 
+// USD cost, compact: $0.0042 -> "$0.0042", $1.25 -> "$1.25", $1200 -> "$1,200".
+function fmtCost(n) {
+  const value = Number(n || 0);
+  if (value >= 1) return '$' + value.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  return '$' + value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
+}
+
 function compact(n) {
   const value = Number(n || 0);
   if (value < 1000) return fmtFull(value);
@@ -579,6 +586,7 @@ document.querySelectorAll('[data-settings-tab]').forEach((btn) => {
     settingsTab = btn.dataset.settingsTab;
     paintSettingsTabs();
     if (settingsTab === 'reply') loadReplyFilters();
+    if (settingsTab === 'debug') loadRequestLog();
   });
 });
 $('settingsTabs')?.addEventListener('keydown', (event) => {
@@ -596,9 +604,16 @@ $('settingsTabs')?.addEventListener('keydown', (event) => {
   settingsTab = tabs[next].dataset.settingsTab;
   paintSettingsTabs();
   if (settingsTab === 'reply') loadReplyFilters();
+  if (settingsTab === 'debug') loadRequestLog();
 });
 $('tokenSaverPonytail')?.addEventListener('change', (event) => {
   patchTokenSaver({ ponytail: { enabled: event.currentTarget.checked } });
+});
+$('tokenSaverRtk')?.addEventListener('change', (event) => {
+  patchTokenSaver({ rtk: { enabled: event.currentTarget.checked } });
+});
+$('tokenSaverCaveman')?.addEventListener('change', (event) => {
+  patchTokenSaver({ caveman: { enabled: event.currentTarget.checked } });
 });
 function replyLanguageLabel(code) {
   if (code === 'auto') return { native: 'Auto', english: 'Match user', flag: '🌐' };
@@ -774,7 +789,7 @@ let dashboardUsageRequestId = 0;
 let dashboardApiKeySecret = '';
 let settingsTab = 'general';
 let dashboardAuth = { enabled: false, hasPassword: false, configuredAt: null };
-let tokenSaver = { ponytail: { enabled: false } };
+let tokenSaver = { ponytail: { enabled: false }, rtk: { enabled: false }, caveman: { enabled: false } };
 let tokenSaverLoading = false;
 let replyFilters = { language: 'auto', verbosity: 'balanced', coding: false };
 let replyFiltersLoading = false;
@@ -919,7 +934,7 @@ function navigate(path, { push = true, initial = false } = {}) {
   updateRoute();
   if (onDetail) loadDetail();
   if (target === '/api-keys') loadApiKeys();
-  if (target === '/settings') loadTokenSaver();
+  if (target === '/settings') { loadTokenSaver(); loadWebhook(); }
   if (target === '/usage') loadUsage();
   if (target === '/chat') loadChat();
   if (target === '/combos') loadCombos();
@@ -2381,6 +2396,10 @@ function renderUsage() {
 
   $('uBucket').textContent = meta.bucket;
   if (chartChanged) updateUsageSpark(usageData.series, usageData.bucket);
+
+  setUsageStat($('uCost'), totals.cost == null ? 0 : totals.cost, (n) => fmtCost(n));
+  if (totals.cost == null) $('uCost').textContent = '—';
+  $('uCostNote').textContent = totals.cost == null ? 'no list prices' : 'list-price estimate';
   const first = usageData.series[0];
   const last = usageData.series.at(-1);
   $('uSparkStart').textContent = first ? usageBucketLabel(usageData.bucket, first.bucket) : 'oldest';
@@ -2412,9 +2431,10 @@ function renderUsage() {
         <td class="r">${fmtFull(m.requests)}</td>
         <td class="r">${fmtFull(m.tokensIn)}</td>
         <td class="r">${fmtFull(m.tokensOut)}</td>
+        <td class="r">${m.cost == null ? '—' : fmtCost(m.cost)}</td>
         <td class="r">${m.avgMs == null ? '—' : m.avgMs + ' ms'}</td>
       </tr>`).join('')
-    : '<tr><td colspan="6" class="empty" style="border-bottom:0">No traffic recorded in this range yet.</td></tr>';
+    : '<tr><td colspan="7" class="empty" style="border-bottom:0">No traffic recorded in this range yet.</td></tr>';
 }
 
 function seriesSummary(series) {
@@ -3178,6 +3198,10 @@ function renderTokenSaver() {
   const ponytail = $('tokenSaverPonytail');
   if (!ponytail) return;
   ponytail.checked = tokenSaver.ponytail.enabled;
+  const rtk = $('tokenSaverRtk');
+  if (rtk) rtk.checked = tokenSaver.rtk.enabled;
+  const caveman = $('tokenSaverCaveman');
+  if (caveman) caveman.checked = tokenSaver.caveman.enabled;
   const note = $('tokenSaverNote');
   if (note && tokenSaverLoading) note.textContent = 'Loading…';
 }
@@ -3218,6 +3242,99 @@ async function patchTokenSaver(patch) {
     if (note) note.textContent = err.message;
   }
 }
+
+function fmtTime(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleTimeString('en-GB', { hour12: false });
+}
+
+function renderRequestLog(rows) {
+  const table = $('requestLogTable');
+  if (!table) return;
+  table.innerHTML = rows.length
+    ? rows.map((r) => `<tr>
+        <td class="mono">${fmtTime(r.at)}</td>
+        <td class="r">${r.status == null ? '—' : r.status}</td>
+        <td>${escapeHtml(r.provider || '—')}</td>
+        <td class="model">${escapeHtml(r.model || '—')}</td>
+        <td class="r">${fmtFull(r.tokensIn)}</td>
+        <td class="r">${fmtFull(r.tokensOut)}</td>
+        <td class="r">${r.ms == null ? '—' : r.ms + ' ms'}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="7" class="empty" style="border-bottom:0">No chat requests recorded yet.</td></tr>';
+}
+
+async function loadRequestLog() {
+  const note = $('requestLogNote');
+  try {
+    const res = await fetch('/api/request-log', { cache: 'no-store' });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error?.message || 'Could not load request log.');
+    renderRequestLog(body.requests || []);
+    if (note) note.textContent = '';
+  } catch (err) {
+    if (note) note.textContent = err.message;
+  }
+}
+
+$('clearRequestLog')?.addEventListener('click', async () => {
+  const note = $('requestLogNote');
+  try {
+    const res = await fetch('/api/request-log', { method: 'DELETE' });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error?.message || 'Could not clear request log.');
+    renderRequestLog([]);
+    if (note) note.textContent = 'Cleared';
+  } catch (err) {
+    if (note) note.textContent = err.message;
+  }
+});
+
+let webhookSettings = { enabled: false, url: '' };
+
+function renderWebhook() {
+  const toggle = $('webhookToggle');
+  const url = $('webhookUrl');
+  if (toggle) toggle.checked = webhookSettings.enabled;
+  if (url) url.value = webhookSettings.url || '';
+}
+
+async function loadWebhook() {
+  const note = $('webhookNote');
+  try {
+    const res = await fetch('/api/webhook', { cache: 'no-store' });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error?.message || 'Could not load webhook settings.');
+    webhookSettings = body;
+    renderWebhook();
+    if (note) note.textContent = '';
+  } catch (err) {
+    if (note) note.textContent = err.message;
+  }
+}
+
+async function saveWebhook(patch) {
+  const note = $('webhookNote');
+  try {
+    const res = await fetch('/api/webhook', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error?.message || 'Could not save webhook settings.');
+    webhookSettings = body;
+    renderWebhook();
+    if (note) note.textContent = 'Saved';
+  } catch (err) {
+    renderWebhook();
+    if (note) note.textContent = err.message;
+  }
+}
+
+$('webhookToggle')?.addEventListener('change', (event) => {
+  saveWebhook({ enabled: event.currentTarget.checked });
+});
+$('webhookUrl')?.addEventListener('change', (event) => {
+  saveWebhook({ url: event.currentTarget.value.trim() });
+});
 
 function renderReplyFilters() {
   const verbosity = $('replyVerbosity');

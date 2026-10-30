@@ -8,6 +8,7 @@ import {
 import { fetchProviderQuota } from './quota.js';
 import { refreshProviderToken } from './refresh.js';
 import { getDb, transaction } from './db.js';
+import { notifyWebhook } from './webhook.js';
 
 // Accounts are the thing that scales: a pool can hold thousands of rows, so
 // every read is paginated and the dashboard never receives a full token.
@@ -761,6 +762,8 @@ export function markFailure(id, { message = 'Request failed', cooldownMs = 0 } =
            updated_at = ?
      WHERE id = ?
   `).run(message.slice(0, 300), until, time, id);
+  const row = getAccountRow(id);
+  if (row) notifyWebhook('cooldown', { provider: row.provider, account: row.label, message: message.slice(0, 200) });
 }
 
 export function cooldownAccount(id, ms, reason) {

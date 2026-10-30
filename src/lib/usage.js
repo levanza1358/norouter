@@ -7,6 +7,7 @@
 
 import { getDb } from './db.js';
 import { activeRequestSnapshot } from './stats.js';
+import { estimateCost, modelPricing } from './pricing.js';
 
 export const USAGE_RANGES = ['day', 'week', 'month', 'all'];
 
@@ -269,17 +270,23 @@ export function usageReport(range = 'day', now = Date.now()) {
     GROUP BY provider, model
     HAVING SUM(requests) > 0 OR SUM(tokens_in) + SUM(tokens_out) > 0
     ORDER BY SUM(requests) DESC, SUM(tokens_in) + SUM(tokens_out) DESC
-  `).all(sinceKey).map((row) => ({
-    provider: row.provider,
-    model: row.model,
-    requests: Number(row.requests || 0),
-    errors: Number(row.errors || 0),
-    tokensIn: Number(row.tokens_in || 0),
-    tokensOut: Number(row.tokens_out || 0),
-    avgMs: Number(row.latency_count || 0) > 0
-      ? Math.round(Number(row.latency_ms) / Number(row.latency_count))
-      : null,
-  }));
+  `).all(sinceKey).map((row) => {
+    const pricing = modelPricing(row.model);
+    return {
+      provider: row.provider,
+      model: row.model,
+      requests: Number(row.requests || 0),
+      errors: Number(row.errors || 0),
+      tokensIn: Number(row.tokens_in || 0),
+      tokensOut: Number(row.tokens_out || 0),
+      avgMs: Number(row.latency_count || 0) > 0
+        ? Math.round(Number(row.latency_ms) / Number(row.latency_count))
+        : null,
+      cost: estimateCost(row.tokens_in, row.tokens_out, pricing),
+    };
+  });
+
+  const totalCost = models.reduce((sum, row) => sum + (row.cost || 0), 0);
 
   const totals = {
     requests: Number(totalsRow.requests || 0),
@@ -292,6 +299,7 @@ export function usageReport(range = 'day', now = Date.now()) {
     avgMs: Number(totalsRow.latency_count || 0) > 0
       ? Math.round(Number(totalsRow.latency_ms || 0) / Number(totalsRow.latency_count))
       : null,
+    cost: totalCost,
   };
 
   return {
