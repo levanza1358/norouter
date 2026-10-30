@@ -53,9 +53,9 @@ Keep `HOST=127.0.0.1` for local use. Changing it exposes unauthenticated dashboa
 ## Health checks
 
 ```bat
-curl http://127.0.0.1:1463/health
-curl http://127.0.0.1:1463/api/status
-curl http://127.0.0.1:1463/v1/models
+curl http://127.0.0.1:5555/health
+curl http://127.0.0.1:5555/api/status
+curl http://127.0.0.1:5555/v1/models
 ```
 
 `/v1/models` needs the router API key only when `REQUIRE_API_KEY=true`.
