@@ -31,14 +31,13 @@ install.ps1
 
 ### Linux
 
+Direct installer from GitHub:
+
 ```bash
-git clone https://github.com/levanza1358/norouter.git
-cd norouter
-chmod +x install.sh
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/levanza1358/norouter/main/install.sh | bash
 ```
 
-The installer checks Node.js 22.5+, creates `.env` only when missing, creates the local data directory, registers the CLI, then starts norouter. It never overwrites existing `.env`, database, or local settings. Enter provider credentials manually through the dashboard or account API. Never commit `.env`, database, WAL/SHM, tokens, or logs.
+The script clones norouter into `~/norouter` by default. For an existing checkout, run `./install.sh`; set `NOROUTER_DIR=/path/to/norouter` to choose another install directory. It checks Node.js 22.5+, creates `.env` only when missing, creates the local data directory, registers the CLI, then starts norouter. It never overwrites existing `.env`, database, or local settings. Enter provider credentials manually through the dashboard or account API. Never commit `.env`, database, WAL/SHM, tokens, or logs.
 
 Alamat default:
 

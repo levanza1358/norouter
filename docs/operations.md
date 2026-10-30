@@ -16,16 +16,13 @@ cd norouter
 .\install.ps1
 ```
 
-Linux:
+Linux direct installer:
 
 ```bash
-git clone https://github.com/levanza1358/norouter.git
-cd norouter
-chmod +x install.sh
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/levanza1358/norouter/main/install.sh | bash
 ```
 
-The installer creates `.env` only when missing, preserves local state, links the CLI, and starts the managed server. Node.js 22.5+ remains required; the installer does not silently install system packages.
+The script clones into `~/norouter` by default. For an existing checkout, run `./install.sh`; set `NOROUTER_DIR=/path/to/norouter` for another location. The installer creates `.env` only when missing, preserves local state, links the CLI, and starts the managed server. Node.js 22.5+ remains required; it does not silently install system packages.
 
 Commands:
 
