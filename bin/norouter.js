@@ -13,8 +13,8 @@ const SERVER = join(ROOT, 'src', 'server.js');
 const SMOKE = join(ROOT, 'test', 'smoke.js');
 
 const COMMANDS = {
-  start: { script: SERVER, label: 'Start the HTTP server and dashboard' },
-  restart: { label: 'Restart the managed HTTP server' },
+  start: { script: SERVER, label: 'Start the HTTP server and dashboard in background' },
+  restart: { label: 'Restart the managed HTTP server in background' },
   stop: { label: 'Stop the managed HTTP server' },
   update: { label: 'Fast-forward from the configured Git remote' },
   dev: { script: SERVER, nodeArgs: ['--watch'], label: 'Start the server with file watching' },
@@ -75,7 +75,17 @@ async function stopManagedServer({ quiet = false } = {}) {
 
 async function restart() {
   await stopManagedServer({ quiet: true });
-  run(SERVER);
+  runDetached(SERVER);
+}
+
+function start() {
+  const pid = readManagedPid();
+  if (pid && isProcessAlive(pid)) {
+    console.log(`norouter: server already running (PID ${pid}).`);
+    return;
+  }
+  if (pid) clearManagedPid(pid);
+  runDetached(SERVER);
 }
 
 function ensureLocalSetup() {
@@ -88,7 +98,7 @@ function ensureLocalSetup() {
 
 async function install() {
   ensureLocalSetup();
-  run(SERVER);
+  start();
 }
 
 function autostartOn() {
@@ -149,8 +159,21 @@ async function update() {
   console.log(`norouter: updated ${before.slice(0, 8)} → ${after.slice(0, 8)}.`);
   if (wasRunning) {
     await stopManagedServer({ quiet: true });
-    run(SERVER);
+    runDetached(SERVER);
   }
+}
+
+function runDetached(script, nodeArgs = [], scriptArgs = []) {
+  const child = spawn(process.execPath, [...nodeArgs, script, ...scriptArgs], {
+    cwd: ROOT,
+    env: process.env,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  child.unref();
+  console.log(`norouter: server starting in background (PID ${child.pid}).`);
+  return child.pid;
 }
 
 function run(script, nodeArgs = [], scriptArgs = []) {
@@ -177,6 +200,8 @@ if (command === 'help' || command === '--help' || command === '-h') {
   usage();
 } else if (command === 'version' || command === '--version' || command === '-v') {
   console.log(packageVersion());
+} else if (command === 'start') {
+  start();
 } else if (command === 'restart') {
   restart().catch((err) => {
     console.error(`norouter: ${err.message}`);

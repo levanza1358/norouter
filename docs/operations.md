@@ -27,8 +27,8 @@ The script clones into `~/norouter` by default. For an existing checkout, run `.
 Commands:
 
 ```text
-norouter start      server + dashboard
-norouter restart    restart managed server
+norouter start      server + dashboard di background; terminal boleh ditutup
+norouter restart    restart managed server di background
 norouter stop       stop managed server
 norouter update     fast-forward from origin and restart if updated
 norouter dev        server with --watch
@@ -49,7 +49,7 @@ norouter uninstall   confirm and remove this checkout
 
 ## Start/stop
 
-Default bind: `0.0.0.0:5555`. Access it at `http://<server-ip>:5555`. Change the port in Settings > General; norouter probes availability, persists the value in ignored `config.local.json`, and rebinds automatically. Set `HOST=127.0.0.1` for loopback-only use. `norouter stop` terminates only the PID marker created by a managed `norouter start`; it does not search for or kill unrelated Node processes. Ctrl+C remains supported. Graceful shutdown closes HTTP server and SQLite handle.
+Default bind: `0.0.0.0:5555`. Access it at `http://<server-ip>:5555`. `norouter start` and `norouter restart` detach the managed server from the terminal; closing the terminal does not stop it. Use `norouter stop` to stop it. `norouter dev` remains foreground/watch mode. Change the port in Settings > General; norouter probes availability, persists the value in ignored `config.local.json`, and rebinds automatically. Set `HOST=127.0.0.1` for loopback-only use. `norouter stop` terminates only the PID marker created by a managed `norouter start`; it does not search for or kill unrelated Node processes. Ctrl+C remains supported for `norouter dev`. Graceful shutdown closes HTTP server and SQLite handle.
 
 Because the default is `0.0.0.0`, configure the Ubuntu firewall/security group and set `REQUIRE_API_KEY=true` before remote use. Dashboard and `/api` admin routes remain unauthenticated; put an authenticated reverse proxy in front of them or bind `HOST=127.0.0.1`.
 

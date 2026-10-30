@@ -79,6 +79,7 @@ await test('norouter CLI exposes start, dev, test and version', () => {
   }
   const version = execFileSync(process.execPath, [cli, 'version'], { encoding: 'utf8' }).trim();
   assert.match(version, /^\d+\.\d+\.\d+/);
+  assert.match(help, /background/i);
   assert.throws(
     () => execFileSync(process.execPath, [cli, 'nope'], { encoding: 'utf8', stdio: 'pipe' }),
     /Unknown command/,

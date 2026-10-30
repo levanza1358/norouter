@@ -52,8 +52,8 @@ Alamat default:
 ### Lifecycle command
 
 ```text
-norouter start      Start server dan dashboard
-norouter restart    Restart server yang dikelola norouter
+norouter start      Start server dan dashboard di background
+norouter restart    Restart server background yang dikelola norouter
 norouter stop       Stop server yang dikelola norouter
 norouter update     Fetch + fast-forward dari GitHub, lalu restart jika perlu
 norouter dev        Start dengan Node watch mode
