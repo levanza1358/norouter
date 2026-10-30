@@ -602,6 +602,8 @@ await test('settings exposes accessible tabs and Token Saver controls', async ()
   assert.match(html, /id="settingsTabs"[^>]*role="tablist"/);
   assert.equal((html.match(/data-settings-tab=/g) || []).length, 4);
   assert.equal((html.match(/id="settingsTab[^" ]+"[^>]*role="tab"/g) || []).length, 4);
+  assert.match(html, /id="settingsTabAppearance"[^>]*aria-controls="settingsPanelAppearance"/);
+  assert.match(html, /id="settingsPanelAppearance"[^>]*role="tabpanel"/);
   assert.match(html, /id="settingsTabTokenSaver"[^>]*aria-controls="settingsPanelTokenSaver"/);
   assert.match(html, /id="settingsPanelTokenSaver"[^>]*role="tabpanel"/);
   assert.match(html, /id="settingsTabReply"[^>]*aria-controls="settingsPanelReply"/);
