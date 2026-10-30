@@ -7,7 +7,7 @@
 | Variable | Default | Meaning |
 |---|---|---|
 | `PORT` | `5555` | HTTP listen port; Settings changes are stored in ignored `config.local.json` when `PORT` is not set |
-| `HOST` | `127.0.0.1` | Bind address; loopback is safe default |
+| `HOST` | `0.0.0.0` | Bind address; all interfaces by default, use `127.0.0.1` for loopback-only |
 | `REQUIRE_API_KEY` | `false` | Gate `/v1` and `/v1/*` only |
 | `ROUTER_API_KEY` | empty | Exact Bearer value when gate enabled |
 | `ENABLE_REQUEST_LOGS` | enabled | Only exact `false` disables request logs |

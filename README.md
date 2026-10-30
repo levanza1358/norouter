@@ -47,9 +47,11 @@ Isi credential provider secara manual lewat dashboard atau account API. Jangan c
 
 Alamat default:
 
-- Dashboard: `http://127.0.0.1:5555/`
-- Client base URL: `http://127.0.0.1:5555/v1`
+- Dashboard: `http://<server-ip>:5555/`
+- Client base URL: `http://<server-ip>:5555/v1`
+- Default bind: `0.0.0.0:5555` (all interfaces).
 - Port default: `5555`; change it in Settings > General. The port must be free, then the server rebinds automatically.
+- Keep the port behind a firewall and enable `REQUIRE_API_KEY=true` before remote use.
 
 `npm link` membuat command `norouter` tersedia global dari checkout ini. Tanpa `npm link`, jalankan `norouter.cmd` di Windows atau `./norouter.cmd`/`node bin/norouter.js` sesuai platform.
 
@@ -88,7 +90,7 @@ SQLite default: `data/norouter.db`. Override dengan `NOROUTER_DB`.
 Streaming:
 
 ```bat
-curl -N http://127.0.0.1:5555/v1/chat/completions ^
+curl -N http://<server-ip>:5555/v1/chat/completions ^
   -H "Content-Type: application/json" ^
   -d "{\"model\":\"cbcn/deepseek-v4.1-flash\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"halo\"}]}"
 ```
@@ -96,7 +98,7 @@ curl -N http://127.0.0.1:5555/v1/chat/completions ^
 Non-streaming:
 
 ```bat
-curl http://127.0.0.1:5555/v1/chat/completions ^
+curl http://<server-ip>:5555/v1/chat/completions ^
   -H "Content-Type: application/json" ^
   -d "{\"model\":\"cbcn/glm-5.3\",\"messages\":[{\"role\":\"user\",\"content\":\"halo\"}]}"
 ```
@@ -217,7 +219,7 @@ docs/
 
 ## Security boundary
 
-Default bind `HOST=127.0.0.1`. Changing `HOST` exposes the service. `REQUIRE_API_KEY=true` protects only `/v1` routes with exact `Authorization: Bearer <ROUTER_API_KEY>` comparison; dashboard page password, `/api`, `/health`, dan assets tetap tidak terlindungi oleh gate tersebut. Dashboard password hanya gate HTML halaman, bukan admin API authentication. CORS saat ini unrestricted.
+Default bind `HOST=0.0.0.0` exposes the service on all interfaces. Set `HOST=127.0.0.1` for loopback-only use. `REQUIRE_API_KEY=true` protects only `/v1` routes with exact `Authorization: Bearer <ROUTER_API_KEY>` comparison; dashboard page password, `/api`, `/health`, dan assets tetap tidak terlindungi oleh gate tersebut. Dashboard password hanya gate HTML halaman, bukan admin API authentication. CORS saat ini unrestricted.
 
 Jangan expose port ke jaringan tanpa reverse proxy/authentication/TLS dan hardening tambahan. OAuth auto-login, MITM CA, dan subscription credential reuse belum diimplementasikan dan tidak boleh diasumsikan tersedia.
 

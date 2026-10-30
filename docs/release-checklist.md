@@ -16,7 +16,7 @@
 
 ## Runtime
 
-- [ ] `HOST` remains loopback unless external auth/TLS is intentional.
+- [ ] If using default `HOST=0.0.0.0`, firewall and external auth/TLS protect dashboard/admin routes; otherwise set `HOST=127.0.0.1`.
 - [ ] Test-only URL overrides are empty.
 - [ ] `REQUIRE_API_KEY` behavior is understood; `/api` is not gated.
 - [ ] SQLite backup exists and includes WAL state where relevant.

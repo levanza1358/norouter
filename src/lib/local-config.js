@@ -25,3 +25,8 @@ export function validPort(value) {
   const port = Number(value);
   return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
 }
+
+export function validHost(value) {
+  const host = String(value ?? '').trim();
+  return host && host.length <= 253 && /^[a-zA-Z0-9.:[\]-]+$/.test(host) ? host : null;
+}

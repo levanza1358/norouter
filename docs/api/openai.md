@@ -1,6 +1,6 @@
 # OpenAI-compatible API
 
-Base URL default: `http://127.0.0.1:5555/v1`.
+Base URL default: `http://<server-ip>:5555/v1` (bind `0.0.0.0`).
 
 ## Authentication
 

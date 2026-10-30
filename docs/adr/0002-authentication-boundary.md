@@ -24,7 +24,7 @@ Trade-offs:
 
 - Dashboard HTML may use an optional page password; `/api` remains unauthenticated today.
 - One static router API key has no expiry/roles/limits.
-- Operator must protect loopback host, filesystem, and reverse-proxy boundary.
+- With the default all-interface bind, operator must protect firewall, filesystem, and reverse-proxy boundaries; `HOST=127.0.0.1` remains the local-only option.
 - Refresh tokens are sensitive plaintext DB values.
 
 ## Revisit when

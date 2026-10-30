@@ -34,7 +34,7 @@ Norouter adalah gateway AI lokal yang menerima protocol OpenAI-compatible dan me
 
 ## Acceptance criteria
 
-- Local start default di `127.0.0.1:5555`.
+- Local/server start default di `0.0.0.0:5555`; clients connect via `http://<server-ip>:5555`.
 - Client dapat memakai `/v1` dengan prefixed atau bare model ID yang tidak ambigu.
 - Raw access/refresh/API keys tidak pernah muncul dalam API response/UI.
 - Preview import tidak mengubah SQLite.

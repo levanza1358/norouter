@@ -1,8 +1,8 @@
 # Dashboard and admin API
 
-These endpoints are local administration surfaces. They are **not** covered by `REQUIRE_API_KEY`; keep the server on loopback or add an external authentication boundary before network exposure. Provider credentials are managed in the SQLite account pool, not `.env`.
+These endpoints are administration surfaces. They are **not** covered by `REQUIRE_API_KEY`; the default bind is `0.0.0.0`, so add a firewall/reverse-proxy authentication boundary before network exposure or set `HOST=127.0.0.1`. Provider credentials are managed in the SQLite account pool, not `.env`.
 
-Dashboard password, when enabled, gates dashboard HTML pages only. `/api/*`, assets, and model/provider operations remain available to the local operator after the page session expires. This is intentionally not network authentication; keep `HOST=127.0.0.1`.
+Dashboard password, when enabled, gates dashboard HTML pages only. `/api/*`, assets, and model/provider operations remain available to the local operator after the page session expires. This is intentionally not network authentication; use a firewall/reverse proxy for remote access or set `HOST=127.0.0.1`.
 
 `<id>` and `<accountId>` are URL-encoded provider/account IDs.
 
@@ -21,7 +21,7 @@ Dashboard password, when enabled, gates dashboard HTML pages only. `/api/*`, ass
 
 Token Saver defaults to `{ ponytail: { enabled: false } }`. PATCH accepts `{ ponytail: { enabled: boolean } }`. The transform only applies to Chat Completions requests with a `messages` array, and changes system instructions without changing user or assistant messages. RTK and Headroom are not included because they require an external proxy or dependency.
 
-Managed keys are stored as plaintext in SQLite so the dashboard can show, hide, copy, and edit them. Create accepts `name`, optional custom `secret`, optional future `expiresAt`, `requestLimit`, and `tokenLimit`; token limits accept integer counts or compact suffixes `K`, `M`, `B`, and `T` (for example `1M` = 1,000,000 tokens); the dashboard exposes these as a unit dropdown; `None` disables token-limit input, and request limits use a separate enable toggle. Omitted limits are unlimited. Request limits count admitted chat requests; token limits count reported prompt plus completion tokens. The dashboard page may require its optional page password, but `/api` routes remain unauthenticated; keep the server on loopback and treat its database, WAL/SHM, and backups as secret material.
+Managed keys are stored as plaintext in SQLite so the dashboard can show, hide, copy, and edit them. Create accepts `name`, optional custom `secret`, optional future `expiresAt`, `requestLimit`, and `tokenLimit`; token limits accept integer counts or compact suffixes `K`, `M`, `B`, and `T` (for example `1M` = 1,000,000 tokens); the dashboard exposes these as a unit dropdown; `None` disables token-limit input, and request limits use a separate enable toggle. Omitted limits are unlimited. Request limits count admitted chat requests; token limits count reported prompt plus completion tokens. The dashboard page may require its optional page password, but `/api` routes remain unauthenticated; protect the all-interface bind with a firewall/reverse proxy or set `HOST=127.0.0.1`, and treat its database, WAL/SHM, and backups as secret material.
 
 ## Dashboard port
 

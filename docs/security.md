@@ -6,7 +6,7 @@ Norouter assumes a single trusted local operator supplies provider credentials. 
 
 ## Current exposure
 
-- Default bind is loopback.
+- Default bind is `0.0.0.0`, so the service listens on all interfaces.
 - Dashboard HTML can use an optional password gate; `/api` admin routes remain unauthenticated.
 - `REQUIRE_API_KEY` gates only `/v1` routes.
 - CORS is unrestricted (`*`).
@@ -33,11 +33,11 @@ Remaining risk: browser form submission and local SQLite are trusted-boundary op
 
 ### Admin route abuse
 
-`/api/providers`, account CRUD, model CRUD, and quota/test routes are unauthenticated. Keep loopback. If exposed, put a strongly authenticated reverse proxy in front and restrict network access.
+`/api/providers`, account CRUD, model CRUD, and quota/test routes are unauthenticated. With the default `0.0.0.0` bind, put a strongly authenticated reverse proxy in front, restrict firewall access, or set `HOST=127.0.0.1`.
 
 ### Router API key
 
-`ROUTER_API_KEY` remains an exact legacy static Bearer value for `/v1`. Managed keys are stored as plaintext in SQLite so `/api-keys` can show, hide, copy, edit, disable, expire, limit, revoke, or rotate them. Treat the database, WAL/SHM, backups, dashboard, and `/api` as secret-bearing local-admin surfaces. The toggle protects only `/v1`; dashboard and `/api` remain unauthenticated and must stay on loopback or behind admin authentication.
+`ROUTER_API_KEY` remains an exact legacy static Bearer value for `/v1`. Managed keys are stored as plaintext in SQLite so `/api-keys` can show, hide, copy, edit, disable, expire, limit, revoke, or rotate them. Treat the database, WAL/SHM, backups, dashboard, and `/api` as secret-bearing local-admin surfaces. The toggle protects only `/v1`; dashboard and `/api` remain unauthenticated and require firewall/reverse-proxy protection when the default `0.0.0.0` bind is used.
 
 ### SSRF and plaintext upstream
 
@@ -60,11 +60,11 @@ Allowed sources are `.env` or manually pasted SQLite account-pool values. Refres
 3. Remove credential-bearing `.env`, DB, logs, screenshots, and backups from sharing locations.
 4. Replace account tokens and inspect custom provider URLs/overrides.
 5. Review git history if a secret was committed; removal from working tree is insufficient.
-6. Restart with loopback binding and validate masked responses.
+6. Restart with `HOST=127.0.0.1` or a protected firewall/reverse-proxy boundary, then validate masked responses.
 
 ## Safe deployment baseline
 
-- `HOST=127.0.0.1`.
+- `HOST=0.0.0.0` only with firewall/reverse-proxy protection; use `HOST=127.0.0.1` for local-only deployment.
 - Empty test overrides.
 - Filesystem permissions restricted to operator.
 - Reverse proxy/TLS/authentication before any remote access.

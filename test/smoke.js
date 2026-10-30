@@ -196,6 +196,8 @@ const base = `http://127.0.0.1:${server.address().port}`;
 await test('port configuration validates and settings route reports the listener', async () => {
   assert.equal(validPort(5555), 5555);
   assert.equal(validPort(0), null);
+  assert.equal((await import('../src/lib/local-config.js')).validHost('0.0.0.0'), '0.0.0.0');
+  assert.equal((await import('../src/lib/local-config.js')).validHost(''), null);
   assert.equal(validPort(65536), null);
   const port = await fetch(`${base}/api/settings/port`);
   const body = await port.json();

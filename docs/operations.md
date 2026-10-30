@@ -46,16 +46,16 @@ norouter version    package version
 
 ## Start/stop
 
-Default bind: `127.0.0.1:5555`. Change the port in Settings > General; norouter probes availability, persists the value in ignored `config.local.json`, and rebinds automatically. `norouter stop` terminates only the PID marker created by a managed `norouter start`; it does not search for or kill unrelated Node processes. Ctrl+C remains supported. Graceful shutdown closes HTTP server and SQLite handle.
+Default bind: `0.0.0.0:5555`. Access it at `http://<server-ip>:5555`. Change the port in Settings > General; norouter probes availability, persists the value in ignored `config.local.json`, and rebinds automatically. Set `HOST=127.0.0.1` for loopback-only use. `norouter stop` terminates only the PID marker created by a managed `norouter start`; it does not search for or kill unrelated Node processes. Ctrl+C remains supported. Graceful shutdown closes HTTP server and SQLite handle.
 
-Keep `HOST=127.0.0.1` for local use. Changing it exposes unauthenticated dashboard/admin surfaces unless an external boundary is added.
+Because the default is `0.0.0.0`, configure the Ubuntu firewall/security group and set `REQUIRE_API_KEY=true` before remote use. Dashboard and `/api` admin routes remain unauthenticated; put an authenticated reverse proxy in front of them or bind `HOST=127.0.0.1`.
 
 ## Health checks
 
 ```bat
-curl http://127.0.0.1:5555/health
-curl http://127.0.0.1:5555/api/status
-curl http://127.0.0.1:5555/v1/models
+curl http://<server-ip>:5555/health
+curl http://<server-ip>:5555/api/status
+curl http://<server-ip>:5555/v1/models
 ```
 
 `/v1/models` needs the router API key only when `REQUIRE_API_KEY=true`.

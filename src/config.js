@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { ROOT } from './config-root.js';
-import { readLocalConfig, validPort } from './lib/local-config.js';
+import { readLocalConfig, validHost, validPort } from './lib/local-config.js';
 
 export { ROOT };
 
@@ -29,10 +29,13 @@ const localConfig = readLocalConfig();
 const configuredPort = validPort(localConfig.port)
   || validPort(process.env.PORT)
   || 5555;
+const configuredHost = validHost(localConfig.host)
+  || validHost(process.env.HOST)
+  || '0.0.0.0';
 
 export const config = {
   port: configuredPort,
-  host: process.env.HOST || '127.0.0.1',
+  host: configuredHost,
   requireApiKey: process.env.REQUIRE_API_KEY === 'true',
   apiKey: process.env.ROUTER_API_KEY || '',
   logRequests: process.env.ENABLE_REQUEST_LOGS !== 'false',
