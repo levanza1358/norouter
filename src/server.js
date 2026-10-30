@@ -39,6 +39,7 @@ import { handleModels } from './routes/models.js';
 import { handleAddModel, handleCreateProvider, handleDeleteProvider, handleFetchModels, handleProviderDetail, handleRemoveModel, handleSetModelEnabled, handleTestModels, handleUpdateProvider } from './routes/provider.js';
 import { handleStatus } from './routes/status.js';
 import { handleAutostartGet, handleAutostartUpdate, handlePortGet, handlePortUpdate } from './routes/settings.js';
+import { handleAccountExport, handleAccountRestore } from './routes/account-backup.js';
 import { writeLocalConfig } from './lib/local-config.js';
 import { handleUsage } from './routes/usage.js';
 import { handleGetTokenSaver, handleUpdateTokenSaver } from './routes/token-saver.js';
@@ -123,6 +124,12 @@ export function createServer(overrides = {}) {
       }
       if (path === '/api/settings/autostart' && req.method === 'PATCH') {
         return await handleAutostartUpdate(req, res, readJson);
+      }
+      if (path === '/api/settings/accounts/export' && req.method === 'GET') {
+        return handleAccountExport(req, res);
+      }
+      if (path === '/api/settings/accounts/restore' && req.method === 'POST') {
+        return await handleAccountRestore(req, res);
       }
       if (path === '/api/settings/port' && req.method === 'GET') {
         return handlePortGet(req, res, settings);

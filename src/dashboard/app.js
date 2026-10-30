@@ -5395,6 +5395,63 @@ $('autostartToggle')?.addEventListener('change', async (event) => {
   }
 });
 
+$('exportAccounts')?.addEventListener('click', async () => {
+  const note = $('backupNote');
+  try {
+    const res = await fetch('/api/settings/accounts/export');
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error?.message || `Export failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'norouter-accounts.json';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    detailNote(note, 'Accounts downloaded. Keep the file safe.', 'ok');
+  } catch (err) {
+    detailNote(note, err.message, 'bad');
+  }
+});
+
+$('restoreAccountsFile')?.addEventListener('change', async (event) => {
+  const note = $('backupNote');
+  const file = event.target.files?.[0];
+  event.target.value = '';
+  if (!file) return;
+  let payload;
+  try {
+    payload = JSON.parse(await file.text());
+  } catch (err) {
+    detailNote(note, `That is not valid JSON: ${err.message}`, 'bad');
+    return;
+  }
+  const count = Array.isArray(payload?.accounts) ? payload.accounts.length : Array.isArray(payload) ? payload.length : 0;
+  openConfirmation({
+    title: 'Restore accounts?',
+    message: `This merges ${count || 'the'} accounts from "${file.name}". Duplicates are skipped and no existing account is deleted.`,
+    confirmLabel: 'Restore accounts',
+    run: async () => {
+      try {
+        const res = await fetch('/api/settings/accounts/restore', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(body.error?.message || `Restore failed (${res.status})`);
+        detailNote(note, `${body.added} added${body.duplicates ? ` · ${body.duplicates} duplicates skipped` : ''}${body.invalid ? ` · ${body.invalid} invalid` : ''}${body.unknownProviders ? ` · ${body.unknownProviders} unknown providers` : ''}.`, 'ok');
+      } catch (err) {
+        detailNote(note, err.message, 'bad');
+      }
+    },
+  });
+});
+
 $('saveServerPort')?.addEventListener('click', async () => {
   const input = $('serverPort');
   const note = $('serverPortNote');

@@ -889,3 +889,74 @@ export function usageByDay(providerId, days = 14) {
      ORDER BY u.day
   `).all(providerId, since);
 }
+
+// The operator backup file. Raw tokens are included on purpose: this file is the
+// credential source for a restore, so it must be handled like the database.
+export function exportAccounts() {
+  const rows = getDb().prepare('SELECT * FROM accounts ORDER BY provider, created_at, rowid').all();
+  return {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    accounts: rows.map((row) => ({
+      provider: row.provider,
+      label: row.label,
+      kind: row.kind,
+      access_token: row.access_token,
+      refresh_token: row.refresh_token,
+      uid: row.uid,
+      expires_at: row.expires_at ? new Date(row.expires_at).toISOString() : null,
+      enabled: Boolean(row.enabled),
+    })),
+  };
+}
+
+function restoreExpiresIn(value) {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return null;
+  const seconds = Math.floor((ms - now()) / 1000);
+  return seconds > 0 ? seconds : null;
+}
+
+// Merges a backup into the pool. Duplicates are skipped by fingerprint; existing
+// accounts are never deleted. Unknown providers are counted but not written.
+export function restoreAccounts(payload, knownProviderIds = new Set()) {
+  const accounts = Array.isArray(payload) ? payload : payload?.accounts;
+  if (!Array.isArray(accounts)) return { status: 400, error: 'Expected an accounts array.' };
+  if (accounts.length > 5000) return { status: 400, error: 'Restore at most 5000 accounts per request.' };
+
+  const byProvider = new Map();
+  let unknownProviders = 0;
+
+  for (const raw of accounts) {
+    const provider = String(raw?.provider || '').trim();
+    if (!provider || !knownProviderIds.has(provider)) {
+      unknownProviders += 1;
+      continue;
+    }
+    byProvider.set(provider, [
+      ...(byProvider.get(provider) || []),
+      {
+        access_token: raw.access_token ?? raw.accessToken ?? raw.api_key ?? raw.apiKey ?? '',
+        refresh_token: raw.refresh_token ?? raw.refreshToken ?? '',
+        uid: raw.uid ?? '',
+        label: raw.label ?? '',
+        kind: raw.kind || '',
+        expiresIn: restoreExpiresIn(raw.expires_at),
+      },
+    ]);
+  }
+
+  let added = 0;
+  let duplicates = 0;
+  let invalid = 0;
+
+  for (const [provider, entries] of byProvider) {
+    const result = bulkCreateAccounts(provider, entries);
+    added += result.added || 0;
+    duplicates += result.duplicates || 0;
+    invalid += (result.invalid || []).length;
+  }
+
+  return { added, duplicates, invalid, unknownProviders, total: accounts.length };
+}

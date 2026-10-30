@@ -41,6 +41,17 @@ Autostart definitions contain only the executable and repository path. They do n
 
 The default port is `5555`. The browser reconnects to the new port after a successful change.
 
+## Account backup & restore
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/settings/accounts/export` | Download the account pool as a `.json` attachment (raw tokens). |
+| POST | `/api/settings/accounts/restore` | Merge a backup into the pool; skips duplicates, never deletes. |
+
+The export is an operator backup file — it contains **plaintext** `access_token`, `refresh_token`, and `uid` values on purpose, because it is the credential source for a restore. Treat the downloaded file like the database itself: store it off the server, keep it secret, and delete copies you no longer need. It never contains dashboard passwords, managed API-key secrets, or `.env` values.
+
+Restore accepts either a bare account array or an `{ "accounts": [...] }` wrapper, at most 5,000 rows. It merges by provider and fingerprint: existing accounts are untouched, duplicates are skipped, and unknown provider IDs are counted without being written. The response is `{ added, duplicates, invalid, unknownProviders, total }`. Accounts with `expires_at` in the past are imported without an expiry rather than forced into cooldown.
+
 ## Status/provider
 
 | Method | Path | Notes |

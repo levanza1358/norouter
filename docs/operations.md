@@ -71,6 +71,15 @@ Request logs are enabled unless `ENABLE_REQUEST_LOGS=false`. Logs include method
 
 Stop server for a simple backup. Copy `data/norouter.db`, `data/norouter.db-wal`, and `data/norouter.db-shm` together when present, or use an SQLite-aware backup. Database contains plaintext access/refresh tokens.
 
+## Account backup & restore
+
+Settings > General > "Backup & restore" exports just the account pool to a `.json` file, and restores it later by merge. This is for migrating or keeping a copy of accounts without carrying the whole SQLite file.
+
+- **Download accounts (.json)** writes a file containing `version`, `exportedAt`, and `accounts[]` with **plaintext** tokens. Keep it as secret as the database; never commit it, paste it, or upload it.
+- **Restore accounts** reads that file (or any account array), merges by provider, and skips duplicates by fingerprint. It never deletes or overwrites existing accounts. Unknown provider IDs are skipped and counted.
+- Restore is additive: to fully replace a pool, delete unwanted accounts first, then restore.
+- The `.json` file does not contain dashboard passwords, managed API-key secrets, or `.env` values.
+
 ## Credential rotation
 
 - Rotate upstream credentials immediately if exposed.

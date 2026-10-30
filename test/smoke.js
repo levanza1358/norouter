@@ -2603,6 +2603,64 @@ await test('a combo whose models all vanished resolves to a clear 400, not 500',
   await fetch(`${base}/api/combos/${encodeURIComponent(body.combo.id)}`, { method: 'DELETE' });
 });
 
+await test('account backup exports raw tokens and restores by merge', async () => {
+  for (;;) {
+    const page = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+    if (!page.items.length) break;
+    for (const row of page.items) await fetch(`${base}/api/providers/codebuddy-cn/accounts/${row.id}`, { method: 'DELETE' });
+  }
+  const created = await fetch(`${base}/api/providers/codebuddy-cn/accounts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label: 'Backup source', access_token: 'backup-token' }),
+  });
+  assert.equal(created.status, 201);
+
+  const exportRes = await fetch(`${base}/api/settings/accounts/export`);
+  assert.equal(exportRes.status, 200);
+  assert.match(exportRes.headers.get('content-disposition') || '', /attachment/);
+  const backup = await exportRes.json();
+  assert.equal(backup.version, 1);
+  assert.ok(Array.isArray(backup.accounts));
+  assert.ok(backup.accounts.some((a) => a.access_token === 'backup-token'), 'export must contain the raw token');
+
+  // Restoring the same file adds nothing: every row is a fingerprint duplicate.
+  const restore1 = await fetch(`${base}/api/settings/accounts/restore`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(backup),
+  });
+  const r1 = await restore1.json();
+  assert.equal(restore1.status, 200, JSON.stringify(r1));
+  assert.equal(r1.added, 0);
+  assert.ok(r1.duplicates >= 1, 're-importing the same file must report duplicates');
+
+  // A fresh account is merged in; existing rows are never deleted.
+  const mixed = {
+    version: 1,
+    accounts: [...backup.accounts, { provider: 'codebuddy-cn', label: 'Restored extra', access_token: 'restored-token' }],
+  };
+  const restore2 = await fetch(`${base}/api/settings/accounts/restore`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(mixed),
+  });
+  const r2 = await restore2.json();
+  assert.equal(restore2.status, 200, JSON.stringify(r2));
+  assert.equal(r2.added, 1);
+  assert.ok(r2.duplicates >= 1);
+
+  const pool = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+  assert.ok(pool.items.some((row) => row.label === 'Backup source'), 'existing account must survive restore');
+
+  const bad = await fetch(`${base}/api/settings/accounts/restore`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ nope: true }),
+  });
+  assert.equal(bad.status, 400);
+});
+
 
 server.close();
 stub.close();

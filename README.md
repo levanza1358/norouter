@@ -130,6 +130,8 @@ Model dapat ditulis sebagai `cbcn/<model>`, `codebuddy-cn/<model>`, atau bare ID
 | POST | `/api/auth/logout` | Logout dashboard |
 | GET/PATCH | `/api/auth/settings` | Baca/ubah dashboard password enabled state |
 | PATCH | `/api/auth/password` | Ganti password dashboard |
+| GET | `/api/settings/accounts/export` | Backup account pool ke `.json` (token mentah) |
+| POST | `/api/settings/accounts/restore` | Restore account pool via merge, skip duplikat |
 | GET | `/v1/models` | OpenAI-compatible model list |
 | POST | `/v1/chat/completions` | OpenAI-compatible chat |
 
@@ -146,6 +148,7 @@ Detail request/response: [`docs/api/openai.md`](docs/api/openai.md) dan [`docs/a
 - **Usage**: riwayat request/token persisten di SQLite dengan tab Harian, Mingguan, Bulanan, dan All time; tiap tab menampilkan total, grafik bucket, dan breakdown per model. Bucket mengikuti timezone komputer server.
 - **API Keys**: multiple managed keys, automatic/custom plaintext token, Show/Hide/Copy, edit/rotate, expiry, request/token limits, enable/disable/revoke, and daily usage history.
 - **Settings**: light/dark/black dan accent violet/blue/teal/amber/rose di `localStorage` browser.
+- **Backup & restore**: ekspor account pool ke `.json` dan restore via merge. File berisi token mentah; perlakukan seperti database dan jangan di-commit/diunggah.
 
 Splash screen, route transition, modal transition, dan toast menghormati `prefers-reduced-motion`.
 
