@@ -3184,18 +3184,23 @@ function renderTokenSaver() {
 
 async function loadTokenSaver() {
   tokenSaverLoading = true;
+  let loaded = false;
   try {
     const res = await fetch('/api/token-saver', { cache: 'no-store' });
     const body = await res.json();
     if (!res.ok) throw new Error(body.error?.message || 'Could not load Token Saver settings.');
     tokenSaver = body;
-    renderTokenSaver();
+    loaded = true;
   } catch (err) {
     const note = $('tokenSaverNote');
     if (note) note.textContent = err.message;
   } finally {
     tokenSaverLoading = false;
-    renderTokenSaver();
+    if (loaded) {
+      const note = $('tokenSaverNote');
+      if (note) note.textContent = '';
+      renderTokenSaver();
+    }
   }
 }
 
