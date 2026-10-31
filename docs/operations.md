@@ -80,6 +80,17 @@ Settings > General > "Backup & restore" exports just the account pool to a `.jso
 - Restore is additive: to fully replace a pool, delete unwanted accounts first, then restore.
 - The `.json` file does not contain dashboard passwords, managed API-key secrets, or `.env` values.
 
+## Account warmup and false cooldown recovery
+
+Norouter does not send a dummy chat prompt before every request. That would add latency and spend quota. Instead, when no usable account remains, it performs on-demand warmup only for enabled accounts whose cooldown has already expired but still carry a parked error.
+
+- Warmup probes the provider quota/health endpoint, not the chat model.
+- A successful probe clears the parked error and cooldown, then the original request uses the recovered account.
+- Invalid credentials remain parked and are not retried in a loop.
+- Probes are single-flight per account, so concurrent requests share one probe.
+- Warmup does not increment chat request/token counters and never logs tokens, prompt text, or Authorization headers.
+- Providers without a verified quota/health endpoint are not probed automatically.
+
 ## Credential rotation
 
 - Rotate upstream credentials immediately if exposed.

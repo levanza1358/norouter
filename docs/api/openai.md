@@ -155,9 +155,12 @@ Norouter currently exposes image generation and embeddings for CodeBuddy CN. It 
 
 Audio speech/transcription and asynchronous video generation will be added only with a verified provider adapter, bounded multipart/body handling, polling semantics, and hermetic upstream stubs. No audio/video request is sent by norouter today.
 
-## Credential failover
+## Credential failover and warmup
 
 - Pool account selected round-robin.
+- If every pooled account is parked but its cooldown has expired, norouter performs on-demand quota warmup for expired parked accounts, then retries normal selection.
+- Warmup never runs while a healthy account is available, never sends a dummy chat prompt, and does not count as chat usage.
+- 401/403: refresh/retry once where refresh token exists.
 - 401/403: refresh/retry once where refresh token exists.
 - 429: cooldown account and retry another account up to four attempts.
 - 400/404/500: relay rather than rotating needlessly.

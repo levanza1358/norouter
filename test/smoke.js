@@ -2408,6 +2408,38 @@ await test('embeddings validate, normalize, and expose media models', async () =
   assert.ok(catalog.data.some((item) => item.id === 'cbcn/hunyuan-embedding' && item.type === 'embedding'));
 });
 
+await test('account warmup recovers an expired transient cooldown before chat', async () => {
+  for (;;) {
+    const page = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+    if (!page.items.length) break;
+    for (const row of page.items) await fetch(`${base}/api/providers/codebuddy-cn/accounts/${row.id}`, { method: 'DELETE' });
+  }
+  const created = await fetch(`${base}/api/providers/codebuddy-cn/accounts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label: 'Warmup account', access_token: 'good-token' }),
+  });
+  assert.equal(created.status, 201);
+  const account = (await created.json()).items.find((row) => row.label === 'Warmup account');
+  assert.ok(account?.id);
+
+  // Simulate a false transient error with an already-expired cooldown.
+  markFailure(account.id, { message: 'temporary upstream glitch', cooldownMs: 0 });
+  const chat = await fetch(`${base}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'cbcn/glm-5.3', messages: [{ role: 'user', content: 'warmup' }] }),
+  });
+  const body = await chat.json();
+  assert.equal(chat.status, 200, JSON.stringify(body));
+
+  const pool = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+  const recovered = pool.items.find((row) => row.id === account.id);
+  assert.equal(recovered.status, 'active');
+  assert.equal(recovered.lastError, '');
+  assert.equal(recovered.requests, 1);
+});
+
 await test('usage history persists requests through the chat route', async () => {
   for (;;) {
     const page = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();

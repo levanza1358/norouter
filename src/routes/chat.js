@@ -7,6 +7,7 @@ import {
   markSuccess,
   pickAccount,
   refreshAccountNow,
+  warmupProvider,
 } from '../lib/accounts.js';
 import { CORS_HEADERS, readJson, sendError, sendJson } from '../lib/http.js';
 import { resolveModel } from '../lib/model.js';
@@ -277,6 +278,19 @@ export async function resolveCredential(provider) {
         message: 'Account has no usable token; add a new one.',
         cooldownMs: AUTH_COOLDOWN_MS,
       });
+    }
+  }
+
+  // The normal path above never probes an account. If every pooled account is
+  // parked and its cooldown has expired, warmup probes the provider quota once,
+  // clears only genuinely recovered accounts, then retries normal selection.
+  if (pooled) {
+    await warmupProvider(provider);
+    for (let attempt = 0; attempt < accountAttemptLimit(provider.id); attempt += 1) {
+      const row = pickAccount(provider.id, provider.accountStrategy);
+      if (!row) break;
+      const { token } = await accessTokenFor(provider, row);
+      if (token) return { token, row };
     }
   }
 

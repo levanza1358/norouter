@@ -29,6 +29,7 @@ export function accountAttemptLimit(providerId) {
 const cursorByProvider = new Map();
 const idsByProvider = new Map();
 const inflightRefresh = new Map();
+const inflightWarmup = new Map();
 const quotaOrderByAccount = new Map();
 
 export const ACCOUNT_KINDS = ['access_token', 'refresh_token', 'api_key'];
@@ -832,6 +833,66 @@ export async function quotaForAccount(provider, id) {
     }
   }
   return { quota };
+}
+
+// Probe only parked accounts whose cooldown has expired. This is recovery
+// warmup, not a health check before every request: it spends quota-endpoint
+// traffic only when the normal pool has no usable account.
+export async function warmupAccount(provider, id) {
+  const existing = inflightWarmup.get(id);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    const row = getAccountRow(id);
+    if (!row || !row.enabled || !row.last_error || row.cooldown_until > now()) {
+      return { ok: false, skipped: true };
+    }
+    if (!provider.quota?.url && !hasQuotaEndpoint(provider)) {
+      return { ok: false, skipped: true, reason: 'no_probe_endpoint' };
+    }
+
+    const { token, account } = await accessTokenFor(provider, row);
+    if (!token) return { ok: false, skipped: true, reason: 'no_token' };
+    const quota = await fetchProviderQuota(provider, token, account);
+    if (quota.error) {
+      const cooldownMs = quota.invalid ? AUTH_COOLDOWN_MS : DEFAULT_COOLDOWN_MS;
+      markFailure(id, { message: quota.error, cooldownMs });
+      return { ok: false, status: quota.invalid ? 401 : quota.status || 502, error: quota.error };
+    }
+
+    rememberQuotaOrder(id, quota);
+    if (provider.id === 'codex') {
+      setCodexQuotaState(id, quota);
+      if (quota.plan) {
+        getDb().prepare('UPDATE accounts SET plan = ?, plan_updated_at = ?, updated_at = ? WHERE id = ?')
+          .run(String(quota.plan).toLowerCase(), now(), now(), id);
+      }
+    } else {
+      getDb().prepare(
+        "UPDATE accounts SET last_error = '', cooldown_until = 0, updated_at = ? WHERE id = ?",
+      ).run(now(), id);
+    }
+    return { ok: true, account: getAccount(id), quota };
+  })().finally(() => inflightWarmup.delete(id));
+
+  inflightWarmup.set(id, promise);
+  return promise;
+}
+
+export async function warmupProvider(provider) {
+  const rows = getDb().prepare(`
+    SELECT id FROM accounts
+     WHERE provider = ? AND enabled = 1 AND last_error != '' AND cooldown_until <= ?
+     ORDER BY updated_at, created_at, rowid
+  `).all(provider.id, now());
+  let attempted = 0;
+  let recovered = 0;
+  for (const row of rows) {
+    const result = await warmupAccount(provider, row.id);
+    if (!result.skipped) attempted += 1;
+    if (result.ok) recovered += 1;
+  }
+  return { attempted, recovered };
 }
 
 export async function refreshQuotaOrder(provider) {
