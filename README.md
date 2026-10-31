@@ -136,6 +136,7 @@ Model dapat ditulis sebagai `cbcn/<model>`, `codebuddy-cn/<model>`, atau bare ID
 | GET/PATCH | `/api/webhook` | Baca/atur webhook notifikasi |
 | GET | `/v1/models` | OpenAI-compatible model list |
 | POST | `/v1/chat/completions` | OpenAI-compatible chat |
+| POST | `/v1/images/generations` | OpenAI-compatible image generation (CodeBuddy `hunyuan-image-*`) |
 
 Detail request/response: [`docs/api/openai.md`](docs/api/openai.md) dan [`docs/api/admin.md`](docs/api/admin.md).
 

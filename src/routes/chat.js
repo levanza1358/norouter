@@ -81,7 +81,7 @@ function mapReasoning(provider, body) {
   return output;
 }
 
-function buildHeaders(provider, token) {
+export function buildHeaders(provider, token) {
   const headers = {
     'content-type': 'application/json',
     accept: 'text/event-stream',
@@ -264,7 +264,7 @@ function retryAfterMs(response, text) {
 
 // Picks the next credential from the SQLite account pool. Accounts that cannot
 // produce a token are parked so the next iteration does not pick them again.
-async function resolveCredential(provider) {
+export async function resolveCredential(provider) {
   const pooled = accountCounts(provider.id).total > 0;
 
   if (pooled) {

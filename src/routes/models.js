@@ -15,6 +15,15 @@ export function handleModels(req, res) {
         owned_by: provider.id,
       });
     }
+    for (const model of provider.image?.models || []) {
+      data.push({
+        id: `${provider.prefix}/${model}`,
+        object: 'model',
+        created,
+        owned_by: provider.id,
+        type: 'image',
+      });
+    }
   }
 
   // Combos are virtual models owned by the router itself. They are appended, so

@@ -112,6 +112,30 @@ The router transports reasoning; it does not invent hidden chain-of-thought, exe
 - Client disconnect or timeout may return 499 if headers were not sent.
 - Network/upstream failures return 502 unless an upstream status is relayed.
 
+## `POST /v1/images/generations`
+
+OpenAI-compatible image generation. Example:
+
+```json
+{
+  "model": "cbcn/hunyuan-image-alpha",
+  "prompt": "a lighthouse at dusk",
+  "n": 1,
+  "size": "1024x1024"
+}
+```
+
+Response is the OpenAI shape:
+
+```json
+{ "created": 1800000000, "data": [ { "url": "https://..." } ] }
+```
+
+- `prompt` is required; `n` and `size` are forwarded only when the client sends them.
+- `model` may be prefixed (`cbcn/hunyuan-image-alpha`) or bare when unambiguous. Image models are resolved separately from chat models; the CodeBuddy image models are `hunyuan-image-alpha` and `hunyuan-image-alpha-edit`.
+- The account pool is shared with chat: a rejected account is parked and the request retries each remaining healthy account, mirroring chat failover.
+- The CodeBuddy gateway answers on an undocumented `/v2/images/generations` route whose payload is `{ data: { data: [{ url }] } }`; the router unwraps it into the OpenAI shape above.
+
 ## Credential failover
 
 - Pool account selected round-robin.

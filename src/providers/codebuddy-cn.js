@@ -77,6 +77,15 @@ export default {
     url: 'https://www.codebuddy.cn/v2/billing/meter/daily-checkin',
   },
 
+  // Undocumented media route served by the same gateway. Not OpenAI-shaped:
+  // POST /v2/images/generations answers { data: { created, data: [{ url }], usage } },
+  // so the image route sends { model, prompt, ... } and unwraps data.data back
+  // into the OpenAI shape. Auth is the OAuth bearer + the CLI identity headers.
+  image: {
+    url: 'https://copilot.tencent.com/v2/images/generations',
+    models: ['hunyuan-image-alpha', 'hunyuan-image-alpha-edit'],
+  },
+
   // Mirrors the catalog the server publishes. Drop ids the server stops
   // serving rather than keeping historical ones around.
   models: [

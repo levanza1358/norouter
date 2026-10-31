@@ -2321,6 +2321,45 @@ await test('account failover tries every account before stopping', async () => {
   assert.equal(pool.items.filter((row) => row.status === 'cooldown').length, 2);
 });
 
+await test('image generation resolves, generates, and rejects bad models', async () => {
+  for (;;) {
+    const page = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+    if (!page.items.length) break;
+    for (const row of page.items) await fetch(`${base}/api/providers/codebuddy-cn/accounts/${row.id}`, { method: 'DELETE' });
+  }
+  await fetch(`${base}/api/providers/codebuddy-cn/accounts`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ access_token: 'good-token' }),
+  });
+
+  const missing = await fetch(`${base}/v1/images/generations`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'cbcn/hunyuan-image-alpha' }),
+  });
+  assert.equal(missing.status, 400);
+  assert.match((await missing.json()).error.message, /prompt/);
+
+  const unknown = await fetch(`${base}/v1/images/generations`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'cbcn/glm-5.3', prompt: 'a cat' }),
+  });
+  assert.equal(unknown.status, 400);
+  assert.match((await unknown.json()).error.message, /does not generate images/);
+
+  const ok = await fetch(`${base}/v1/images/generations`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'cbcn/hunyuan-image-alpha', prompt: 'a cat', n: 1, size: '1024x1024' }),
+  });
+  const gen = await ok.json();
+  assert.equal(ok.status, 200, JSON.stringify(gen));
+  assert.equal(typeof gen.created, 'number');
+  assert.equal(gen.data.length, 1);
+  assert.equal(gen.data[0].url, 'https://stub.invalid/img.png');
+
+  const catalog = await (await fetch(`${base}/v1/models`)).json();
+  assert.ok(catalog.data.some((item) => item.id === 'cbcn/hunyuan-image-alpha' && item.type === 'image'));
+});
+
 await test('usage history persists requests through the chat route', async () => {
   for (;;) {
     const page = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();

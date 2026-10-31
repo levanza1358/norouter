@@ -189,6 +189,24 @@ const handler = async (req, res) => {
   }
 
   const token = req.headers.authorization.slice(7).trim();
+
+  // ---- image generation (CodeBuddy /v2/images/generations) ----
+  if (req.url.endsWith('/images/generations')) {
+    if (!body.prompt) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ code: 400, msg: 'stub: missing prompt' }));
+    }
+    if (body.model === 'hunyuan-image-alpha') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({
+        code: 0,
+        data: { created: 1_800_000_000, data: [{ url: 'https://stub.invalid/img.png' }], usage: { image_generation_count: 1 } },
+      }));
+    }
+    res.writeHead(400, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ code: 11102, msg: 'stub: model service info not found' }));
+  }
+
   if (token === 'bad-token') {
     res.writeHead(401, { 'content-type': 'application/json' });
     return res.end(JSON.stringify({ error: { message: 'stub: revoked credential' } }));
