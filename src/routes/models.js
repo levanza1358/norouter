@@ -15,14 +15,16 @@ export function handleModels(req, res) {
         owned_by: provider.id,
       });
     }
-    for (const model of provider.image?.models || []) {
-      data.push({
-        id: `${provider.prefix}/${model}`,
-        object: 'model',
-        created,
-        owned_by: provider.id,
-        type: 'image',
-      });
+    for (const [type, models] of [['image', provider.image?.models], ['embedding', provider.embedding?.models]]) {
+      for (const model of models || []) {
+        data.push({
+          id: `${provider.prefix}/${model}`,
+          object: 'model',
+          created,
+          owned_by: provider.id,
+          type,
+        });
+      }
     }
   }
 

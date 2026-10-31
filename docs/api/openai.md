@@ -136,6 +136,25 @@ Response is the OpenAI shape:
 - The account pool is shared with chat: a rejected account is parked and the request retries each remaining healthy account, mirroring chat failover.
 - The CodeBuddy gateway answers on an undocumented `/v2/images/generations` route whose payload is `{ data: { data: [{ url }] } }`; the router unwraps it into the OpenAI shape above.
 
+## `POST /v1/embeddings`
+
+CodeBuddy CN supports OpenAI-compatible embeddings through its account pool:
+
+```json
+{
+  "model": "cbcn/hunyuan-embedding",
+  "input": "text to embed"
+}
+```
+
+`input` accepts a non-empty string or an array of non-empty strings. Available models: `cbcn/hunyuan-embedding` and `cbcn/bge-m3`. The router forwards only `model` and `input`, normalizes the response to `{ object: "list", data: [{ object: "embedding", index, embedding }], model, usage? }`, and retries every remaining healthy account after upstream account failures. Input text, vectors, tokens, and authorization headers are never written to logs.
+
+## Audio, video, and other media
+
+Norouter currently exposes image generation and embeddings for CodeBuddy CN. It does **not** expose `/v1/audio/*` or `/v1/videos/*` yet: Mirai's CodeBuddy inspection shows TTS requires a separate `X-Api-Key`, while CodeBuddy has no verified STT/video route using the account OAuth credential. Adding placeholder routes would fail unpredictably and violate the provider boundary.
+
+Audio speech/transcription and asynchronous video generation will be added only with a verified provider adapter, bounded multipart/body handling, polling semantics, and hermetic upstream stubs. No audio/video request is sent by norouter today.
+
 ## Credential failover
 
 - Pool account selected round-robin.

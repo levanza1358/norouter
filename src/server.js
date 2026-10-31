@@ -19,6 +19,7 @@ import {
 } from './routes/accounts.js';
 import { handleChat } from './routes/chat.js';
 import { handleImageGeneration } from './routes/images.js';
+import { handleEmbeddings } from './routes/embeddings.js';
 import { handleCodexOAuthCancel, handleCodexOAuthStart, handleCodexOAuthStatus } from './routes/codex-oauth.js';
 import {
   handleAppendChatMessage,
@@ -317,6 +318,9 @@ export function createServer(overrides = {}) {
         }
         if (path === '/v1/images/generations' && req.method === 'POST') {
           return await handleImageGeneration(req, res);
+        }
+        if (path === '/v1/embeddings' && req.method === 'POST') {
+          return await handleEmbeddings(req, res);
         }
       }
 

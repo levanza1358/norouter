@@ -2360,6 +2360,54 @@ await test('image generation resolves, generates, and rejects bad models', async
   assert.ok(catalog.data.some((item) => item.id === 'cbcn/hunyuan-image-alpha' && item.type === 'image'));
 });
 
+await test('embeddings validate, normalize, and expose media models', async () => {
+  for (;;) {
+    const page = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+    if (!page.items.length) break;
+    for (const row of page.items) await fetch(`${base}/api/providers/codebuddy-cn/accounts/${row.id}`, { method: 'DELETE' });
+  }
+  await fetch(`${base}/api/providers/codebuddy-cn/accounts`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ access_token: 'good-token' }),
+  });
+
+  const missing = await fetch(`${base}/v1/embeddings`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'cbcn/hunyuan-embedding' }),
+  });
+  assert.equal(missing.status, 400);
+  assert.match((await missing.json()).error.message, /input/);
+
+  const invalid = await fetch(`${base}/v1/embeddings`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'cbcn/hunyuan-embedding', input: [1] }),
+  });
+  assert.equal(invalid.status, 400);
+
+  const one = await fetch(`${base}/v1/embeddings`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'cbcn/hunyuan-embedding', input: 'hello' }),
+  });
+  const single = await one.json();
+  assert.equal(one.status, 200, JSON.stringify(single));
+  assert.equal(single.object, 'list');
+  assert.equal(single.data[0].object, 'embedding');
+  assert.deepEqual(single.data[0].embedding, [5, 0.25]);
+  assert.equal(single.data[0].index, 0);
+
+  const many = await fetch(`${base}/v1/embeddings`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'cbcn/bge-m3', input: ['a', 'abcd'] }),
+  });
+  const batch = await many.json();
+  assert.equal(many.status, 200, JSON.stringify(batch));
+  assert.equal(batch.data.length, 2);
+  assert.deepEqual(batch.data.map((item) => item.index), [0, 1]);
+
+  const catalog = await (await fetch(`${base}/v1/models`)).json();
+  assert.ok(catalog.data.some((item) => item.id === 'cbcn/hunyuan-embedding' && item.type === 'embedding'));
+});
+
 await test('usage history persists requests through the chat route', async () => {
   for (;;) {
     const page = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();

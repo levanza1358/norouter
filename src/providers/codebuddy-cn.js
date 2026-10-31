@@ -86,7 +86,16 @@ export default {
     models: ['hunyuan-image-alpha', 'hunyuan-image-alpha-edit'],
   },
 
-  // Mirrors the catalog the server publishes. Drop ids the server stops
+  // Embedding route accepts only { model, input } and returns an OpenAI-shaped
+  // list. The gateway uses the same bearer and CLI headers as chat/image.
+  embedding: {
+    url: 'https://copilot.tencent.com/v2/embeddings',
+    models: ['hunyuan-embedding', 'bge-m3'],
+  },
+
+  // Audio speech/transcription and video are not registered: CodeBuddy's audio
+  // route requires a separate X-Api-Key, unlike the account OAuth credential.
+  // Add them only with a verified provider adapter, never as a fake proxy. Drop ids the server stops
   // serving rather than keeping historical ones around.
   models: [
     'glm-5.3',

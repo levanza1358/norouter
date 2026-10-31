@@ -137,6 +137,9 @@ Model dapat ditulis sebagai `cbcn/<model>`, `codebuddy-cn/<model>`, atau bare ID
 | GET | `/v1/models` | OpenAI-compatible model list |
 | POST | `/v1/chat/completions` | OpenAI-compatible chat |
 | POST | `/v1/images/generations` | OpenAI-compatible image generation (CodeBuddy `hunyuan-image-*`) |
+| POST | `/v1/embeddings` | OpenAI-compatible embeddings (CodeBuddy `hunyuan-embedding`, `bge-m3`) |
+
+Image generation and embeddings are supported for CodeBuddy CN. Audio speech/transcription and video generation are not exposed yet: CodeBuddy requires a separate audio key and has no verified OAuth-backed video route. They will be added only with a verified provider adapter and hermetic stub coverage.
 
 Detail request/response: [`docs/api/openai.md`](docs/api/openai.md) dan [`docs/api/admin.md`](docs/api/admin.md).
 

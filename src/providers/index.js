@@ -35,6 +35,8 @@ function applyEntry(provider, entry) {
     refresh: entry.refresh || undefined,
     quota: entry.quota || undefined,
     checkin: entry.checkin || undefined,
+    image: entry.image || provider.image || undefined,
+    embedding: entry.embedding || provider.embedding || undefined,
     reasoning: entry.reasoning || undefined,
     accountStrategy: normalizeStrategy(entry.accountStrategy),
   };

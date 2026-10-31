@@ -190,6 +190,26 @@ const handler = async (req, res) => {
 
   const token = req.headers.authorization.slice(7).trim();
 
+  // ---- embeddings (CodeBuddy /v2/embeddings) ----
+  if (req.url.endsWith('/embeddings')) {
+    const inputs = Array.isArray(body.input) ? body.input : [body.input];
+    if (!inputs.length || inputs.some((input) => typeof input !== 'string' || !input)) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ code: 400, msg: 'stub: invalid input' }));
+    }
+    if (body.model !== 'hunyuan-embedding' && body.model !== 'bge-m3') {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ code: 11102, msg: 'stub: model service info not found' }));
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({
+      object: 'list',
+      data: inputs.map((input, index) => ({ object: 'embedding', index, embedding: [input.length, index + 0.25] })),
+      model: body.model,
+      usage: { prompt_tokens: inputs.reduce((sum, input) => sum + input.length, 0), total_tokens: inputs.reduce((sum, input) => sum + input.length, 0) },
+    }));
+  }
+
   // ---- image generation (CodeBuddy /v2/images/generations) ----
   if (req.url.endsWith('/images/generations')) {
     if (!body.prompt) {
