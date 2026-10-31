@@ -934,7 +934,12 @@ function navigate(path, { push = true, initial = false } = {}) {
   updateRoute();
   if (onDetail) loadDetail();
   if (target === '/api-keys') loadApiKeys();
-  if (target === '/settings') { loadTokenSaver(); loadWebhook(); }
+  if (target === '/settings') {
+    loadDashboardAuth();
+    loadAutostart();
+    loadTokenSaver();
+    loadWebhook();
+  }
   if (target === '/usage') loadUsage();
   if (target === '/chat') loadChat();
   if (target === '/combos') loadCombos();
@@ -3437,8 +3442,6 @@ function renderSettings(data) {
   paintSettingsTabs();
   renderDashboardAuth();
   renderTokenSaver();
-  loadDashboardAuth();
-  loadAutostart();
 }
 
 /* ---------------- add provider ---------------- */

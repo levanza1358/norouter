@@ -14,7 +14,7 @@ const SERVICE_FILE = join(SERVICE_DIR, SERVICE_NAME);
 
 function commandExists(command) {
   try {
-    execFileSync(process.platform === 'win32' ? 'where.exe' : 'which', [command], { stdio: 'ignore' });
+    execFileSync(process.platform === 'win32' ? 'where.exe' : 'which', [command], { stdio: 'ignore', windowsHide: true });
     return true;
   } catch {
     return false;
@@ -52,7 +52,7 @@ function linuxUnit() {
 function windowsInstalled() {
   if (process.platform !== 'win32' || !commandExists('schtasks')) return false;
   try {
-    execFileSync('schtasks.exe', ['/Query', '/TN', TASK_NAME], { stdio: 'ignore' });
+    execFileSync('schtasks.exe', ['/Query', '/TN', TASK_NAME], { stdio: 'ignore', windowsHide: true });
     return true;
   } catch {
     return false;
@@ -62,7 +62,7 @@ function windowsInstalled() {
 function linuxInstalled() {
   if (process.platform !== 'linux' || !commandExists('systemctl')) return false;
   try {
-    execFileSync('systemctl', ['--user', 'is-enabled', SERVICE_NAME], { stdio: 'ignore' });
+    execFileSync('systemctl', ['--user', 'is-enabled', SERVICE_NAME], { stdio: 'ignore', windowsHide: true });
     return true;
   } catch {
     return false;
@@ -100,7 +100,7 @@ export function installAutostart() {
 
 export function uninstallAutostart() {
   if (process.platform === 'win32') {
-    if (windowsInstalled()) execFileSync('schtasks.exe', ['/Delete', '/TN', TASK_NAME, '/F'], { stdio: 'ignore' });
+    if (windowsInstalled()) execFileSync('schtasks.exe', ['/Delete', '/TN', TASK_NAME, '/F'], { stdio: 'ignore', windowsHide: true });
   } else if (process.platform === 'linux') {
     if (linuxInstalled() && commandExists('systemctl')) execFileSync('systemctl', ['--user', 'disable', '--now', SERVICE_NAME], { cwd: ROOT, stdio: 'ignore' });
     if (existsSync(SERVICE_FILE)) unlinkSync(SERVICE_FILE);
