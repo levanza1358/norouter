@@ -1227,7 +1227,13 @@ function renderProviderCards(data) {
     const card = $('addProviderCard');
     card.hidden = false;
     card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    $('addProviderForm')?.querySelector('input[name="name"]')?.focus();
+    const name = $('addProviderForm')?.querySelector('input[name="name"]');
+    if (name) {
+      const slug = name.value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+      const prefix = $('addProviderForm')?.querySelector('input[name="prefix"]');
+      if (prefix && !prefix.value.trim()) prefix.value = slug.slice(0, 40) || 'provider';
+    }
+    name?.focus();
   });
 
   renderCurlExample(data.providers);
