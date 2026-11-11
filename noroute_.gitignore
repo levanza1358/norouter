@@ -1,0 +1,30 @@
+.env
+logs/
+node_modules/
+
+# Local SQLite state may contain access and refresh tokens.
+data/norouter.db
+data/norouter.db-wal
+data/norouter.db-shm
+
+# Legacy machine-local provider/model state and one-time migration backups.
+data/custom-models.json
+data/custom-providers.json
+data/*.json.migrated
+
+# Scratch screenshots from layout checks.
+.shots/
+
+# Local runtime config written by Settings (never commit operator port changes).
+config.local.json
+
+# Local agent/session metadata and shell scratch artifacts.
+.agents/
+.mesaCode/
+$null
+s.listen*
+server.listen*
+x[[]1[]].replace*
+1))
+1]
+x[[]1[]])

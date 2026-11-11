@@ -1,0 +1,19 @@
+0000000000000000000000000000000000000000 0201b5fdcd3c3759a0d0329910c21c29bece5948 levanza1358 <levanza1358@users.noreply.github.com> 1793348058 +0700	commit (initial): Add lifecycle commands and installation documentation
+0201b5fdcd3c3759a0d0329910c21c29bece5948 a81d319dfdd4526c0079bf821a459829aa59ed57 levanza1358 <levanza1358@users.noreply.github.com> 1793348960 +0700	commit: Add configurable dashboard listening port
+a81d319dfdd4526c0079bf821a459829aa59ed57 50805b919a5d584c78044c976a4e70b56aa028f0 levanza1358 <levanza1358@users.noreply.github.com> 1793349312 +0700	commit: Normalize documentation to port 5555
+50805b919a5d584c78044c976a4e70b56aa028f0 dc5f830bb955c60102f2ab48b531df29dc2bd25a levanza1358 <levanza1358@users.noreply.github.com> 1793349743 +0700	commit: Fix Settings panel nesting
+dc5f830bb955c60102f2ab48b531df29dc2bd25a 0019d1f5fd445eced3add30d1ccc7135e5fc040e levanza1358 <levanza1358@users.noreply.github.com> 1793350225 +0700	commit: Bind default server to all interfaces
+0019d1f5fd445eced3add30d1ccc7135e5fc040e 6e18b5e56acf119cade66452dcf5c541786aa295 levanza1358 <levanza1358@users.noreply.github.com> 1793351291 +0700	commit: Add automated install autostart and uninstall
+6e18b5e56acf119cade66452dcf5c541786aa295 5c4aa5c1e7d4355167bdf4c176262331343d4d30 levanza1358 <levanza1358@users.noreply.github.com> 1793351400 +0700	commit: Clear Token Saver loading state
+5c4aa5c1e7d4355167bdf4c176262331343d4d30 c461e34b727b9e415e068aee1455dea09e1f85e3 levanza1358 <levanza1358@users.noreply.github.com> 1793351599 +0700	commit: Clear Token Saver status after load
+c461e34b727b9e415e068aee1455dea09e1f85e3 74e5631f318550434708d1f2f378f06c9cb8e294 levanza1358 <levanza1358@users.noreply.github.com> 1793351728 +0700	commit: Add direct GitHub Linux installer
+74e5631f318550434708d1f2f378f06c9cb8e294 d5814b2cac8b076c76e9b6696f79afd3f3311b72 levanza1358 <levanza1358@users.noreply.github.com> 1793353013 +0700	commit: Fail over across all healthy accounts
+d5814b2cac8b076c76e9b6696f79afd3f3311b72 b28e408bc68e5a6df832a28d404f4e8987bb05e7 levanza1358 <levanza1358@users.noreply.github.com> 1793358783 +0700	commit: Run managed server in background
+b28e408bc68e5a6df832a28d404f4e8987bb05e7 b6c2df70d34ad3d4102f904baee578eb80388b61 levanza1358 <levanza1358@users.noreply.github.com> 1793369850 +0700	commit: Mark Linux launchers executable
+b6c2df70d34ad3d4102f904baee578eb80388b61 500d240305324a3c925b190b2cbf83ccc5345f81 levanza1358 <levanza1358@users.noreply.github.com> 1793370211 +0700	commit: Stash local changes before update
+500d240305324a3c925b190b2cbf83ccc5345f81 1f06056d011c46c1e6b1bd3694cfc7686ba00c78 levanza1358 <levanza1358@users.noreply.github.com> 1793371988 +0700	commit: Add account backup and restore
+1f06056d011c46c1e6b1bd3694cfc7686ba00c78 7dcfbb3802819fea4d90b6820a37a662fd4837f6 levanza1358 <levanza1358@users.noreply.github.com> 1793374412 +0700	commit: Add RTK/Caveman token savers, cost estimate, request log, and webhook
+7dcfbb3802819fea4d90b6820a37a662fd4837f6 ad8fe962d096b814aecf19becc6900ab35d97298 levanza1358 <levanza1358@users.noreply.github.com> 1793408730 +0700	commit: Add OpenAI-compatible image generation
+ad8fe962d096b814aecf19becc6900ab35d97298 1d326254899afd728633f6d00945571ba7cb11c8 levanza1358 <levanza1358@users.noreply.github.com> 1793413264 +0700	commit: Add CodeBuddy embeddings endpoint
+1d326254899afd728633f6d00945571ba7cb11c8 c7d7cba1d64cd7fe8d2c5d23db15c9de0ad22068 levanza1358 <levanza1358@users.noreply.github.com> 1793413494 +0700	commit: Stop settings refresh console flashes
+c7d7cba1d64cd7fe8d2c5d23db15c9de0ad22068 9b6da405edb8e5882a97bac6d64b1fdc3b87043b levanza1358 <levanza1358@users.noreply.github.com> 1793416172 +0700	commit: Add on-demand account warmup
