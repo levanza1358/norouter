@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -80,6 +80,7 @@ await test('norouter CLI exposes start, dev, test and version', () => {
   }
   const version = execFileSync(process.execPath, [cli, 'version'], { encoding: 'utf8' }).trim();
   assert.match(version, /^\d+\.\d+\.\d+/);
+  assert.ok(existsSync(join(import.meta.dirname, '..', '.env.example')), '.env.example must exist for norouter install');
   assert.match(help, /background/i);
   assert.equal(updateNeedsStash(''), false);
   assert.equal(updateNeedsStash(' M src/server.js'), true);
@@ -212,6 +213,8 @@ await test('autostart planner stays platform-local and secret-free', () => {
   assert.equal(plan.platform, autostartPlatform());
   assert.equal(plan.supported, autostartSupported());
   assert.ok(!JSON.stringify(plan).includes('ROUTER_API_KEY'));
+  const serverScript = plan.command.find((part) => typeof part === 'string' && part.endsWith('server.js'));
+  assert.ok(serverScript && existsSync(serverScript), 'autostart must point at the real server entry');
 });
 
 await test('autostart settings route reports support and validates updates', async () => {

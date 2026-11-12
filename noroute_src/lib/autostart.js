@@ -22,11 +22,11 @@ function commandExists(command) {
 }
 
 function windowsArgs() {
-  return ['node', join(ROOT, 'src', 'server.js')];
+  return ['node', join(ROOT, 'noroute_src', 'server.js')];
 }
 
 function windowsTaskCommand() {
-  return `\"${process.execPath}\" \"${join(ROOT, 'src', 'server.js')}\"`;
+  return `\"${process.execPath}\" \"${join(ROOT, 'noroute_src', 'server.js')}\"`;
 }
 
 function linuxUnit() {
@@ -38,7 +38,7 @@ function linuxUnit() {
     '',
     '[Service]',
     `WorkingDirectory=${quote(ROOT)}`,
-    `ExecStart=${quote(process.execPath)} ${quote(join(ROOT, 'src', 'server.js'))}`,
+    `ExecStart=${quote(process.execPath)} ${quote(join(ROOT, 'noroute_src', 'server.js'))}`,
     'Restart=on-failure',
     'RestartSec=3',
     'Environment=NODE_ENV=production',
@@ -116,7 +116,7 @@ export function autostartPlan() {
     supported: autostartSupported(),
     taskName: process.platform === 'win32' ? TASK_NAME : null,
     serviceFile: process.platform === 'linux' ? SERVICE_FILE : null,
-    command: process.platform === 'win32' ? windowsArgs() : [process.execPath, join(ROOT, 'src', 'server.js')],
+    command: process.platform === 'win32' ? windowsArgs() : [process.execPath, join(ROOT, 'noroute_src', 'server.js')],
     configured: Boolean(readLocalConfig().autostart),
   };
 }
