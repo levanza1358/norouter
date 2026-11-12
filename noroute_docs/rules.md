@@ -1,5 +1,12 @@
 # Runtime rules and invariants
 
+## Dashboard UI taste
+
+- Dashboard/UI work must follow the installed design taste skill: see
+  [taste-skill.md](taste-skill.md) (`.zcode/skills/design-taste-frontend/`).
+- Run its gate (`gate.mjs`) before declaring a UI change finished; lint UI copy with
+  `copy-lint.mjs`.
+
 ## Credentials
 
 - Provider account tokens never appear in API/UI output. Managed proxy API keys are stored plaintext and may be shown through the local API Keys dashboard.
