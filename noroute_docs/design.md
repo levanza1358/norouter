@@ -22,7 +22,7 @@ No framework, bundler, or dependency. Node HTTP server owns routing. The dashboa
 
 ## Startup
 
-1. `src/config.js` loads root `.env` without interpolation; existing process env wins.
+1. `noroute_src/config.js` loads root `.env` without interpolation; existing process env wins.
 2. Provider registry loads built-in CodeBuddy CN and saved custom providers from SQLite.
 3. SQLite opens lazily, enables WAL/NORMAL/busy timeout, creates schema, and migrates legacy JSON once.
 4. Server binds `HOST:PORT`.
@@ -42,7 +42,7 @@ No framework, bundler, or dependency. Node HTTP server owns routing. The dashboa
 6. For client stream: relay SSE frames and tap accumulator for usage/counters. Empty `tool_calls` arrays from any upstream delta are dropped so SDKs do not split reasoning into one block per token.
 7. For client non-stream: accumulate SSE into one OpenAI-shaped completion. Add `stream_options.include_usage`; retry once without it if upstream rejects that field.
 8. On 401/403, refresh account once and retry. On 429, mark account cooldown using `Retry-After`, timestamp, or default. Other 400/404/500 errors relay without pointless account rotation.
-9. Record process stats and account counters. Successful calls and errors are also written to `usage_hourly` in SQLite through `src/lib/usage.js`; the in-memory snapshot stays the fast path for `/api/status`.
+9. Record process stats and account counters. Successful calls and errors are also written to `usage_hourly` in SQLite through `noroute_src/lib/usage.js`; the in-memory snapshot stays the fast path for `/api/status`.
 
 ## Account pool
 

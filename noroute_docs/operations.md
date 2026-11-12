@@ -41,7 +41,7 @@ norouter autostart-status show native autostart status
 norouter uninstall   confirm and remove this checkout
 ```
 
-`norouter.cmd` is the Windows launcher. On Linux, use `norouter` after `npm link`, or `node bin/norouter.js <command>` from the checkout. `npm start`, `npm run dev`, and `npm test` remain supported.
+`noroute.cmd` is the Windows launcher. On Linux, use `norouter` after `npm link`, or `node noroute_bin/norouter.js <command>` from the checkout. `npm start`, `npm run dev`, and `npm test` remain supported.
 
 `norouter update` requires a configured `origin`. If source changes are present, it saves them to a named Git stash automatically, then fast-forwards. It never resets, deletes, or overwrites local source changes. Ignored runtime data — `.env`, `config.local.json`, database/WAL/SHM — is not touched. Use `git stash list` and `git stash pop` only if you need to restore old source customization. A running managed server is restarted only after a new commit is installed.
 

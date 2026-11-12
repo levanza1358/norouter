@@ -179,6 +179,11 @@ Success result includes a bounded `answer`, `latencyMs`, and public masked accou
 | POST | `/api/providers/:id/accounts/:accountId/test` | credential/quota probe |
 | POST | `/api/providers/:id/accounts/:accountId/quota` | quota only |
 | POST | `/api/providers/:id/accounts/:accountId/checkin` | Claim CodeBuddy daily check-in with an OAuth access/refresh-token account |
+| POST | `/api/providers/:id/accounts/:accountId/ping` | one real chat turn; returns the upstream answer |
+| POST | `/api/providers/:id/accounts/:accountId/warmup` | probe one parked account whose cooldown expired |
+| POST | `/api/providers/:id/accounts/test` | provider-native probe across every enabled account, sequentially |
+| POST | `/api/providers/:id/accounts/warmup` | probe parked accounts with expired cooldowns; healthy accounts are untouched |
+| POST | `/api/providers/:id/accounts/checkin` | daily check-in for every enabled OAuth account; API keys and paused rows are skipped |
 
 List query:
 
@@ -198,6 +203,12 @@ Import accepts an object, array, or wrapper:
 Supported aliases include `accessToken/access_token`, `refreshToken/refresh_token`, `apiKey/api_key`. Max 5,000 rows; request body max 8 MiB. Bulk import uses one transaction. Duplicate response is 409 for single duplicate and counts duplicate rows for bulk.
 
 Daily check-in returns `{ "checkin": { "status": "checked-in"|"already"|"inactive", "message": "..." }, "account": { ... } }`. API-key accounts are rejected locally; refresh-token accounts refresh first. It does not increment proxy request or token counters. Account objects remain masked.
+
+Pool-level `checkin` sweeps the whole pool sequentially and returns `{ "provider", "attempted", "checkedIn", "already", "failed", "skipped", "results": [{ "account", "ok", "status", "reason"?, "message"? }] }`. API-key rows and paused accounts are skipped, not failed: their rows carry `status: "skipped"` or `"disabled"` with a reason, and `skipped` counts both. Result rows are keyed by account label — no internal ID or token is returned.
+
+Per-account `ping` sends one real streaming chat turn with a fixed minimal prompt and returns `{ "ok": true, "answer", "state": "active", "latencyMs", "account" }`. `answer` is the upstream reply truncated to 80 characters and `account` is masked; the turn counts toward the account's usage like any proxied request. A paused account returns 409, an unknown account 404, and upstream failure returns `{ "error": { "message", "type": "invalid_request_error" } }` with the provider's status.
+
+`warmup` is recovery, not a health check: the pool-level route probes only parked accounts (`last_error` set) whose cooldown has expired and returns `{ "attempted", "recovered" }`; healthy accounts never reach the upstream quota endpoint. The per-account route does the same for one account and returns `{ "provider", "ok", "account", "quota" }` on success, `{ "ok": false, "skipped": true }` when there is nothing to warm, and `{ "ok": false, "status", "error" }` when the probe fails. Exhausted quota stays parked.
 
 Quota ordering is process-memory-only and begins as unknown after restart. A per-account quota read updates its order. `quota-order/refresh` is an explicit full-pool upstream scan, concurrency-limited to three; use it when current global ordering matters. Neither endpoint returns credentials.
 

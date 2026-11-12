@@ -8,10 +8,12 @@
 - Manual SQLite account pool as the only upstream credential source.
 - Round-robin account selection, cooldown, refresh-token exchange, pause/resume.
 - Account pagination, bulk import, duplicate fingerprint, preview, masking.
+- Pool-level account actions: daily check-in for all enabled OAuth accounts, provider-native test across all accounts, and manual warmup of expired parked accounts.
+- Per-account ping (one real chat turn) and per-account warmup.
 - Provider/model dashboard CRUD and conventional model fetch.
 - Active-account model test with diagnostic answer toast.
 - CodeBuddy billing meter parser and per-account quota action.
-- Dashboard themes, accents, splash, route/modal/toast transitions.
+- Dashboard themes, accents, splash, route/modal/toast transitions, split into ES modules served individually.
 - In-memory global usage/activity stats.
 - Managed API keys with custom/automatic secrets, expiry, request/token limits, and daily usage history.
 - Native Windows/Linux autostart settings and confirmation-gated uninstall CLI.

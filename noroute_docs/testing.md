@@ -6,7 +6,7 @@
 npm test
 ```
 
-The suite uses a throwaway SQLite path and local `test/stub-upstream.js`; it must not need a real credential.
+The suite uses a throwaway SQLite path and local `noroute_test/stub-upstream.js`; it must not need a real credential.
 
 ## Local stub setup
 
@@ -15,7 +15,7 @@ The smoke suite starts the stub itself. For manual work:
 ```bat
 rem terminal 1
 set ELECTRON_RUN_AS_NODE=1
-"%LOCALAPPDATA%\Programs\ZCode\ZCode.exe" test\stub-upstream.js 4599
+"%LOCALAPPDATA%\Programs\ZCode\ZCode.exe" noroute_test\stub-upstream.js 4599
 
 rem terminal 2
 set ELECTRON_RUN_AS_NODE=1
@@ -23,7 +23,7 @@ rem Add a fake access token through the provider account-pool API before testing
 set CODEBUDDY_CN_BASE_URL=http://127.0.0.1:4599/v2
 set CODEBUDDY_CN_REFRESH_URL=http://127.0.0.1:4599/v2/plugin/auth/token/refresh
 set CODEBUDDY_CN_QUOTA_URL=http://127.0.0.1:4599/v2/billing/meter/get-user-resource
-"%LOCALAPPDATA%\Programs\ZCode\ZCode.exe" src\server.js
+"%LOCALAPPDATA%\Programs\ZCode\ZCode.exe" noroute_src\server.js
 ```
 
 Use only fake fixture values. Never point a production `.env` at test overrides.
@@ -38,6 +38,8 @@ Use only fake fixture values. Never point a production `.env` at test overrides.
 - Active-account model tests and disable-on-error.
 - Refresh-token exchange and quota parsing.
 - Rate-limit cooldown/failover.
+- Pool-level account actions: check-in all, provider warmup.
+- Per-account ping and warmup, including paused and missing accounts.
 
 ## Manual production checklist
 

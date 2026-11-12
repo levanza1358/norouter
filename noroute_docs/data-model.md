@@ -73,7 +73,7 @@ Buckets follow the server machine's timezone. Changing the OS timezone affects o
 
 ## Persistence split
 
-Live dashboard counters (`src/lib/stats.js`) remain in memory and reset after restart. Account counters, custom providers/models, daily account usage, and the global `usage_hourly` history persist in SQLite.
+Live dashboard counters (`noroute_src/lib/stats.js`) remain in memory and reset after restart. Account counters, custom providers/models, daily account usage, and the global `usage_hourly` history persist in SQLite.
 
 Timezone note: `account_usage` and `api_key_usage` use UTC day keys, while `usage_hourly` uses local-time hour keys.
 
