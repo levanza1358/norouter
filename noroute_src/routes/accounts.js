@@ -1,5 +1,6 @@
 import {
   bulkCreateAccounts,
+  checkinProvider,
   createAccount,
   dailyCheckinForAccount,
   deleteAccount,
@@ -11,11 +12,12 @@ import {
   refreshQuotaOrder,
   testAccount,
   updateAccount,
+  warmupAccount,
   warmupProvider,
 } from '../lib/accounts.js';
 import { readJson, sendError, sendJson } from '../lib/http.js';
 import { getProvider } from '../providers/index.js';
-import { testProviderAccounts } from '../lib/model-test.js';
+import { pingAccount, testProviderAccounts } from '../lib/model-test.js';
 
 function resolveProvider(res, rawId) {
   const provider = getProvider(decodeURIComponent(rawId));
@@ -81,6 +83,47 @@ export async function handleTestAllAccounts(res, rawId) {
   const provider = resolveProvider(res, rawId);
   if (!provider) return undefined;
   return sendJson(res, 200, await testProviderAccounts(provider));
+}
+
+// POST /api/providers/:id/accounts/checkin
+// Daily check-in for every OAuth account in the pool; API keys are skipped.
+export async function handleCheckinAllAccounts(res, rawId) {
+  const provider = resolveProvider(res, rawId);
+  if (!provider) return undefined;
+  if (!provider.checkin && !process.env.CODEBUDDY_CN_CHECKIN_URL?.trim()) {
+    return sendError(res, 400, 'This provider has no daily check-in endpoint.');
+  }
+  return sendJson(res, 200, await checkinProvider(provider));
+}
+
+// POST /api/providers/:id/accounts/:id/ping
+// Real per-account probe: one SSE chat turn; the upstream answer is the per-account
+// proof that the account responds (rendered "Pong" by the UI).
+export async function handleAccountPing(res, rawId, accountId) {
+  const provider = resolveProvider(res, rawId);
+  if (!provider) return undefined;
+  const account = getAccount(accountId);
+  if (!account || account.provider !== provider.id) {
+    return sendError(res, 404, 'Account not found.');
+  }
+  const result = await pingAccount(provider, accountId);
+  if (result.error) {
+    return sendJson(res, result.status || 400, { error: { message: result.error, type: 'invalid_request_error' } });
+  }
+  return sendJson(res, 200, result);
+}
+
+// POST /api/providers/:id/accounts/:id/warmup
+// Probes one parked/errored account with an expired cooldown only.
+export async function handleAccountWarmup(res, rawId, accountId) {
+  const provider = resolveProvider(res, rawId);
+  if (!provider) return undefined;
+  const account = getAccount(accountId);
+  if (!account || account.provider !== provider.id) {
+    return sendError(res, 404, 'Account not found.');
+  }
+  const result = await warmupAccount(provider, accountId);
+  return sendJson(res, 200, { provider: provider.id, ...result });
 }
 
 // POST /api/providers/:id/accounts/preview

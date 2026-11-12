@@ -97,13 +97,14 @@ function aliasesFor(raw, id) {
   return { aliases };
 }
 
-function modelsFor(raw) {
+function modelsFor(raw, creating) {
   const values = Array.isArray(raw)
     ? raw
     : typeof raw === 'string' ? raw.split(/[\s,]+/) : null;
   if (!values) return { error: 'Models must be an array or comma-separated string.' };
   const models = [...new Set(values.map((model) => String(model).trim()).filter(Boolean))];
-  if (!models.length || models.length > 500) return { error: 'Provide 1-500 model ids.' };
+  if (!creating && !models.length) return { error: 'Provide 1-500 model ids.' };
+  if (models.length > 500) return { error: 'Provide 1-500 model ids.' };
   const bad = models.find((model) => !MODEL_ID.test(model));
   if (bad) return { error: `"${bad}" is not a valid model id.` };
   return { models };
@@ -213,7 +214,7 @@ export function prepareProviderConfig(provider, patch = {}, { creating = false }
   if (!ID.test(prefix) || /[\s,]/.test(prefix)) {
     return { status: 400, error: 'Prefix must be one lowercase token with letters, digits, or dashes only.' };
   }
-  const models = modelsFor(has(patch, 'models') ? patch.models : base.models);
+  const models = modelsFor(has(patch, 'models') ? patch.models : base.models, creating);
   if (models.error) return { status: 400, error: models.error };
   const headers = headersFor(has(patch, 'headers') ? patch.headers : base.headers);
   if (headers.error) return { status: 400, error: headers.error };

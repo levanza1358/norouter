@@ -978,6 +978,44 @@ export async function dailyCheckinForAccount(provider, id) {
   return { checkin: { status: result.status, message: result.message }, account: getAccount(id) };
 }
 
+// "Check in All" is dailyCheckinForAccount over the whole pool, sequentially so
+// the provider's per-account throttle is not tripped. API keys are skipped, not
+// failed: they cannot check in and their absence is not an error.
+export async function checkinProvider(provider) {
+  const rows = getDb().prepare(
+    'SELECT id, label, kind, enabled FROM accounts WHERE provider = ? ORDER BY created_at, rowid',
+  ).all(provider.id);
+
+  const results = [];
+  for (const row of rows) {
+    const base = { account: row.label, accountId: row.id };
+    if (row.kind === 'api_key') {
+      results.push({ ...base, ok: false, skipped: true, status: 'skipped', reason: 'API keys cannot check in.' });
+      continue;
+    }
+    if (!row.enabled) {
+      results.push({ ...base, ok: false, skipped: true, status: 'disabled', reason: 'Account is paused.' });
+      continue;
+    }
+    const result = await dailyCheckinForAccount(provider, row.id);
+    if (result.error) {
+      results.push({ ...base, ok: false, status: 'failed', reason: result.error });
+    } else {
+      results.push({ ...base, ok: true, status: result.checkin?.status || 'checked-in', message: result.checkin?.message || '' });
+    }
+  }
+
+  return {
+    provider: provider.id,
+    attempted: results.filter((result) => !result.skipped).length,
+    checkedIn: results.filter((result) => result.ok && result.status === 'checked-in').length,
+    already: results.filter((result) => result.ok && result.status === 'already').length,
+    failed: results.filter((result) => !result.ok && !result.skipped).length,
+    skipped: results.filter((result) => result.skipped).length,
+    results: results.map(({ accountId, ...result }) => result),
+  };
+}
+
 export function usageByDay(providerId, days = 14) {
   const since = new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10);
   return getDb().prepare(`

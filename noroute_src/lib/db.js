@@ -300,7 +300,7 @@ export function getDb() {
   const chatMessageColumns = new Set(db.prepare('PRAGMA table_info(chat_messages)').all().map((column) => column.name));
   if (!chatMessageColumns.has('reasoning')) db.exec("ALTER TABLE chat_messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''");
   const providerColumns = new Set(db.prepare('PRAGMA table_info(custom_providers)').all().map((column) => column.name));
-  for (const [name, type] of [['source_id', 'TEXT'], ['prefix', "TEXT NOT NULL DEFAULT ''"], ['aliases', "TEXT NOT NULL DEFAULT '[]'"], ['headers', "TEXT NOT NULL DEFAULT '{}' "], ['config', "TEXT NOT NULL DEFAULT '{}' "]]) {
+  for (const [name, type] of [['source_id', 'TEXT'], ['prefix', "TEXT NOT NULL DEFAULT ''"], ['aliases', "TEXT NOT NULL DEFAULT '[]'"], ['headers', "TEXT NOT NULL DEFAULT '{}'"], ['config', "TEXT NOT NULL DEFAULT '{}'"]]) {
     if (!providerColumns.has(name)) db.exec(`ALTER TABLE custom_providers ADD COLUMN ${name} ${type}`);
   }
   const overrideColumns = new Set(db.prepare('PRAGMA table_info(provider_overrides)').all().map((column) => column.name));

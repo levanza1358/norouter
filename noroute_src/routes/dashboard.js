@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { ROOT } from '../config.js';
 
@@ -9,9 +9,10 @@ const FLAGS_DIR = join(DIR, 'flags');
 // Files are small and read per request so editing the design needs no restart.
 const ASSETS = {
   '/assets/styles.css': 'text/css; charset=utf-8',
-  '/assets/app.js': 'text/javascript; charset=utf-8',
   '/assets/icon.svg': 'image/svg+xml',
 };
+
+const SCRIPT_TYPE = 'text/javascript; charset=utf-8';
 
 export function handleDashboard(req, res, status = 200) {
   let html = readFileSync(join(DIR, 'page.html'), 'utf8');
@@ -33,6 +34,23 @@ export function handleAsset(pathname, req, res) {
     const body = readFileSync(join(DIR, file));
     res.writeHead(200, {
       'content-type': type,
+      'cache-control': 'no-store',
+      'content-length': body.length,
+    });
+    res.end(body);
+    return true;
+  }
+
+  const scriptMatch = /^\/assets\/([a-z0-9-]+\.js)$/.exec(pathname);
+  if (scriptMatch) {
+    let body;
+    try {
+      body = readFileSync(join(DIR, basename(scriptMatch[1])));
+    } catch {
+      return false;
+    }
+    res.writeHead(200, {
+      'content-type': SCRIPT_TYPE,
       'cache-control': 'no-store',
       'content-length': body.length,
     });

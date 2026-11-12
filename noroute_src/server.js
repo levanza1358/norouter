@@ -7,7 +7,10 @@ import { CORS_HEADERS, readJson, sendError, sendJson } from './lib/http.js';
 import { providers } from './providers/index.js';
 import {
   handleAccountCheckin,
+  handleAccountPing,
   handleAccountQuota,
+  handleAccountWarmup,
+  handleCheckinAllAccounts,
   handleCreateAccounts,
   handleQuotaAccountList,
   handleRefreshQuotaOrder,
@@ -267,6 +270,10 @@ export function createServer(overrides = {}) {
       if (testAllAccountsMatch && req.method === 'POST') {
         return await handleTestAllAccounts(res, testAllAccountsMatch[1]);
       }
+      const checkinAllMatch = path.match(/^\/api\/providers\/([^/]+)\/accounts\/checkin$/);
+      if (checkinAllMatch && req.method === 'POST') {
+        return await handleCheckinAllAccounts(res, checkinAllMatch[1]);
+      }
 
       const accountAction = path.match(
         /^\/api\/providers\/([^/]+)\/accounts\/([^/]+)\/(test|quota|checkin)$/,
@@ -276,6 +283,16 @@ export function createServer(overrides = {}) {
         if (accountAction[3] === 'test') return handleTestAccount(res, accountAction[1], accountId);
         if (accountAction[3] === 'quota') return handleAccountQuota(res, accountAction[1], accountId);
         return handleAccountCheckin(res, accountAction[1], accountId);
+      }
+
+      const accountPingMatch = path.match(/^\/api\/providers\/([^/]+)\/accounts\/([^/]+)\/ping$/);
+      if (accountPingMatch && req.method === 'POST') {
+        return await handleAccountPing(res, accountPingMatch[1], decodeURIComponent(accountPingMatch[2]));
+      }
+
+      const accountWarmupMatch = path.match(/^\/api\/providers\/([^/]+)\/accounts\/([^/]+)\/warmup$/);
+      if (accountWarmupMatch && req.method === 'POST') {
+        return await handleAccountWarmup(res, accountWarmupMatch[1], decodeURIComponent(accountWarmupMatch[2]));
       }
 
       const accountMatch = path.match(/^\/api\/providers\/([^/]+)\/accounts\/([^/]+)$/);

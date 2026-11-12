@@ -8,10 +8,14 @@ import { fromResponsesStream, toResponsesRequest } from './responses-format.js';
 const TEST_TIMEOUT_MS = 30_000;
 export const MODEL_TEST_PROMPT = 'Hi, what your model AI ? and your training cut off ?';
 
-function testBody(model) {
+// A ping asks for one fixed token back, so a passing account proves it can
+// still complete a real request rather than only that its token parses.
+const PING_PROMPT = 'Reply with exactly one word: Pong';
+
+function testBody(model, prompt = MODEL_TEST_PROMPT) {
   return {
     model,
-    messages: [{ role: 'user', content: MODEL_TEST_PROMPT }],
+    messages: [{ role: 'user', content: prompt }],
     stream: true,
   };
 }
@@ -232,8 +236,7 @@ function retryAfterMs(response, text) {
   return 60_000;
 }
 
-async function testAccountRequest(provider, row) {
-  const model = probeModel(provider, row);
+async function testAccountRequest(provider, row, { prompt = PING_PROMPT } = {}) {  const model = probeModel(provider, row);
   const base = { account: row.label, accountId: row.id, model };
   if (!model) return { ...base, ok: false, skipped: true, status: 422, state: 'error', reason: 'No provider probe model is configured.' };
 
@@ -247,7 +250,7 @@ async function testAccountRequest(provider, row) {
       return { ...base, ok: false, status: 401, state: 'error', reason: 'Account has no usable access token.' };
     }
     const { format: wireFormat, url: wireUrl } = wireFor(provider, credential.account || row);
-    const body = testBody(model);
+    const body = testBody(model, prompt);
     const payload = wireFormat === 'responses' ? toResponsesRequest(body) : body;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TEST_TIMEOUT_MS);
@@ -280,8 +283,9 @@ async function testAccountRequest(provider, row) {
         markFailure(row.id, { message: reason, cooldownMs: 60_000 });
         return { ...base, ok: false, status: 502, state: 'cooldown', reason, latencyMs: Date.now() - started };
       }
+      const answer = redactAnswer(result.content, token).trim().slice(0, 80);
       markSuccess(row.id);
-      return { ...base, ok: true, status: 200, state: 'active', latencyMs: Date.now() - started };
+      return { ...base, ok: true, status: 200, state: 'active', answer, latencyMs: Date.now() - started };
     } finally {
       clearTimeout(timer);
     }
@@ -310,6 +314,27 @@ export async function testProviderAccounts(provider) {
     skipped: results.filter((result) => result.skipped).length,
     results: results.map(({ accountId, ...result }) => result),
   };
+}
+
+// Ping is the per-account health probe behind "Test accounts all": one real
+// chat request whose only expected answer is "Pong".
+export async function pingAccount(provider, id) {
+  const row = getAccountRow(id);
+  if (!row) return { status: 404, error: 'Account not found.' };
+  if (!row.enabled) return { status: 409, error: 'Account is paused.' };
+
+  const result = await testAccountRequest(provider, row);
+  const account = publicAccount(getAccountRow(id));
+  if (!result.ok) {
+    return {
+      status: result.status || 502,
+      error: result.reason || 'The account did not answer.',
+      answer: result.answer || '',
+      state: result.state,
+      account,
+    };
+  }
+  return { ok: true, answer: result.answer || '', state: 'active', latencyMs: result.latencyMs, account };
 }
 
 export async function testProviderModels(provider, models, options = {}) {

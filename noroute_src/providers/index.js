@@ -98,8 +98,8 @@ export function addProvider(input) {
   const result = createCustomProvider(input);
   if (result.error) return result;
   const provider = toProvider(result.entry);
-  replaceRegistry([...providers, provider]);
-  return { provider };
+  loadProviders();
+  return { provider: getProvider(provider.id) };
 }
 
 export function updateProvider(id, patch) {

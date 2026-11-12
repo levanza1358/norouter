@@ -719,7 +719,7 @@ h1 {
 .dashboard-primary { border-color: var(--accent-line); }
 
 /* Render-time list items opt into one short entrance. The dataset key guard in
-   app.js prevents background polling from replaying this animation. */
+   the dashboard scripts prevent background polling from replaying this animation. */
 .motion-stagger {
   animation: stagger-in .38s var(--ease-spring) both;
   animation-delay: calc(min(var(--motion-index, 0), 12) * 22ms);
@@ -805,7 +805,7 @@ h1 {
 /* ============ dashboard grid ============ */
 
 /* Cards are sized by their content, never stretched to the viewport. A tall
-   monitor is filled by MORE rows (see density() in app.js) and by wider
+   monitor is filled by MORE rows (see density() in utils.js) and by wider
    columns, not by boxes growing hollow in the middle. */
 .grid {
   display: grid;
@@ -2599,6 +2599,89 @@ a.prow:hover .pdot { transform: scale(1.15); }
   gap: 12px;
   flex-wrap: wrap;
   margin-bottom: 12px;
+}
+
+/* One More button opens a popover-style menu beside the toolbar, not a second row. */
+.apool-more {
+  cursor: pointer;
+  padding-right: 26px;
+  position: relative;
+}
+.apool-more:hover .apool-more::after,
+.apool-more:focus-visible .apool-more::after {
+  content: '';
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid var(--ink);
+  border-bottom: 2px solid var(--ink);
+  transform: translateY(-50%) rotate(45deg);
+}
+.apool-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 220px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  padding: 6px;
+  z-index: 20;
+}
+.apool-menuitem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  color: var(--ink);
+}
+.apool-menuitem:hover,
+.apool-menuitem:focus-visible {
+  background: var(--row);
+}
+.apool-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+}
+.apool-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 22px;
+  margin-top: 10px;
+}
+.apool-progress-detail {
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.pool-bar {
+  flex: 1 1 auto;
+  height: 8px;
+  background: var(--track);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.pool-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+  transition: width 0.12s linear;
 }
 
 .toolnote {

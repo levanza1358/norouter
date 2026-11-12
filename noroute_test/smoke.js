@@ -73,7 +73,7 @@ function streamFrom(text) {
 }
 
 await test('norouter CLI exposes start, dev, test and version', () => {
-  const cli = join(import.meta.dirname, '..', 'bin', 'norouter.js');
+  const cli = join(import.meta.dirname, '..', 'noroute_bin', 'norouter.js');
   const help = execFileSync(process.execPath, [cli, 'help'], { encoding: 'utf8' });
   for (const command of ['start', 'restart', 'stop', 'update', 'dev', 'test', 'install', 'autostart-on', 'autostart-off', 'autostart-status', 'uninstall']) {
     assert.match(help, new RegExp(`^\\s+${command}\\b`, 'm'), `${command} must be listed`);
@@ -197,6 +197,15 @@ await test('in-stream error frame is captured, not swallowed', async () => {
 const { server } = createServer({ port: 0, host: '127.0.0.1', logRequests: false });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
+const DASHBOARD_SCRIPTS = ['core.js','utils.js','custom-select.js','appearance.js','router.js','dashboard.js','providers.js','chat.js','usage.js','combos.js','settings.js','provider-add.js','account-detail.js','account-events.js','glue.js','actions.js','boot.js'];
+const fetchDashboardSources = async () => {
+  const texts = await Promise.all(DASHBOARD_SCRIPTS.map(async (file) => {
+    const response = await fetch(`${base}/assets/${file}`);
+    assert.equal(response.status, 200, `${file} must be served`);
+    return response.text();
+  }));
+  return texts.join('\n');
+};
 
 await test('autostart planner stays platform-local and secret-free', () => {
   const plan = autostartPlan();
@@ -533,7 +542,7 @@ await test('dashboard password protection gates dashboard routes and rotates saf
   const lockedHtml = await lockedPage.text();
   assert.match(lockedHtml, /<body class="dashboard-locked" data-dashboard-locked="true">/);
   assert.match(lockedHtml, /dashboard-lock-ready/);
-  assert.equal((await fetch(`${base}/assets/app.js`, { headers: { cookie: '' } })).status, 200);
+  assert.equal((await fetch(`${base}/assets/core.js`, { headers: { cookie: '' } })).status, 200);
   assert.equal((await fetch(`${base}/api/status`, { headers: { cookie: '' } })).status, 200);
   assert.equal((await fetch(`${base}/health`)).status, 200);
   assert.equal((await fetch(`${base}/v1/models`)).status, 200);
@@ -556,7 +565,7 @@ await test('dashboard password protection gates dashboard routes and rotates saf
   const disabled = await fetch(`${base}/api/auth/settings`, { method: 'PATCH', headers: { cookie: newCookie, 'content-type': 'application/json' }, body: JSON.stringify({ enabled: false }) });
   assert.equal(disabled.status, 200);
   assert.equal((await fetch(`${base}/`)).status, 200);
-  const dashboardJs = await (await fetch(`${base}/assets/app.js`)).text();
+  const dashboardJs = await fetchDashboardSources();
   assert.doesNotMatch(dashboardJs, /handleDashboardSessionExpired/);
   assert.doesNotMatch(dashboardJs, /Dashboard authentication required/);
 
@@ -582,7 +591,7 @@ await test('dashboard, chat shell and status endpoint respond', async () => {
   // The chat transcript is its own scroll container and auto-follows the
   // stream only while the reader is near the bottom; these helpers are the
   // client contract that keeps the viewport from jumping during streaming.
-  const chatJs = await (await fetch(`${base}/assets/app.js`)).text();
+  const chatJs = await fetchDashboardSources();
   assert.match(chatJs, /function chatNearBottom/);
   assert.match(chatJs, /function chatScrollToBottom/);
   assert.match(chatJs, /chatScrollToBottom\(\)/);
@@ -738,7 +747,7 @@ await test('settings exposes accessible tabs and Token Saver controls', async ()
   assert.match(html, /id="webhookToggle"[^>]*type="checkbox"/);
   assert.match(html, /id="webhookUrl"[^>]*type="url"/);
   assert.match(html, /id="requestLogTable"/);
-  const js = await (await fetch(`${base}/assets/app.js`)).text();
+  const js = await fetchDashboardSources();
   assert.match(js, /ArrowRight/);
   assert.match(js, /settingsTab/);
   assert.match(js, /replyFilters/);
@@ -768,11 +777,15 @@ await test('dashboard shell keeps navigation and control ownership consistent', 
   const providers = await (await fetch(`${base}/providers`)).text();
   assert.match(providers, /class="page-intro">Manage upstream endpoints, accounts, and available models\.<\/p>/);
 
-  const js = await (await fetch(`${base}/assets/app.js`)).text();
+  const js = await fetchDashboardSources();
   assert.match(js, /const provider = detail\.provider \|\| \{\};/);
   assert.match(js, /escapeHtml\(value\)/);
-  assert.match(html, /id="warmupAccounts"/);
-  assert.match(html, /id="testAllAccounts"/);
+  assert.match(html, /id="apoolMore"/);
+  assert.match(html, /id="poolItemCheckin"/);
+  assert.match(html, /id="poolHead"/);
+  assert.match(html, /id="poolCount"/);
+  assert.match(html, /id="poolFill"/);
+  assert.match(html, /id="poolBusy"/);
   assert.match(js, /data-account-action="edit"/);
   assert.match(js, /Account name/);
 });
@@ -786,7 +799,7 @@ await test('dashboard omits duplicate providers and health cards while Settings 
   assert.match(html, /id="sUptime"/);
   assert.match(html, /id="sPort"/);
 
-  const js = await (await fetch(`${base}/assets/app.js`)).text();
+  const js = await fetchDashboardSources();
   for (const id of ['providerList', 'providerHint', 'healthStatus', 'healthUptime', 'healthPort', 'healthKey', 'healthChip']) {
     assert.doesNotMatch(js, new RegExp(`\\$\\('${id}'\\)`), `${id} must not be queried by dashboard code`);
   }
@@ -800,7 +813,10 @@ await test('dashboard shell ships viewport meta and its assets', async () => {
   // Mobile support depends on this; without it the layout renders at 980px.
   assert.match(html, /<meta\s+name="viewport"[^>]*width=device-width/);
   assert.match(html, /href="\/assets\/styles\.css"/);
-  assert.match(html, /src="\/assets\/app\.js"/);
+  assert.match(html, /src="\/assets\/core\.js"/);
+  // Split modules load in dependency order; the last one must be the boot script.
+  const scripts = [...html.matchAll(/src="\/assets\/([a-z0-9-]+\.js)"/g)].map((m) => m[1]);
+  assert.deepEqual(scripts, DASHBOARD_SCRIPTS, 'dashboard must load every script in order');
   assert.match(html, /<section class="page" data-page="\/" hidden>/, 'dashboard must not paint before the initial route');
   assert.match(html, /<div class="splash" id="appSplash"[^>]*>/);
   assert.match(html, /dashboard-booting/);
@@ -810,9 +826,11 @@ await test('dashboard shell ships viewport meta and its assets', async () => {
   assert.equal(css.status, 200, 'styles asset must be served');
   assert.match(css.headers.get('content-type') || '', /text\/css/);
 
-  const js = await fetch(`${base}/assets/app.js`);
-  assert.equal(js.status, 200, 'dashboard script must be served');
-  assert.match(js.headers.get('content-type') || '', /javascript/);
+  for (const file of DASHBOARD_SCRIPTS) {
+    const js = await fetch(`${base}/assets/${file}`);
+    assert.equal(js.status, 200, `${file} must be served`);
+    assert.match(js.headers.get('content-type') || '', /javascript/, `${file} must be javascript`);
+  }
 });
 
 await test('every dashboard select uses the custom dropdown', async () => {
@@ -822,7 +840,7 @@ await test('every dashboard select uses the custom dropdown', async () => {
   const native = selects.filter((tag) => !/data-custom-select/.test(tag));
   assert.deepEqual(native, [], 'no select may render with native chrome');
 
-  const js = await (await fetch(`${base}/assets/app.js`)).text();
+  const js = await fetchDashboardSources();
   assert.match(js, /function enhanceSelect/, 'the enhancer must ship with the dashboard');
 
   const css = await (await fetch(`${base}/assets/styles.css`)).text();
@@ -858,7 +876,7 @@ await test('API Keys page has clear control and action hierarchy', async () => {
   assert.match(html, /id="copyKeyEndpoint"[^>]*>Copy URL</);
   assert.match(html, /id="copyCurl"[^>]*>Copy example</);
   assert.match(html, /data-page="\/api-keys"[\s\S]*class="card key-vault"/);
-  const js = await (await fetch(`${base}/assets/app.js`)).text();
+  const js = await fetchDashboardSources();
   assert.match(js, /No secret stored — rotate to issue one/);
   assert.match(js, /data-create-key-empty/);
   assert.match(js, /data-key-revoke/);
@@ -876,7 +894,7 @@ await test('dashboard cards use persisted SQLite usage data', async () => {
   const html = await (await fetch(`${base}/`)).text();
   assert.match(html, /id="dashboardHistorySource"[^>]*>History<\/span>/);
   assert.doesNotMatch(html, /Persisted usage from SQLite|Persisted requests from SQLite/);
-  const js = await (await fetch(`${base}/assets/app.js`)).text();
+  const js = await fetchDashboardSources();
   assert.match(js, /renderStatistics\(latest \|\| \{\}, report\)/);
   assert.match(js, /renderRequests\(latest \|\| \{\}, report\)/);
   assert.match(js, /renderModels\(latest \|\| \{\}, report\)/);
@@ -894,7 +912,7 @@ await test('dashboard has branded logo and pointer background polish', async () 
   const css = await (await fetch(`${base}/assets/styles.css`)).text();
   assert.match(css, /\.pointer-glow\s*\{/);
   assert.match(css, /prefers-reduced-motion: reduce/);
-  const js = await (await fetch(`${base}/assets/app.js`)).text();
+  const js = await fetchDashboardSources();
   assert.match(js, /pointermove/);
   assert.match(js, /requestAnimationFrame\(paintPointerGlow\)/);
 });
@@ -908,7 +926,7 @@ await test('dashboard keeps connection actions compact and useful', async () => 
   assert.doesNotMatch(html, /<h2 class="card-title">Connect<\/h2>/);
   assert.doesNotMatch(html, /copyBase3/);
   assert.doesNotMatch(html, /SQLite/);
-  const js = await (await fetch(`${base}/assets/app.js`)).text();
+  const js = await fetchDashboardSources();
   assert.match(js, /function renderDashboardConnect/);
   assert.match(js, /dashboardApiKeySecret/);
   assert.match(js, /copyText\(dashboardApiKeySecret\)/);
@@ -941,7 +959,7 @@ await test('dashboard declares its data ranges and chart summary', async () => {
   assert.equal((html.match(/data-usage-chart=/g) || []).length, 4);
   assert.equal((html.match(/role="tab"[^>]*data-usage-chart=/g) || []).length, 4);
   assert.match(html, /id="uSparkLegend"/);
-  const js = await (await fetch(`${base}/assets/app.js`)).text();
+  const js = await fetchDashboardSources();
   assert.match(js, /\/api\/usage\?range=/);
   assert.match(js, /data-dashboard-range/);
   assert.match(js, /const USAGE_PAGE_SIZE = 10;/);
@@ -1718,7 +1736,6 @@ await test('invalid custom provider input is rejected', async () => {
   const cases = [
     { name: 'X', baseUrl: 'http://a', models: 'm' },
     { name: 'Bad Url', baseUrl: 'ftp://nope', models: 'm' },
-    { name: 'No Models', baseUrl: 'http://127.0.0.1:1/v1', models: '' },
     { name: 'Bad Model', baseUrl: 'http://127.0.0.1:1/v1', models: 'bad model!' },
     { name: 'Bad Env', baseUrl: 'http://127.0.0.1:1/v1', models: 'm', tokenEnv: 'lower case' },
   ];
@@ -2321,6 +2338,100 @@ await test('daily check-in uses OAuth tokens, handles already, and rejects API k
   }
 });
 
+await test('check-in all sweeps the pool and skips API keys and paused accounts', async () => {
+  for (;;) {
+    const page = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+    if (!page.items.length) break;
+    for (const row of page.items) await fetch(`${base}/api/providers/codebuddy-cn/accounts/${row.id}`, { method: 'DELETE' });
+  }
+  const create = async (label, input) => {
+    const res = await fetch(`${base}/api/providers/codebuddy-cn/accounts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label, ...input }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 201, JSON.stringify(body));
+    return body.items.find((row) => row.label === label);
+  };
+
+  const oauth = await create('Check-in all oauth', { access_token: 'good-token', uid: 'checkin-all-oauth' });
+  const already = await create('Check-in all already', { access_token: 'already-token', uid: 'checkin-all-already' });
+  const apiKey = await create('Check-in all api key', { kind: 'api_key', api_key: 'sk-checkin-all-local' });
+  const paused = await create('Check-in all paused', { access_token: 'paused-checkin-token' });
+  const pause = await fetch(`${base}/api/providers/codebuddy-cn/accounts/${paused.id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ enabled: false }),
+  });
+  assert.equal(pause.status, 200, JSON.stringify(await pause.json()));
+
+  const response = await fetch(`${base}/api/providers/codebuddy-cn/accounts/checkin`, { method: 'POST' });
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body));
+  assert.equal(body.provider, 'codebuddy-cn');
+  assert.equal(body.attempted, 2, 'only enabled OAuth accounts are attempted');
+  assert.equal(body.checkedIn, 1);
+  assert.equal(body.already, 1);
+  assert.equal(body.failed, 0);
+  assert.equal(body.skipped, 2, 'API key and paused accounts are skipped, not failed');
+  assert.ok(body.results.every((row) => !('accountId' in row)), 'results must not carry internal IDs');
+  assert.ok(!JSON.stringify(body).includes('good-token'), 'check-in all must not leak tokens');
+
+  for (const account of [oauth, already, apiKey, paused]) {
+    await fetch(`${base}/api/providers/codebuddy-cn/accounts/${account.id}`, { method: 'DELETE' });
+  }
+});
+
+await test('account ping answers one real chat turn and reports missing or paused accounts safely', async () => {
+  for (;;) {
+    const page = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+    if (!page.items.length) break;
+    for (const row of page.items) await fetch(`${base}/api/providers/codebuddy-cn/accounts/${row.id}`, { method: 'DELETE' });
+  }
+  const create = async (label, input) => {
+    const res = await fetch(`${base}/api/providers/codebuddy-cn/accounts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label, ...input }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 201, JSON.stringify(body));
+    return body.items.find((row) => row.label === label);
+  };
+
+  const good = await create('Ping good', { access_token: 'good-token' });
+  const paused = await create('Ping paused', { access_token: 'paused-ping-token' });
+  const pause = await fetch(`${base}/api/providers/codebuddy-cn/accounts/${paused.id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ enabled: false }),
+  });
+  assert.equal(pause.status, 200, JSON.stringify(await pause.json()));
+
+  const ok = await fetch(`${base}/api/providers/codebuddy-cn/accounts/${good.id}/ping`, { method: 'POST' });
+  const okBody = await ok.json();
+  assert.equal(ok.status, 200, JSON.stringify(okBody));
+  assert.equal(okBody.ok, true);
+  assert.equal(okBody.state, 'active');
+  assert.ok(typeof okBody.answer === 'string' && okBody.answer.length > 0, 'ping must return the upstream answer');
+  assert.equal(okBody.account.label, 'Ping good');
+  assert.ok(!JSON.stringify(okBody).includes('good-token'), 'ping must not leak tokens');
+
+  const pausedRes = await fetch(`${base}/api/providers/codebuddy-cn/accounts/${paused.id}/ping`, { method: 'POST' });
+  const pausedBody = await pausedRes.json();
+  assert.equal(pausedRes.status, 409, JSON.stringify(pausedBody));
+  assert.match(pausedBody.error.message, /paused/);
+  assert.ok(!JSON.stringify(pausedBody).includes('good-token'));
+
+  const missing = await fetch(`${base}/api/providers/codebuddy-cn/accounts/does-not-exist/ping`, { method: 'POST' });
+  assert.equal(missing.status, 404);
+
+  for (const account of [good, paused]) {
+    await fetch(`${base}/api/providers/codebuddy-cn/accounts/${account.id}`, { method: 'DELETE' });
+  }
+});
+
 await test('a rate-limited account cools down and the next account serves', async () => {
   // Start from an empty pool so rotation order is deterministic.
   for (;;) {
@@ -2549,6 +2660,47 @@ await test('manual warmup endpoint recovers parked accounts without probing heal
   assert.equal(pool.items.find((row) => row.id === parked.id).status, 'active');
   assert.equal(pool.items.find((row) => row.id === healthy.id).status, 'active');
   assert.ok(!JSON.stringify(body).includes('good-token'));
+});
+
+await test('per-account warmup probes one parked account and skips healthy ones', async () => {
+  for (;;) {
+    const page = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+    if (!page.items.length) break;
+    for (const row of page.items) await fetch(`${base}/api/providers/codebuddy-cn/accounts/${row.id}`, { method: 'DELETE' });
+  }
+  const create = async (label, token) => {
+    const res = await fetch(`${base}/api/providers/codebuddy-cn/accounts`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label, access_token: token }),
+    });
+    assert.equal(res.status, 201);
+    return (await res.json()).items.find((row) => row.label === label);
+  };
+  const parked = await create('Per-account warmup parked', 'good-token');
+  const healthy = await create('Per-account warmup healthy', 'high-quota-token');
+
+  const skippedRes = await fetch(`${base}/api/providers/codebuddy-cn/accounts/${healthy.id}/warmup`, { method: 'POST' });
+  const skippedBody = await skippedRes.json();
+  assert.equal(skippedRes.status, 200, JSON.stringify(skippedBody));
+  assert.equal(skippedBody.provider, 'codebuddy-cn');
+  assert.equal(skippedBody.skipped, true, 'a healthy account has nothing to warm up');
+
+  markFailure(parked.id, { message: 'temporary error', cooldownMs: 0 });
+  const before = quotaCalls.length;
+  const response = await fetch(`${base}/api/providers/codebuddy-cn/accounts/${parked.id}/warmup`, { method: 'POST' });
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body));
+  assert.equal(body.ok, true, 'the parked account must recover');
+  assert.equal(quotaCalls.length, before + 1, 'only the parked account is probed');
+  assert.equal(quotaCalls.at(-1), 'good-token');
+  assert.ok(!JSON.stringify(body).includes('good-token'));
+
+  const pool = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+  assert.equal(pool.items.find((row) => row.id === parked.id).status, 'active');
+
+  for (const account of [parked, healthy]) {
+    await fetch(`${base}/api/providers/codebuddy-cn/accounts/${account.id}`, { method: 'DELETE' });
+  }
 });
 
 await test('account warmup recovers an expired transient cooldown before chat', async () => {

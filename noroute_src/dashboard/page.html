@@ -757,8 +757,12 @@
             <div class="dtools">
               <button class="btn btn-ghost" id="editProvider" type="button">Edit</button>
               <button class="btn btn-ghost danger" id="removeProvider" type="button" hidden>Remove</button>
-              <button class="btn btn-ghost" id="warmupAccounts" type="button">Warmup all</button>
-              <button class="btn btn-ghost" id="testAllAccounts" type="button">Test all accounts</button>
+              <button class="btn btn-ghost" id="apoolMore" type="button" aria-haspopup="menu">More <span class="caret">▾</span></button>
+              <div class="apool-menu" id="poolMenu" hidden>
+                <button class="apool-menuitem" id="poolItemWarmup" type="button" data-pool-action="warmup"><span class="apool-icon">↻</span> Warm up all</button>
+                <button class="apool-menuitem" id="poolItemTest" type="button" data-pool-action="test"><span class="apool-icon">◎</span> Test accounts all</button>
+                <button class="apool-menuitem" id="poolItemCheckin" type="button" data-pool-action="checkin"><span class="apool-icon">✓</span> Check in All</button>
+              </div>
               <button class="btn btn-ghost" id="openBulk" type="button">Bulk add</button>
               <button class="btn btn-primary" id="openAddAccount" type="button">Add account</button>
             </div>
@@ -792,6 +796,12 @@
           </div>
 
           <p class="toolnote" id="accountNote" role="status" aria-live="polite"></p>
+
+          <div class="apool-progress" id="poolHead" hidden>
+            <span class="pool-count" id="poolCount">0 of 0</span>
+            <div class="pool-bar"><span class="pool-fill" id="poolFill"></span></div>
+          </div>
+          <button class="btn btn-ghost" id="poolBusy" type="button" hidden></button>
 
           <div class="abulk" id="bulkActions" hidden>
             <span class="abulk-count" id="bulkCount">0 selected</span>
@@ -1037,6 +1047,22 @@
 </div>
   <div class="model-test-toasts" id="modelTestToasts" role="status" aria-live="polite" aria-atomic="false"></div>
 
-<script src="/assets/app.js"></script>
+<script src="/assets/core.js"></script>
+<script src="/assets/utils.js"></script>
+<script src="/assets/custom-select.js"></script>
+<script src="/assets/appearance.js"></script>
+<script src="/assets/router.js"></script>
+<script src="/assets/dashboard.js"></script>
+<script src="/assets/providers.js"></script>
+<script src="/assets/chat.js"></script>
+<script src="/assets/usage.js"></script>
+<script src="/assets/combos.js"></script>
+<script src="/assets/settings.js"></script>
+<script src="/assets/provider-add.js"></script>
+<script src="/assets/account-detail.js"></script>
+<script src="/assets/account-events.js"></script>
+<script src="/assets/glue.js"></script>
+<script src="/assets/actions.js"></script>
+<script src="/assets/boot.js"></script>
 </body>
 </html>
