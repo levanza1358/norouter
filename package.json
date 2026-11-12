@@ -1,0 +1,18 @@
+{
+  "name": "norouter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local OpenAI-compatible router in front of a manual provider-account pool. Dependency-free Node.",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "bin": {
+    "norouter": "noroute_bin/norouter.js"
+  },
+  "scripts": {
+    "start": "node noroute_src/server.js",
+    "dev": "node --watch noroute_src/server.js",
+    "test": "node noroute_test/smoke.js"
+  }
+}

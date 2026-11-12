@@ -1,0 +1,12 @@
+# Runtime state — the SQLite pool holds plaintext provider credentials.
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Logs and OS artifacts
+*.log
+nul
+
+# Environment
+.env
