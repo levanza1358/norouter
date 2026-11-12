@@ -30,14 +30,16 @@ function windowsTaskCommand() {
 }
 
 function linuxUnit() {
-  const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
+  // WorkingDirectory does not strip quotes: a quoted path stays quoted and
+  // fails systemd's absolute-path check. ExecStart does, so quote only there.
+  const quote = (value) => `"${String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
   return [
     '[Unit]',
     'Description=Norouter AI gateway',
     'After=network-online.target',
     '',
     '[Service]',
-    `WorkingDirectory=${quote(ROOT)}`,
+    `WorkingDirectory=${ROOT}`,
     `ExecStart=${quote(process.execPath)} ${quote(join(ROOT, 'noroute_src', 'server.js'))}`,
     'Restart=on-failure',
     'RestartSec=3',
