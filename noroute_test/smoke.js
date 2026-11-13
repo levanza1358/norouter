@@ -46,6 +46,7 @@ const {
   createAccount,
   deleteAccount,
   getAccount,
+  getAccountRow,
   listAccounts,
   pickAccount,
   markFailure,
@@ -54,6 +55,17 @@ const {
 } = await import('../noroute_src/lib/accounts.js');
 const { ACCOUNT_PLANS, isKnownPlan, normalizePlan, planLabel } = await import('../noroute_src/lib/plan.js');
 const { antigravityTier } = await import('../noroute_src/lib/antigravity-quota.js');
+const { parseOAuthRedirect } = await import('../noroute_src/lib/oauth-callback.js');
+const {
+  startCodexOAuth,
+  completeCodexOAuth,
+  oauthStateStatus,
+} = await import('../noroute_src/lib/codex-oauth.js');
+const {
+  startAntigravityOAuth,
+  completeAntigravityOAuth,
+  antigravityOAuthStateStatus,
+} = await import('../noroute_src/lib/antigravity-oauth.js');
 const {
   backfillAccountIdentity,
   ensureAccountIdentityIndex,
@@ -559,7 +571,7 @@ await test('RTK compresses tool output and fails open', async () => {
 
 await test('reply style filters validate, persist and stay idempotent', async () => {
   // Pure unit: idempotency and the no-op default never mutate the body.
-  const noop = { language: 'auto', verbosity: 'balanced', coding: false };
+  const noop = { language: 'auto', verbosity: 'balanced', coding: false, focus: '', addressAs: '' };
   assert.equal(buildInstruction(noop).includes('same language'), true, 'auto language must inject by default');
   const noopId = { language: 'auto', verbosity: 'balanced', coding: false };
   const once = applyReplyFilters({ messages: [{ role: 'user', content: 'hi' }] }, noopId);
@@ -572,21 +584,35 @@ await test('reply style filters validate, persist and stay idempotent', async ()
   assert.deepEqual(untouched.messages, [{ role: 'user', content: 'x' }], 'all no-op settings must return the body unchanged');
   assert.equal(buildInstruction({ language: 'none', verbosity: 'balanced', coding: false }), '');
 
+  // Custom focus and address lines stay on one instruction per line.
+  const custom = { language: 'none', verbosity: 'balanced', coding: false, focus: 'Stay on backend debugging.\nPrefer Node examples.', addressAs: 'Dimas' };
+  const customInstruction = buildInstruction(custom);
+  assert.match(customInstruction, /Operator focus: Stay on backend debugging\./);
+  assert.match(customInstruction, /\[norouter reply style\] Prefer Node examples\./);
+  assert.match(customInstruction, /Address the user as "Dimas"\./);
+  const customTwice = applyReplyFilters(applyReplyFilters({ messages: [{ role: 'user', content: 'hi' }] }, custom), custom);
+  assert.equal((customTwice.messages[0].content.match(/\[norouter reply style\]/g) || []).length, 3, 'focus and address lines must not stack on replay');
+
   // Endpoint: defaults, valid patch, invalid patches.
   const defaults = await (await fetch(`${base}/api/reply-filters`)).json();
-  assert.deepEqual(defaults, { language: 'auto', verbosity: 'balanced', coding: false });
+  assert.deepEqual(defaults, { language: 'auto', verbosity: 'balanced', coding: false, focus: '', addressAs: '' });
   const patched = await fetch(`${base}/api/reply-filters`, {
     method: 'PATCH', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ language: 'id', verbosity: 'concise', coding: true }),
+    body: JSON.stringify({ language: 'id', verbosity: 'concise', coding: true, focus: 'Stay on backend debugging.', addressAs: 'Dimas' }),
   });
   assert.equal(patched.status, 200);
-  assert.deepEqual(await patched.json(), { language: 'id', verbosity: 'concise', coding: true });
-  assert.deepEqual(await (await fetch(`${base}/api/reply-filters`)).json(), { language: 'id', verbosity: 'concise', coding: true });
+  assert.deepEqual(await patched.json(), { language: 'id', verbosity: 'concise', coding: true, focus: 'Stay on backend debugging.', addressAs: 'Dimas' });
+  assert.deepEqual(await (await fetch(`${base}/api/reply-filters`)).json(), { language: 'id', verbosity: 'concise', coding: true, focus: 'Stay on backend debugging.', addressAs: 'Dimas' });
 
   for (const bad of [
     { language: 'xx' },
     { verbosity: 'loud' },
     { coding: 'yes' },
+    { focus: 5 },
+    { focus: 'x'.repeat(2001) },
+    { addressAs: 5 },
+    { addressAs: 'x'.repeat(61) },
+    { addressAs: 'two\nlines' },
     { language: 'id', extra: true },
   ]) {
     const res = await fetch(`${base}/api/reply-filters`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(bad) });
@@ -594,7 +620,7 @@ await test('reply style filters validate, persist and stay idempotent', async ()
   }
 
   // Reset to defaults so later chat-path assertions start clean.
-  await fetch(`${base}/api/reply-filters`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ language: 'auto', verbosity: 'balanced', coding: false }) });
+  await fetch(`${base}/api/reply-filters`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ language: 'auto', verbosity: 'balanced', coding: false, focus: '', addressAs: '' }) });
 });
 
 await test('reply style instructions reach the upstream and no-op leaves the body alone', async () => {
@@ -605,8 +631,8 @@ await test('reply style instructions reach the upstream and no-op leaves the bod
   });
   assert.equal(created.status, 201);
   try {
-    // language='id' must inject the Bahasa Indonesia instruction.
-    await fetch(`${base}/api/reply-filters`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ language: 'id', verbosity: 'balanced', coding: false }) });
+    // language='id' plus a custom focus and name must reach the upstream prompt.
+    await fetch(`${base}/api/reply-filters`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ language: 'id', verbosity: 'balanced', coding: false, focus: 'Stay on backend debugging.', addressAs: 'Dimas' }) });
     chatBodies.length = 0;
     const withId = await fetch(`${base}/v1/chat/completions`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -617,6 +643,8 @@ await test('reply style instructions reach the upstream and no-op leaves the bod
     assert.ok(idUpstream, 'chat must reach the stub');
     const idSystem = idUpstream.messages.find((message) => message.role === 'system');
     assert.ok(idSystem?.content.includes('Bahasa Indonesia'), 'id instruction must be present in the upstream system message');
+    assert.match(idSystem.content, /Operator focus: Stay on backend debugging\./);
+    assert.match(idSystem.content, /Address the user as "Dimas"\./);
 
     // Idempotency across the wire: replaying the returned history must not stack.
     chatBodies.length = 0;
@@ -626,10 +654,10 @@ await test('reply style instructions reach the upstream and no-op leaves the bod
     });
     assert.equal(replay.status, 200);
     const replaySystem = chatBodies.find((item) => item.model === 'glm-5.3')?.messages.find((message) => message.role === 'system');
-    assert.equal((replaySystem.content.match(/\[norouter reply style\]/g) || []).length, 1, 'replayed history must not duplicate the instruction');
+    assert.equal((replaySystem.content.match(/\[norouter reply style\]/g) || []).length, 3, 'replayed history must not duplicate the instruction');
 
     // All no-op: the upstream body must equal the client body exactly.
-    await fetch(`${base}/api/reply-filters`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ language: 'none', verbosity: 'balanced', coding: false }) });
+    await fetch(`${base}/api/reply-filters`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ language: 'none', verbosity: 'balanced', coding: false, focus: '', addressAs: '' }) });
     chatBodies.length = 0;
     const plain = await fetch(`${base}/v1/chat/completions`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -639,7 +667,7 @@ await test('reply style instructions reach the upstream and no-op leaves the bod
     const plainUpstream = chatBodies.find((item) => item.model === 'glm-5.3');
     assert.deepEqual(plainUpstream.messages, [{ role: 'user', content: 'plain' }], 'no-op filters must not alter the message list');
   } finally {
-    await fetch(`${base}/api/reply-filters`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ language: 'auto', verbosity: 'balanced', coding: false }) });
+    await fetch(`${base}/api/reply-filters`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ language: 'auto', verbosity: 'balanced', coding: false, focus: '', addressAs: '' }) });
     const account = (await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json()).items
       .find((item) => item.label === 'Reply style account');
     if (account) await fetch(`${base}/api/providers/codebuddy-cn/accounts/${account.id}`, { method: 'DELETE' });
@@ -647,15 +675,17 @@ await test('reply style instructions reach the upstream and no-op leaves the bod
 });
 
 await test('reply style instruction survives the Responses translation', async () => {
-  const settings = { language: 'en', verbosity: 'detailed', coding: true };
+  const settings = { language: 'en', verbosity: 'detailed', coding: true, focus: 'Stay on backend debugging.', addressAs: 'Dimas' };
   const body = applyReplyFilters({ model: 'cx/gpt-5.3-codex', messages: [{ role: 'user', content: 'hi' }] }, settings);
   const responses = toResponsesRequest(body);
   const system = responses.input.find((item) => item.role === 'system');
   assert.ok(system, 'responses input must carry the injected system message');
+  assert.match(system.content, /Operator focus: Stay on backend debugging\./);
+  assert.match(system.content, /Address the user as "Dimas"\./);
   assert.match(system.content, /Reply in English\./);
   assert.match(system.content, /Explain thoroughly/);
   assert.match(system.content, /Prefer short, minimal code/);
-  assert.equal((system.content.match(/\[norouter reply style\]/g) || []).length, 3, 'three instructions share three markers');
+  assert.equal((system.content.match(/\[norouter reply style\]/g) || []).length, 5, 'five instructions share five markers');
 });
 
 await test('dashboard password protection gates dashboard routes and rotates safely', async () => {
@@ -890,6 +920,9 @@ await test('settings exposes accessible tabs and Token Saver controls', async ()
   assert.match(html, /id="replyLanguageGrid"[^>]*role="listbox"/);
   assert.match(html, /id="replyVerbosity"[^>]*data-custom-select/);
   assert.match(html, /id="replyCoding"[^>]*type="checkbox"/);
+  assert.match(html, /id="replyFocus"[^>]*maxlength="2000"/);
+  assert.match(html, /id="replyAddressAs"[^>]*maxlength="60"/);
+  assert.match(html, /id="saveReplyInstructions"[^>]*type="button"/);
   assert.match(html, /id="replyFiltersNote"[^>]*role="status"/);
   assert.match(html, /id="tokenSaverPonytail"[^>]*type="checkbox"/);
   assert.match(html, /id="tokenSaverRtk"[^>]*type="checkbox"/);
@@ -4969,6 +5002,207 @@ await test('Antigravity OAuth routes fail closed without client credentials', as
   } finally {
     if (savedId !== undefined) process.env.ANTIGRAVITY_CLIENT_ID = savedId;
     if (savedSecret !== undefined) process.env.ANTIGRAVITY_CLIENT_SECRET = savedSecret;
+  }
+});
+
+await test('OAuth paste-link validation only accepts the provider callback', () => {
+  const provider = { oauth: { fixedPort: 1455, callbackPath: '/auth/callback' } };
+  const rejected = [
+    '',
+    'not a link',
+    'https://127.0.0.1:1455/auth/callback?code=x&state=y',
+    'http://example.com:1455/auth/callback?code=x&state=y',
+    'http://127.0.0.1:1456/auth/callback?code=x&state=y',
+    'http://127.0.0.1:1455/callback?code=x&state=y',
+    'http://127.0.0.1:1455/auth/callback?code=x',
+    `http://127.0.0.1:1455/auth/callback?code=x&state=y&pad=${'a'.repeat(5000)}`,
+  ];
+  for (const value of rejected) {
+    assert.throws(
+      () => parseOAuthRedirect(provider, value),
+      (err) => err.status === 400 && err.code === 'invalid_oauth_callback',
+      `must reject: ${value.slice(0, 48)}`,
+    );
+  }
+  assert.deepEqual(
+    parseOAuthRedirect(provider, 'http://localhost:1455/auth/callback?code=abc&state=s1'),
+    { state: 's1', code: 'abc', error: '', errorDescription: '' },
+    'localhost is the loopback alias the authorize URL uses',
+  );
+});
+
+await test('OAuth paste-link completion rejects foreign links and unknown states', async () => {
+  const complete = (provider, redirectUrl) => fetch(`${base}/api/providers/${provider}/oauth/complete`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ redirectUrl }),
+  });
+
+  const empty = await complete('codex', '');
+  assert.equal(empty.status, 400);
+  assert.match((await empty.json()).error.message, /Paste the login link/);
+
+  const foreign = await complete('antigravity', 'http://127.0.0.1:1455/auth/callback?code=x&state=y');
+  assert.equal(foreign.status, 400);
+  assert.match((await foreign.json()).error.message, /localhost:1456\/callback/);
+
+  const unknown = await complete('codex', 'http://127.0.0.1:1455/auth/callback?code=x&state=not-a-pending-state');
+  assert.equal(unknown.status, 400);
+  assert.match((await unknown.json()).error.message, /state expired or invalid/i);
+});
+
+await test('pasted Codex link redeems the code with the pending PKCE verifier', async () => {
+  const { createServer: createHttpServer } = await import('node:http');
+  const { createHash } = await import('node:crypto');
+  const jwt = testJwt({
+    email: 'paste-codex@example.com',
+    'https://api.openai.com/auth': { chatgpt_account_id: 'acct-paste-codex', chatgpt_plan_type: 'pro' },
+  });
+  let tokenBody = null;
+  const tokenServer = createHttpServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      tokenBody = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        access_token: jwt,
+        id_token: jwt,
+        refresh_token: 'refresh-paste-codex',
+        expires_in: 3600,
+      }));
+    });
+  });
+  await new Promise((resolve) => tokenServer.listen(0, '127.0.0.1', resolve));
+  // Port 0 keeps the fake callback server off the shared 1455. The pasted URL
+  // still has to name the same port, path and state.
+  const provider = {
+    id: 'codex-paste-test',
+    prefix: 'cpt',
+    oauth: {
+      clientId: 'smoke-codex-client',
+      authorizeUrl: 'https://auth.example.test/authorize',
+      tokenUrl: `http://127.0.0.1:${tokenServer.address().port}/token`,
+      scope: 'openid profile email offline_access',
+      codeChallengeMethod: 'S256',
+      fixedPort: 0,
+      callbackPath: '/auth/callback',
+    },
+  };
+  try {
+    const started = await startCodexOAuth(provider);
+    const authorize = new URL(started.authorizeUrl);
+    assert.equal(authorize.searchParams.get('redirect_uri'), 'http://127.0.0.1:0/auth/callback');
+    const challenge = authorize.searchParams.get('code_challenge');
+    const pasted = `http://127.0.0.1:0/auth/callback?code=pasted-code&state=${started.state}`;
+
+    const done = await completeCodexOAuth(provider, pasted);
+    assert.deepEqual(done, { status: 'complete' });
+    assert.equal(oauthStateStatus(started.state), 'complete');
+    assert.equal(tokenBody.get('code'), 'pasted-code');
+    assert.equal(tokenBody.get('redirect_uri'), 'http://127.0.0.1:0/auth/callback');
+    const verifier = tokenBody.get('code_verifier');
+    assert.ok(verifier, 'the exchange must send the PKCE verifier');
+    assert.equal(
+      createHash('sha256').update(verifier).digest('base64url'),
+      challenge,
+      'the pasted link must reuse the verifier from the start request',
+    );
+
+    const account = listAccounts('codex-paste-test', { pageSize: 100 }).items
+      .find((row) => row.uid === 'acct-paste-codex');
+    assert.ok(account, 'the pasted login must save the Codex account');
+    assert.equal(account.plan, 'pro');
+    deleteAccount(account.id);
+
+    await assert.rejects(
+      completeCodexOAuth(provider, pasted),
+      (err) => err.status === 400,
+      'a completed state must be consumed exactly once',
+    );
+  } finally {
+    tokenServer.close();
+  }
+});
+
+await test('pasted Antigravity link resolves the Google plan and project', async () => {
+  const { createServer: createHttpServer } = await import('node:http');
+  let tokenBody = null;
+  let userInfoAuth = '';
+  const server = createHttpServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const send = (body) => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(body));
+      };
+      if (req.url === '/token') {
+        tokenBody = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
+        return send({ access_token: 'ya29-paste-token', refresh_token: '1//paste-refresh', expires_in: 3600 });
+      }
+      if (req.url.startsWith('/userinfo')) {
+        userInfoAuth = String(req.headers.authorization || '');
+        return send({ email: 'paste-antigravity@example.com' });
+      }
+      if (req.url === '/loadCodeAssist') {
+        return send({
+          cloudaicompanionProject: 'project-paste',
+          currentTier: { id: 'free-tier' },
+          paidTier: { id: 'g1-pro-tier' },
+          allowedTiers: [{ id: 'g1-pro-tier', isDefault: true }],
+        });
+      }
+      if (req.url === '/onboardUser') {
+        return send({ done: true, response: { cloudaicompanionProject: 'project-paste' } });
+      }
+      res.writeHead(404);
+      res.end();
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const stubOrigin = `http://127.0.0.1:${server.address().port}`;
+  process.env.SMOKE_ANTIGRAVITY_CLIENT_ID = 'smoke-google-client';
+  process.env.SMOKE_ANTIGRAVITY_CLIENT_SECRET = 'smoke-google-secret';
+  const provider = {
+    id: 'antigravity-paste-test',
+    prefix: 'apt',
+    oauth: {
+      clientIdEnv: 'SMOKE_ANTIGRAVITY_CLIENT_ID',
+      clientSecretEnv: 'SMOKE_ANTIGRAVITY_CLIENT_SECRET',
+      authorizeUrl: 'https://accounts.example.test/authorize',
+      tokenUrl: `${stubOrigin}/token`,
+      userInfoUrl: `${stubOrigin}/userinfo`,
+      loadCodeAssistUrl: `${stubOrigin}/loadCodeAssist`,
+      onboardUserUrl: `${stubOrigin}/onboardUser`,
+      loadCodeAssistUserAgent: 'smoke-agent',
+      scopes: ['openid', 'email'],
+      fixedPort: 0,
+      callbackPath: '/callback',
+    },
+  };
+  try {
+    const started = await startAntigravityOAuth(provider);
+    const pasted = `http://localhost:0/callback?code=pasted-google-code&state=${started.state}`;
+
+    const done = await completeAntigravityOAuth(provider, pasted);
+    assert.deepEqual(done, { status: 'complete' });
+    assert.equal(antigravityOAuthStateStatus(started.state), 'complete');
+    assert.equal(tokenBody.get('code'), 'pasted-google-code');
+    assert.equal(tokenBody.get('client_secret'), 'smoke-google-secret');
+    assert.equal(tokenBody.get('redirect_uri'), 'http://localhost:0/callback');
+    assert.equal(userInfoAuth, 'Bearer ya29-paste-token');
+
+    const account = listAccounts('antigravity-paste-test', { pageSize: 100 }).items
+      .find((row) => row.uid === 'paste-antigravity@example.com');
+    assert.ok(account, 'the pasted login must save the Antigravity account');
+    assert.equal(account.plan, 'pro');
+    assert.equal(getAccountRow(account.id).project_id, 'project-paste');
+    deleteAccount(account.id);
+  } finally {
+    delete process.env.SMOKE_ANTIGRAVITY_CLIENT_ID;
+    delete process.env.SMOKE_ANTIGRAVITY_CLIENT_SECRET;
+    server.close();
   }
 });
 

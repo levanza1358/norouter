@@ -10,7 +10,7 @@ Dashboard shell is served by the same HTTP process. It uses HTML, CSS, and vanil
 - `/providers/:id`: provider detail.
 - `/usage`: persistent usage with Daily, Weekly, Monthly, and All time ranges, each showing totals, a bucket chart, and a model breakdown.
 - `/combos`: combo list, the global vision routing rule, and an Aliases and rules card — model aliases plus conditional routing rules evaluated top to bottom with the first match winning. A rule can match a request header, an API key, a minimum context size, or tool presence (conditions are ANDed), and it carries an ordered fallback chain; a target that no longer resolves is marked `Unavailable`.
-- `/settings`: theme, accent, connection details, request log, reset.
+- `/settings`: theme, accent, connection details, reply style, request log, reset.
 - `/api-keys`: multiple managed proxy keys, auto/custom token creation, persistent Show/Hide/Copy, edit/rotate, `/v1` protection toggle, expiry/request/token limits, an optional default model (used when a request omits `model`; clear it by emptying the field), and daily usage history.
 
 ## Provider detail tabs
@@ -25,7 +25,7 @@ Above the filters, **Account strategy** picks how requests spend the pool: `roun
 
 Add account and Bulk add open modal forms. Input first calls preview endpoint. Preview shows masked values, the name each new row will receive (`cbcn_1`, `cbcn_2`, …), and statuses (`new`, `duplicate`, `duplicate_input`, `invalid`). Edits invalidate old preview. Confirm performs the existing import endpoint. OAuth logins follow the same scheme (`cx_1`, `cx_2`, … for Codex; `ag_1`, `ag_2`, … for Antigravity).
 
-Codex and Antigravity open a chooser first: browser OAuth, or paste an existing token. Antigravity login uses Google OAuth with a fixed local callback on port 1456 and stores the bound Cloud Code project with the account; a failed start (missing `ANTIGRAVITY_CLIENT_ID`/`ANTIGRAVITY_CLIENT_SECRET`, or the port already in use) returns a message instead of opening a tab. Logging in again with an account that is already pooled refreshes that row (tokens, tier, project binding) instead of adding a second row. The panel shows the upstream deprecation warning: the Cloud Code gateway is undocumented and flagged deprecated (`RISK_NOTICE`), so Google can change or block it without notice.
+Codex and Antigravity open a chooser first: browser OAuth, or paste an existing token. Antigravity login uses Google OAuth with a fixed local callback on port 1456 and stores the bound Cloud Code project with the account; a failed start (missing `ANTIGRAVITY_CLIENT_ID`/`ANTIGRAVITY_CLIENT_SECRET`, or the port already in use) returns a message instead of opening a tab. Starting a browser login opens a small waiting window at `GET /oauth/wait?provider=…` next to the provider tab. It follows the login on its own and shows the result; it also carries a field for the final redirect URL pasted from the browser address bar, so a dashboard running on another machine still completes the login when the loopback callback cannot reach this server. If the window is blocked or closed, the dialog shows the same paste field inline. A window left open from an earlier attempt says the login is gone instead of polling a dead state. Servers started before this route existed need a restart to serve it. The callback port (1455 for Codex, 1456 for Antigravity) stays bound until the login is cancelled, expires, or the server exits. Logging in again with an account that is already pooled refreshes that row (tokens, tier, project binding) instead of adding a second row.
 
 ### Models
 
@@ -108,6 +108,10 @@ Settings > Scheduled upkeep re-reads expiring tokens, quota, and the model catal
 - The interval button applies the typed value immediately; changing it rebuilds a running timer without restarting the server.
 - **Run all now** POSTs every task ID and works even with the scheduler disabled, so credentials can be verified on demand. The note reports `N tasks finished in X ms` or the failing tasks.
 - Rows show the last summary and how long it took; nothing about tokens, prompts, or responses is stored.
+
+## Reply style
+
+Settings > Reply style adds a system message to every request — Chat Completions, Responses, and Anthropic Messages — so Cursor, Codex, and the CLI follow the same guidance. Language, detail level, and Coding focus save immediately. **Focus** holds up to 2,000 characters of custom guidance, one instruction per line; **Call me** holds up to 60 characters with the name the model should use for the operator. **Save instructions** applies both text fields; leaving them empty removes them. When every field is a no-op, requests pass through unchanged.
 
 ## Appearance and motion
 

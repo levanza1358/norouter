@@ -26,6 +26,23 @@ Token Saver defaults to `{ ponytail: { enabled: false }, rtk: { enabled: false }
 - **Caveman** injects a terse-output instruction; it stacks with Ponytail.
 - **Headroom** is intentionally not included: it requires an external proxy (`pip install`).
 
+## Reply style
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/reply-filters` | Current `{ language, verbosity, coding, focus, addressAs }`. |
+| PATCH | `/api/reply-filters` | Any subset of those fields; 400 on invalid values. |
+
+Defaults are `{ "language": "auto", "verbosity": "balanced", "coding": false, "focus": "", "addressAs": "" }`. The resulting lines are appended to the first system message (or a new one is created) for `/v1/chat/completions`, `/v1/responses`, and `/v1/messages` after request translation. Every injected line carries the `[norouter reply style]` marker, so replaying returned history does not duplicate it; when every field is a no-op the request body is untouched.
+
+- `language`: `auto`, `none`, or a two-letter catalog code.
+- `verbosity`: `balanced`, `concise`, or `detailed`.
+- `coding`: boolean; prefers short, minimal code.
+- `focus`: free-form guidance, at most 2,000 characters; each non-empty line is added as its own instruction.
+- `addressAs`: the name or nickname the model should use for the operator, at most 60 characters on a single line.
+
+These settings change the system prompt sent upstream; they are stored in the local SQLite `meta` table, not in `.env`.
+
 Managed keys are stored as plaintext in SQLite so the dashboard can show, hide, copy, and edit them. Create accepts `name`, optional custom `secret`, optional future `expiresAt`, `requestLimit`, `tokenLimit`, and `defaultModel`; token limits accept integer counts or compact suffixes `K`, `M`, `B`, and `T` (for example `1M` = 1,000,000 tokens); the dashboard exposes these as a unit dropdown; `None` disables token-limit input, and request limits use a separate enable toggle. `defaultModel` may name a model or a combo; it is stored canonically and only fills a request that sends no `model` while the key authenticates the call (see [`openai.md`](openai.md#aliases-routing-rules-and-per-key-defaults)). Omitted limits are unlimited. Request limits count admitted chat requests; token limits count reported prompt plus completion tokens. The dashboard page may require its optional page password, but `/api` routes remain unauthenticated; protect the all-interface bind with a firewall/reverse proxy or set `HOST=127.0.0.1`, and treat its database, WAL/SHM, and backups as secret material.
 
 ## Autostart
@@ -309,12 +326,16 @@ Browser login is provider-specific and only exists for the shipped providers tha
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/providers/codex/oauth/start` | returns `{ authorizeUrl, state }`; opens the PKCE callback server on port 1455 |
+| POST | `/api/providers/codex/oauth/start` | returns `{ authorizeUrl, state, callbackUrl }`; opens the PKCE callback server on port 1455 |
 | GET | `/api/providers/codex/oauth/status/:state` | `{ status: "unknown"\|"pending"\|"complete"\|"error" }` |
 | POST | `/api/providers/codex/oauth/cancel/:state` | `{ cancelled: true }` |
-| POST | `/api/providers/antigravity/oauth/start` | returns `{ authorizeUrl, state }`; opens the fixed callback on port 1456 |
+| POST | `/api/providers/codex/oauth/complete` | body `{ redirectUrl }`; redeems the pasted callback link, returns `{ status: "complete" }` |
+| POST | `/api/providers/antigravity/oauth/start` | returns `{ authorizeUrl, state, callbackUrl }`; opens the fixed callback on port 1456 |
 | GET | `/api/providers/antigravity/oauth/status/:state` | `{ status: "unknown"\|"pending"\|"complete"\|"error" }` |
 | POST | `/api/providers/antigravity/oauth/cancel/:state` | `{ cancelled: true }` |
+| POST | `/api/providers/antigravity/oauth/complete` | body `{ redirectUrl }`; redeems the pasted callback link, returns `{ status: "complete" }` |
+
+The `complete` endpoint is the fallback for a browser that cannot reach the loopback callback, for example when the dashboard runs on another machine. It accepts only an `http` loopback URL (`127.0.0.1`, `localhost`, `::1`) on the provider's fixed port and exact callback path, and the `state` must still be pending. It consumes that state once and runs the same exchange and save path as the callback. The authorization code, tokens, and pasted URL are never returned or logged.
 
 Antigravity start fails closed with 409 when `ANTIGRAVITY_CLIENT_ID` or `ANTIGRAVITY_CLIENT_SECRET` is missing, or when port 1456 is in use; it never embeds a client secret. A completed login creates an account bound to the Cloud Code `project_id`, and the dashboard polls `status` until `complete`. Neither flow returns tokens in the status response.
 

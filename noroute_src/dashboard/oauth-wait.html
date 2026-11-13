@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-accent="blue">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>norouter · OAuth login</title>
+<meta name="page-type" content="software">
+<meta name="description" content="Finish a Codex or Antigravity OAuth login, or paste the final callback link when the browser cannot reach the local port.">
+<script>
+  // Match the dashboard theme before the first paint.
+  try {
+    var t = localStorage.getItem('norouter.theme');
+    var a = localStorage.getItem('norouter.accent');
+    if (t === 'light' || t === 'dark' || t === 'black') document.documentElement.dataset.theme = t;
+    var legacy = { violet: 'blue', purple: 'blue', indigo: 'blue', teal: 'blue', green: 'blue', cyan: 'blue', orange: 'amber', red: 'rose' };
+    if (legacy[a]) a = legacy[a];
+    if (['blue', 'amber', 'rose', 'ink', 'graphite', 'slate'].indexOf(a) !== -1) document.documentElement.dataset.accent = a;
+  } catch (e) {}
+</script>
+<link rel="icon" type="image/svg+xml" href="/assets/icon.svg">
+<link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body class="oauth-wait-page">
+<main class="oauth-wait-shell">
+  <header class="oauth-wait-top">
+    <span class="oauth-wait-logo" aria-hidden="true"><svg viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#000"/><path d="M20 45V19l24 26V19" fill="none" stroke="#fff" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+    <div>
+      <p class="oauth-wait-kicker">OAuth login</p>
+      <h1 id="waitTitle">Finish the login</h1>
+    </div>
+  </header>
+  <p class="oauth-wait-lede" id="waitLede">Complete the sign-in in the other window. This window updates on its own.</p>
+  <p class="oauth-wait-callback" id="waitCallback" hidden></p>
+  <p class="oauth-wait-progress" id="waitProgress">
+    <span class="oauth-wait-dot" id="waitDot" aria-hidden="true"></span>
+    <span id="waitStatus" role="status" aria-live="polite">Waiting for the callback…</span>
+  </p>
+  <a class="oauth-wait-open btn btn-ghost" id="waitOpenSignIn" target="_blank" rel="noopener" hidden>Open the sign-in page</a>
+  <form class="oauth-wait-form" id="waitLinkForm" autocomplete="off">
+    <label class="apfield">
+      <span>Final login link <em>paste it if the browser did not come back</em></span>
+      <input name="redirectUrl" id="waitLink" type="url" inputmode="url" spellcheck="false" autocomplete="off" placeholder="http://127.0.0.1:…/callback?code=…&amp;state=…">
+    </label>
+    <button class="btn btn-primary" type="submit" id="waitSubmit">Complete login</button>
+  </form>
+  <div class="oauth-wait-actions">
+    <button class="btn btn-ghost" id="waitCancel" type="button">Cancel login</button>
+    <button class="btn btn-ghost" id="waitClose" type="button" hidden>Close window</button>
+  </div>
+</main>
+<script src="/assets/oauth-wait.js"></script>
+</body>
+</html>

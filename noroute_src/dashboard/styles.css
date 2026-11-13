@@ -1460,7 +1460,8 @@ code.url {
 }
 
 .apfield input,
-.apfield select {
+.apfield select,
+.apfield textarea {
   padding: 9px 12px;
   border-radius: 12px;
   border: 1px solid var(--line-strong);
@@ -1474,10 +1475,14 @@ code.url {
 
 .apfield select { cursor: pointer; }
 
-.apfield input::placeholder { color: var(--faint); }
+.apfield textarea { resize: vertical; min-height: 76px; line-height: 1.5; }
+
+.apfield input::placeholder,
+.apfield textarea::placeholder { color: var(--faint); }
 
 .apfield input:focus,
-.apfield select:focus {
+.apfield select:focus,
+.apfield textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-glow);
   background: var(--surface);
@@ -2015,6 +2020,9 @@ pre.curl {
 .reply-fields .key-toggle { align-self: flex-start; margin-top: 4px; min-height: 42px; }
 .reply-fields .desc { margin: 0; }
 .reply-fields .apfield { min-width: 0; }
+.reply-custom { display: grid; gap: 14px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.reply-custom .key-field-label { justify-content: flex-start; }
+.reply-custom-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 12px; }
 .settings-panel .card { min-height: 0; }
 .dashboard-auth-card { display: flex; flex-direction: column; }
 .dashboard-auth-card .card-head { align-items: flex-start; margin-bottom: 12px; }
@@ -2093,6 +2101,7 @@ pre.curl {
   .settings-panel[data-settings-panel="token-saver"] > .sgrid,
   .settings-panel[data-settings-panel="reply"] > .sgrid { grid-template-columns: minmax(0, 1fr); }
   .reply-fields { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .reply-custom-row { grid-template-columns: minmax(0, 1fr); }
   .budget-group { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
 }
 
@@ -3404,8 +3413,49 @@ a.prow:hover .pdot { transform: scale(1.15); }
 .oauth-choice strong { font-size: 13px; }
 .oauth-choice span { color: var(--muted); font-size: 11.5px; line-height: 1.45; }
 .oauth-choice-actions { display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
-#providerOAuthRisk { margin: 0 0 12px; }
+.oauth-choice:disabled { opacity: .55; cursor: default; transform: none; }
+.oauth-choice:disabled:hover { border-color: var(--line-strong); background: var(--surface-2); }
+.oauth-wait { display: grid; gap: 10px; margin: 0 0 14px; padding: 14px; border: 1px dashed var(--line-strong); border-radius: 15px; background: var(--surface-2); }
+.oauth-wait[hidden] { display: none; }
+.oauth-wait-head { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--muted); font-size: 11.5px; }
+.oauth-wait-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--accent); animation: oauth-wait-pulse 1.6s ease-in-out infinite; }
+@keyframes oauth-wait-pulse { 0%, 100% { opacity: .35; transform: scale(.85); } 50% { opacity: 1; transform: scale(1); } }
+.oauth-link-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+.oauth-link-form .apfield { margin: 0; }
+@media (max-width: 640px) { .oauth-link-form { grid-template-columns: minmax(0, 1fr); } }
 .account-modal-view .apactions { grid-column: 1 / -1; }
+
+/* ---------- OAuth wait window ---------- */
+/* Standalone popup opened next to the provider login. It reuses the dashboard
+   tokens and controls, so it follows the saved theme without extra chrome. */
+.oauth-wait-page {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  margin: 0;
+  padding: 18px;
+  background: var(--bg);
+}
+.oauth-wait-page [hidden] { display: none !important; }
+.oauth-wait-shell { display: grid; gap: 14px; width: min(430px, 100%); padding: 20px; border: 1px solid var(--line-strong); border-radius: 20px; background: var(--surface); }
+.oauth-wait-top { display: flex; align-items: center; gap: 12px; }
+.oauth-wait-logo { flex: 0 0 auto; width: 36px; height: 36px; }
+.oauth-wait-logo svg { display: block; width: 36px; height: 36px; border-radius: 10px; }
+.oauth-wait-kicker { margin: 0; color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; }
+.oauth-wait-shell h1 { margin: 3px 0 0; font-size: 17px; line-height: 1.25; letter-spacing: -.02em; }
+.oauth-wait-lede { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.oauth-wait-callback { margin: 0; color: var(--muted); font-family: var(--font-mono); font-size: 10.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.oauth-wait-progress { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 12px; border: 1px dashed var(--line-strong); border-radius: 12px; background: var(--surface-2); color: var(--ink-2); font-size: 11.5px; line-height: 1.45; }
+.oauth-wait-progress.is-ok { border-style: solid; background: var(--ok-soft); color: var(--ok-ink); }
+.oauth-wait-progress.is-bad { border-color: var(--bad); color: var(--bad-ink); }
+.oauth-wait-dot.is-idle { animation: none; opacity: .55; }
+.oauth-wait-form { display: grid; gap: 10px; margin: 0; }
+.oauth-wait-form .apfield { margin: 0; }
+.oauth-wait-form .btn { justify-self: start; }
+.oauth-wait-open { justify-self: start; }
+.oauth-wait-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.oauth-wait-actions .btn { padding: 7px 12px; font-size: 11.5px; }
+@media (max-width: 380px) { .oauth-wait-form .btn { width: 100%; } }
 
 .account-preview[hidden] { display: none; }
 .account-preview-summary { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }

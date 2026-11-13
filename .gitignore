@@ -14,3 +14,6 @@ nul
 # Local agent state and scratch browser profiles
 .zcode/plans/
 .taste-skill/
+
+# Design-skill scratch output
+tiles/

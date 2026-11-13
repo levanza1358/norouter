@@ -28,6 +28,18 @@ export function handleDashboard(req, res, status = 200) {
   res.end(html);
 }
 
+// Standalone window opened next to the provider login. It is not the dashboard
+// shell: it only waits for the OAuth state and offers the paste fallback.
+export function handleOAuthWaitPage(req, res) {
+  const html = readFileSync(join(DIR, 'oauth-wait.html'), 'utf8');
+  res.writeHead(200, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-store',
+    'content-length': Buffer.byteLength(html),
+  });
+  res.end(html);
+}
+
 export function handleAsset(pathname, req, res) {
   const type = ASSETS[pathname];
   if (type) {

@@ -36,17 +36,34 @@ $('cancelProviderOAuth')?.addEventListener('click', async () => {
   const note = $('providerOAuthNote');
   const providerId = detail?.provider?.id;
   if (providerId && note?.dataset.state) await fetch(`/api/providers/${encodeURIComponent(providerId)}/oauth/cancel/${encodeURIComponent(note.dataset.state)}`, { method: 'POST' }).catch(() => {});
-  clearInterval(oauthTimer);
-  oauthTimer = null;
-  if (note) { note.textContent = 'OAuth cancelled.'; delete note.dataset.state; }
+  finishProviderOAuth(note, 'OAuth cancelled.');
 });
 $('startProviderOAuth')?.addEventListener('click', async () => {
   const note = $('providerOAuthNote');
   const providerId = detail?.provider?.id;
+  const link = $('providerOAuthLink');
   if (!providerId) return;
-  if (note) note.textContent = 'Starting secure local OAuth…';
-  // Claim the tab while the click is still active; browsers treat a window
-  // opened after the fetch below as a popup and block it.
+  // Replacing a pending login: stop polling and retire the old state first.
+  if (note?.dataset.state) {
+    await fetch(`/api/providers/${encodeURIComponent(providerId)}/oauth/cancel/${encodeURIComponent(note.dataset.state)}`, { method: 'POST' }).catch(() => {});
+    delete note.dataset.state;
+  }
+  clearInterval(oauthTimer);
+  oauthTimer = null;
+  closeOAuthWaitWindow();
+  clearOAuthWaitInfo(providerId);
+  detailNote(note, 'Starting secure local OAuth…');
+  const attempt = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  // Open both windows while the click is still active; browsers treat a
+  // window opened after the fetch below as a popup and block it. The small
+  // window starts at its real page so it still works when the browser does not
+  // return its handle; it picks up the login from localStorage once the start
+  // request below succeeds. The tab is the provider's login page.
+  const waitWin = window.open(`/oauth/wait?provider=${encodeURIComponent(providerId)}`, 'norouter-oauth-wait', 'popup=yes,width=460,height=660');
+  if (waitWin) {
+    waitWin.opener = null;
+    oauthWaitWindow = waitWin;
+  }
   const tab = window.open('about:blank', '_blank');
   if (tab) tab.opener = null;
   try {
@@ -55,26 +72,87 @@ $('startProviderOAuth')?.addEventListener('click', async () => {
     if (!response.ok) throw new Error(body.error?.message || 'Could not start OAuth.');
     if (tab) tab.location.href = body.authorizeUrl;
     else window.open(body.authorizeUrl, '_blank', 'noopener');
-    if (note) { note.textContent = 'Complete login in the new tab. Waiting for the local callback…'; note.dataset.state = body.state; }
+    storeOAuthPending(providerId, { attempt, state: body.state, authorizeUrl: body.authorizeUrl, callbackUrl: body.callbackUrl });
+    if (link) link.placeholder = `${body.callbackUrl || 'http://127.0.0.1'}?code=…&state=…`;
+    if (note) {
+      note.dataset.provider = providerId;
+      note.dataset.state = body.state;
+      note.dataset.attempt = attempt;
+      detailNote(note, 'Complete the login in the waiting window. It updates on its own.');
+    }
+    let inlineFallback = false;
+    let checks = 0;
+    const showInlineFallback = () => {
+      inlineFallback = true;
+      setProviderOAuthWaiting(true);
+      if (note) detailNote(note, 'Complete login in the new tab. Paste the callback link below if it does not come back.');
+    };
+    setProviderOAuthWaiting(true, false);
     clearInterval(oauthTimer);
     oauthTimer = setInterval(async () => {
       const statusResponse = await fetch(`/api/providers/${encodeURIComponent(providerId)}/oauth/status/${encodeURIComponent(body.state)}`).catch(() => null);
       const status = await statusResponse?.json().catch(() => ({}));
       if (status?.status === 'complete') {
-        clearInterval(oauthTimer);
-        oauthTimer = null;
-        if (note) note.textContent = oauthCopyFor(detail?.provider).done;
+        finishProviderOAuth(note, oauthCopyFor(detail?.provider).done);
         await loadDetail();
         setAccountModal(false);
-      } else if (status?.status === 'unknown') {
-        clearInterval(oauthTimer);
-        oauthTimer = null;
-        if (note) note.textContent = 'OAuth expired or was cancelled. Start again if needed.';
+        return;
+      }
+      if (status?.status === 'unknown') {
+        finishProviderOAuth(note, 'OAuth expired or was cancelled. Start again if needed.');
+        return;
+      }
+      checks += 1;
+      // Some embedded browsers hide the window handle even though the page
+      // opened. Its heartbeat in localStorage still proves it is alive, and a
+      // missing heartbeat brings back the dialog's own paste field.
+      const waitAlive = (oauthWaitWindow && !oauthWaitWindow.closed) || oauthWaitAlive(providerId, attempt);
+      if (!waitAlive) {
+        oauthWaitWindow = null;
+        if (!inlineFallback && checks >= 1) showInlineFallback();
+      } else if (inlineFallback) {
+        inlineFallback = false;
+        setProviderOAuthWaiting(true, false);
       }
     }, 1500);
   } catch (err) {
     if (tab) tab.close();
-    if (note) note.textContent = err.message;
+    closeOAuthWaitWindow();
+    clearOAuthWaitInfo(providerId);
+    setProviderOAuthWaiting(false);
+    detailNote(note, err.message, 'bad');
+  }
+});
+$('providerOAuthLinkForm')?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const note = $('providerOAuthNote');
+  const providerId = detail?.provider?.id;
+  const input = $('providerOAuthLink');
+  const submit = event.currentTarget.querySelector('button[type="submit"]');
+  const redirectUrl = input?.value.trim() || '';
+  if (!providerId) return;
+  if (!redirectUrl) {
+    detailNote(note, 'Paste the final login link first.', 'bad');
+    input?.focus();
+    return;
+  }
+  if (submit) submit.disabled = true;
+  detailNote(note, 'Completing login…');
+  try {
+    const response = await fetch(`/api/providers/${encodeURIComponent(providerId)}/oauth/complete`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ redirectUrl }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error?.message || `Could not complete login (${response.status}).`);
+    finishProviderOAuth(note, oauthCopyFor(detail?.provider).done);
+    await loadDetail();
+    setAccountModal(false);
+  } catch (err) {
+    detailNote(note, err.message, 'bad');
+  } finally {
+    if (submit) submit.disabled = false;
   }
 });
 $('closeAccountModal')?.addEventListener('click', closeAccountModal);

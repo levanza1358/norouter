@@ -4,6 +4,7 @@ import http from 'node:http';
 
 import { createAccount, setAccountProject } from './accounts.js';
 import { antigravityTier } from './antigravity-quota.js';
+import { parseOAuthRedirect } from './oauth-callback.js';
 import { normalizePlan } from './plan.js';
 
 const states = new Map();
@@ -75,7 +76,7 @@ async function exchange(provider, code) {
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok || !body.access_token) {
-    throw new Error(body.error_description || 'Google rejected the authorization code. Log in again.');
+    throw Object.assign(new Error(body.error_description || 'Google rejected the authorization code. Log in again.'), { status: 400 });
   }
   return body;
 }
@@ -144,20 +145,56 @@ function donePage(projectId) {
   return `<!doctype html><title>norouter</title><p>Antigravity login complete. You can close this tab.</p>${note}<script>window.close()</script>`;
 }
 
+function takeState(provider, state) {
+  cleanup();
+  const entry = state ? states.get(state) : null;
+  if (!entry || entry.providerId !== provider.id) {
+    throw Object.assign(new Error('OAuth state expired or invalid. Start the login again.'), { status: 400 });
+  }
+  states.delete(state);
+  return entry;
+}
+
+// Exchange the code, resolve the Cloud Code project and save the account. The
+// loopback callback and the pasted-link fallback both end here.
+async function redeem(provider, entry, code) {
+  const token = await exchange(provider, code);
+  if (!token.refresh_token) {
+    throw Object.assign(new Error('Google did not return a refresh token. Log in again and keep offline access enabled.'), { status: 400 });
+  }
+  const profile = await userInfo(provider, token.access_token);
+  const { projectId, tierId, plan } = await loadProject(provider, token.access_token);
+  // Leave the label unset so the pool names the account from the provider
+  // prefix (`ag_1`, `ag_2`, …) like every other import path. The Google email
+  // is the account identity: a repeated login replaces that row's tokens
+  // instead of adding a second account for the same person.
+  const result = createAccount(provider.id, {
+    kind: 'access_token',
+    access_token: token.access_token,
+    refresh_token: token.refresh_token,
+    uid: profile.email || '',
+    projectId,
+    plan,
+  }, { prefix: provider.prefix, expiresIn: token.expires_in, updateExisting: true });
+  if (result.error) throw Object.assign(new Error('Could not save the Antigravity account.'), { status: 400 });
+  if (result.id) onboardInBackground(provider, token.access_token, tierId, result.id, projectId);
+  completed.set(entry.state, { createdAt: Date.now(), status: 'complete' });
+  return { projectId };
+}
+
 async function callback(req, res, provider) {
   const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
   if (!localHost(req.headers.host) || url.pathname !== provider.oauth.callbackPath) {
     res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
     return res.end('Invalid local OAuth callback.');
   }
-  cleanup();
-  const state = url.searchParams.get('state');
-  const entry = state ? states.get(state) : null;
-  if (!entry || entry.providerId !== provider.id) {
+  let entry;
+  try {
+    entry = takeState(provider, url.searchParams.get('state'));
+  } catch (err) {
     res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
-    return res.end('OAuth state expired or invalid.');
+    return res.end(err.message);
   }
-  states.delete(state);
   const denied = url.searchParams.get('error');
   if (denied) {
     res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
@@ -169,27 +206,7 @@ async function callback(req, res, provider) {
     return res.end('OAuth authorization was cancelled.');
   }
   try {
-    const token = await exchange(provider, code);
-    if (!token.refresh_token) {
-      throw new Error('Google did not return a refresh token. Log in again and keep offline access enabled.');
-    }
-    const profile = await userInfo(provider, token.access_token);
-    const { projectId, tierId, plan } = await loadProject(provider, token.access_token);
-    // Leave the label unset so the pool names the account from the provider
-    // prefix (`ag_1`, `ag_2`, …) like every other import path. The Google email
-    // is the account identity: a repeated login replaces that row's tokens
-    // instead of adding a second account for the same person.
-    const result = createAccount(provider.id, {
-      kind: 'access_token',
-      access_token: token.access_token,
-      refresh_token: token.refresh_token,
-      uid: profile.email || '',
-      projectId,
-      plan,
-    }, { prefix: provider.prefix, expiresIn: token.expires_in, updateExisting: true });
-    if (result.error) throw new Error('Could not save the Antigravity account.');
-    if (result.id) onboardInBackground(provider, token.access_token, tierId, result.id, projectId);
-    completed.set(entry.state, { createdAt: Date.now(), status: 'complete' });
+    const { projectId } = await redeem(provider, entry, code);
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     return res.end(donePage(projectId));
   } catch (err) {
@@ -227,7 +244,23 @@ export async function startAntigravityOAuth(provider) {
     access_type: 'offline',
     prompt: 'consent',
   });
-  return { authorizeUrl: `${provider.oauth.authorizeUrl}?${params}`, state };
+  return { authorizeUrl: `${provider.oauth.authorizeUrl}?${params}`, state, callbackUrl: redirectUri(provider) };
+}
+
+// Manual fallback for a browser that cannot reach the loopback callback (for
+// example a dashboard running on another machine). The pasted URL is validated
+// against this provider's callback, and the state must still be pending.
+export async function completeAntigravityOAuth(provider, redirectUrl) {
+  const params = parseOAuthRedirect(provider, redirectUrl);
+  const entry = takeState(provider, params.state);
+  if (params.error) {
+    throw Object.assign(new Error(params.errorDescription || 'Google login was cancelled.'), { status: 400 });
+  }
+  if (!params.code) {
+    throw Object.assign(new Error('That link has no authorization code. Copy the full callback URL.'), { status: 400 });
+  }
+  await redeem(provider, entry, params.code);
+  return { status: 'complete' };
 }
 
 export function cancelAntigravityOAuthState(state) {

@@ -8,7 +8,7 @@ Codex is registered as provider `codex` with alias `cx`.
 - OAuth access tokens are refreshed proactively and refresh-token rotation is treated as one-time use.
 - The provider requires an account and is not used until an operator adds one.
 
-Codex OAuth state and PKCE verifier live only in process memory for ten minutes and are single-use. Tokens are stored in the local account pool; they are never returned or logged. The local callback rejects non-local Host headers.
+Codex OAuth state and PKCE verifier live only in process memory for ten minutes and are single-use. If the browser cannot reach the loopback callback (for example the dashboard runs on another machine), paste the final callback URL into the waiting window instead; the server accepts only the exact local callback and a still-pending state, then redeems the code. Tokens are stored in the local account pool; they are never returned or logged. The local callback rejects non-local Host headers.
 
 Responses support is intentionally limited to the translator's documented chat subset. Unsupported request fields return a clear 400 rather than being silently discarded.
 

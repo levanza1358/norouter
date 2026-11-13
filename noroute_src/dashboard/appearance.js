@@ -240,6 +240,12 @@ $('replyVerbosity')?.addEventListener('change', (event) => {
 $('replyCoding')?.addEventListener('change', (event) => {
   patchReplyFilters({ coding: event.currentTarget.checked });
 });
+$('saveReplyInstructions')?.addEventListener('click', saveReplyInstructions);
+$('replyAddressAs')?.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  saveReplyInstructions();
+});
 
 const resetBtn = $('resetAppearance');
 if (resetBtn) {

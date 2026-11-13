@@ -5,7 +5,11 @@ const KEYS = {
   language: 'reply_filters.language',
   verbosity: 'reply_filters.verbosity',
   coding: 'reply_filters.coding',
+  focus: 'reply_filters.focus',
+  addressAs: 'reply_filters.address_as',
 };
+const FOCUS_MAX = 2000;
+const ADDRESS_MAX = 60;
 
 // Common-language catalog. Flags are representative regions, not language ownership.
 export const REPLY_LANGUAGES = [
@@ -78,10 +82,10 @@ const LANGUAGE_INSTRUCTIONS = {
   auto: `${MARKER} Reply in the same language as the user's most recent message.`,
 };
 const VERBOSITY_INSTRUCTIONS = {
-  concise: `${MARKER} Answer directly and briefly; get to the point; skip boilerplate and filler.`,
+  concise: `${MARKER} Answer directly and briefly; get to the point; skip boilerplate and filler. No preamble, no restating the question, no closing summary, no follow-up questions unless you are blocked.`,
   detailed: `${MARKER} Explain thoroughly; include reasoning and trade-offs.`,
 };
-const CODING_INSTRUCTION = `${MARKER} Prefer short, minimal code; no unnecessary comments or explanation unless the user asks.`;
+const CODING_INSTRUCTION = `${MARKER} Prefer short, minimal code; no unnecessary comments or explanation unless the user asks. Lead with the code or the answer, then at most one short note. No tutorials, no alternatives, no recap.`;
 
 function languageInstruction(code) {
   if (code === 'auto') return LANGUAGE_INSTRUCTIONS.auto;
@@ -105,12 +109,18 @@ function readBoolean(key, fallback = false) {
   return value === 'true' ? true : value === 'false' ? false : fallback;
 }
 
+function readText(key) {
+  return String(readValue(key, '') || '').replace(/\r\n?/g, '\n').trim();
+}
+
 export function getReplyFiltersSettings() {
   const verbosity = readValue(KEYS.verbosity, 'balanced');
   return {
     language: readLanguage(),
     verbosity: VERBOSITIES.includes(verbosity) ? verbosity : 'balanced',
     coding: readBoolean(KEYS.coding, false),
+    focus: readText(KEYS.focus),
+    addressAs: readText(KEYS.addressAs),
   };
 }
 
@@ -120,6 +130,8 @@ export function setReplyFiltersSettings(patch = {}) {
     language: patch.language ?? current.language,
     verbosity: patch.verbosity ?? current.verbosity,
     coding: patch.coding ?? current.coding,
+    focus: patch.focus === undefined ? current.focus : String(patch.focus).replace(/\r\n?/g, '\n').trim(),
+    addressAs: patch.addressAs === undefined ? current.addressAs : String(patch.addressAs).trim(),
   };
   for (const [field, key] of Object.entries(KEYS)) {
     getDb().prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
@@ -132,15 +144,31 @@ export function validateReplyFiltersPatch(body = {}) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return 'Request body must be an object.';
   const keys = Object.keys(body);
   const allowed = new Set(Object.keys(KEYS));
-  if (keys.some((key) => !allowed.has(key))) return 'Only language, verbosity and coding settings are supported.';
+  if (keys.some((key) => !allowed.has(key))) return 'Only language, verbosity, coding, focus and addressAs settings are supported.';
   if (body.language !== undefined && !LANGUAGE_CODES.has(body.language)) return 'language must be a supported language code, auto, or none.';
   if (body.verbosity !== undefined && !VERBOSITIES.includes(body.verbosity)) return `verbosity must be one of: ${VERBOSITIES.join(', ')}.`;
   if (body.coding !== undefined && typeof body.coding !== 'boolean') return 'coding must be boolean.';
+  if (body.focus !== undefined) {
+    if (typeof body.focus !== 'string') return 'focus must be a string.';
+    if (body.focus.length > FOCUS_MAX) return `focus must be ${FOCUS_MAX} characters or fewer.`;
+    if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(body.focus)) return 'focus contains unsupported control characters.';
+  }
+  if (body.addressAs !== undefined) {
+    if (typeof body.addressAs !== 'string') return 'addressAs must be a string.';
+    if (body.addressAs.length > ADDRESS_MAX) return `addressAs must be ${ADDRESS_MAX} characters or fewer.`;
+    if (/[\r\n\u0000-\u001f]/.test(body.addressAs)) return 'addressAs must be a single line.';
+  }
   return null;
 }
 
 export function buildInstruction(settings = {}) {
   const lines = [];
+  const focusLines = String(settings.focus || '').replace(/\r\n?/g, '\n').split('\n').map((line) => line.trim()).filter(Boolean);
+  if (focusLines.length) {
+    lines.push(`${MARKER} Operator focus: ${focusLines[0]}`);
+    for (const line of focusLines.slice(1)) lines.push(`${MARKER} ${line}`);
+  }
+  if (settings.addressAs) lines.push(`${MARKER} Address the user as ${JSON.stringify(settings.addressAs)}.`);
   const language = languageInstruction(settings.language);
   if (language) lines.push(language);
   const verbosity = VERBOSITY_INSTRUCTIONS[settings.verbosity];

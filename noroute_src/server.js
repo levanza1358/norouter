@@ -28,9 +28,15 @@ import { handleResponses } from './routes/responses.js';
 import { handleMessages } from './routes/messages.js';
 import { handleImageGeneration } from './routes/images.js';
 import { handleEmbeddings } from './routes/embeddings.js';
-import { handleCodexOAuthCancel, handleCodexOAuthStart, handleCodexOAuthStatus } from './routes/codex-oauth.js';
+import {
+  handleCodexOAuthCancel,
+  handleCodexOAuthComplete,
+  handleCodexOAuthStart,
+  handleCodexOAuthStatus,
+} from './routes/codex-oauth.js';
 import {
   handleAntigravityOAuthCancel,
+  handleAntigravityOAuthComplete,
   handleAntigravityOAuthStart,
   handleAntigravityOAuthStatus,
 } from './routes/antigravity-oauth.js';
@@ -51,7 +57,7 @@ import {
   handleUpdateCombo,
   handleUpdateVisionRouting,
 } from './routes/combos.js';
-import { handleAsset, handleDashboard } from './routes/dashboard.js';
+import { handleAsset, handleDashboard, handleOAuthWaitPage } from './routes/dashboard.js';
 import { handleGetRoutingRules, handleUpdateRoutingRules } from './routes/routing-rules.js';
 import { handleGetBudgets, handleUpdateBudgets } from './routes/budgets.js';
 import { handleGetMaintenance, handleRunMaintenance, handleUpdateMaintenance } from './routes/maintenance.js';
@@ -147,6 +153,10 @@ export function createServer(overrides = {}) {
       if (PAGES.has(path) || /^\/providers\/[^/]+$/.test(path)) {
         return handleDashboard(req, res);
       }
+      // The OAuth wait popup is a small standalone page, not the dashboard shell.
+      if (path === '/oauth/wait' && req.method === 'GET') {
+        return handleOAuthWaitPage(req, res);
+      }
       if (path === '/api/status') {
         return handleStatus(req, res);
       }
@@ -228,12 +238,18 @@ export function createServer(overrides = {}) {
       if (path === '/api/providers/codex/oauth/start' && req.method === 'POST') {
         return await handleCodexOAuthStart(req, res);
       }
+      if (path === '/api/providers/codex/oauth/complete' && req.method === 'POST') {
+        return await handleCodexOAuthComplete(req, res);
+      }
       const codexOAuthStatus = path.match(/^\/api\/providers\/codex\/oauth\/status\/([^/]+)$/);
       if (codexOAuthStatus && req.method === 'GET') return handleCodexOAuthStatus(req, res, decodeURIComponent(codexOAuthStatus[1]));
       const codexOAuthCancel = path.match(/^\/api\/providers\/codex\/oauth\/cancel\/([^/]+)$/);
       if (codexOAuthCancel && req.method === 'POST') return handleCodexOAuthCancel(req, res, decodeURIComponent(codexOAuthCancel[1]));
       if (path === '/api/providers/antigravity/oauth/start' && req.method === 'POST') {
         return await handleAntigravityOAuthStart(req, res);
+      }
+      if (path === '/api/providers/antigravity/oauth/complete' && req.method === 'POST') {
+        return await handleAntigravityOAuthComplete(req, res);
       }
       const antigravityOAuthStatus = path.match(/^\/api\/providers\/antigravity\/oauth\/status\/([^/]+)$/);
       if (antigravityOAuthStatus && req.method === 'GET') return handleAntigravityOAuthStatus(req, res, decodeURIComponent(antigravityOAuthStatus[1]));

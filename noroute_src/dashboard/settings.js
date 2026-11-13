@@ -819,7 +819,19 @@ function renderReplyFilters() {
     syncCustomSelects();
   }
   if (coding) coding.checked = replyFilters.coding;
+  // Free-text fields save on demand; never overwrite what the operator is typing.
+  const focus = $('replyFocus');
+  if (focus && document.activeElement !== focus) focus.value = replyFilters.focus || '';
+  const addressAs = $('replyAddressAs');
+  if (addressAs && document.activeElement !== addressAs) addressAs.value = replyFilters.addressAs || '';
   syncToggleLabels();
+}
+
+function saveReplyInstructions() {
+  patchReplyFilters({
+    focus: $('replyFocus')?.value.trim() || '',
+    addressAs: $('replyAddressAs')?.value.trim() || '',
+  });
 }
 
 async function loadReplyFilters() {

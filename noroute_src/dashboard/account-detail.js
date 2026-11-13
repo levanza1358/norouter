@@ -167,6 +167,7 @@ let accountPreviewEntries = null;
 const modelTests = new Map();
 let modelTestBusy = false;
 let oauthTimer = null;
+let oauthWaitWindow = null;
 
 // Copy for the OAuth-or-token chooser. Providers without an entry fall back to
 // their display name.
@@ -186,7 +187,6 @@ const oauthCopy = {
     tokenHint: 'Import an existing Google access token instead of logging in.',
     subtitle: 'Choose Google OAuth or import an existing token.',
     done: 'Antigravity login complete. Refreshing accounts…',
-    risk: 'Antigravity\'s Cloud Code gateway is undocumented and flagged deprecated upstream (RISK_NOTICE). Google can change or block it without notice.',
   },
 };
 
@@ -208,12 +208,80 @@ function detailApi(path, options) {
   return fetch(`/api/providers/${encodeURIComponent(currentDetailId)}${path}`, options);
 }
 
+const OAUTH_PENDING_PREFIX = 'norouter.oauth.pending.';
+const OAUTH_ALIVE_PREFIX = 'norouter.oauth.alive.';
+const OAUTH_ALIVE_TTL = 6000;
+
+// The wait window loads before the login has a state, so the start handler
+// parks the pending login here and the window adopts it by provider.
+function storeOAuthPending(providerId, info) {
+  if (!providerId) return;
+  try {
+    localStorage.setItem(`${OAUTH_PENDING_PREFIX}${providerId}`, JSON.stringify({ ...info, at: Date.now() }));
+  } catch {}
+}
+
+function clearOAuthWaitInfo(providerId) {
+  if (!providerId) return;
+  try {
+    localStorage.removeItem(`${OAUTH_PENDING_PREFIX}${providerId}`);
+    localStorage.removeItem(`${OAUTH_ALIVE_PREFIX}${providerId}`);
+  } catch {}
+}
+
+// Browsers may not hand back the window handle. The wait page then proves it
+// is alive by writing a heartbeat, which also tells us when it was closed.
+function oauthWaitAlive(providerId, attempt) {
+  if (!providerId || !attempt) return false;
+  try {
+    const alive = JSON.parse(localStorage.getItem(`${OAUTH_ALIVE_PREFIX}${providerId}`) || 'null');
+    return Boolean(alive) && alive.attempt === attempt && Date.now() - Number(alive.at) < OAUTH_ALIVE_TTL;
+  } catch {
+    return false;
+  }
+}
+
+function closeOAuthWaitWindow() {
+  if (oauthWaitWindow && !oauthWaitWindow.closed) oauthWaitWindow.close();
+  oauthWaitWindow = null;
+}
+
+// showPanel stays false while the dedicated wait window is open; the inline
+// panel is the fallback when a browser blocks that window.
+function setProviderOAuthWaiting(waiting, showPanel = true) {
+  const panel = $('providerOAuthWait');
+  if (panel) panel.hidden = !(waiting && showPanel);
+  const start = $('startProviderOAuth');
+  if (start) start.disabled = waiting;
+  if (waiting) return;
+  const link = $('providerOAuthLink');
+  if (link) link.value = '';
+}
+
+function finishProviderOAuth(note, message, tone = '') {
+  clearInterval(oauthTimer);
+  oauthTimer = null;
+  closeOAuthWaitWindow();
+  clearOAuthWaitInfo(note?.dataset.provider || detail?.provider?.id);
+  setProviderOAuthWaiting(false);
+  if (!note) return;
+  detailNote(note, message, tone);
+  delete note.dataset.state;
+  delete note.dataset.attempt;
+}
+
 function setAccountModal(open, mode = null) {
   const modal = $('accountModal');
   if (!modal) return;
   if (!open) {
+    const note = $('providerOAuthNote');
     clearInterval(oauthTimer);
     oauthTimer = null;
+    closeOAuthWaitWindow();
+    clearOAuthWaitInfo(note?.dataset.provider || detail?.provider?.id);
+    delete note?.dataset.state;
+    delete note?.dataset.attempt;
+    setProviderOAuthWaiting(false);
     modal.hidden = true;
     document.body.classList.remove('modal-open');
     accountModalMode = null;
@@ -256,16 +324,14 @@ function setAccountModal(open, mode = null) {
     if ($('providerOAuthHint')) $('providerOAuthHint').textContent = copy.hint;
     if ($('providerTokenTitle')) $('providerTokenTitle').textContent = copy.tokenTitle;
     if ($('providerTokenHint')) $('providerTokenHint').textContent = copy.tokenHint;
-    const risk = $('providerOAuthRisk');
-    if (risk) {
-      risk.textContent = copy.risk || '';
-      risk.hidden = !copy.risk;
-    }
     const oauthNote = $('providerOAuthNote');
     if (oauthNote) {
       oauthNote.textContent = '';
       delete oauthNote.dataset.state;
     }
+    setProviderOAuthWaiting(false);
+    const oauthLink = $('providerOAuthLink');
+    if (oauthLink) oauthLink.placeholder = 'http://127.0.0.1:…/callback?code=…&state=…';
   }
   const labelInput = document.querySelector('#addAccountForm input[name="label"]');
   if (labelInput) labelInput.placeholder = `${prefix}_1 or a custom name`;
