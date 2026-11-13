@@ -236,6 +236,8 @@ function renderEvents(data, report = dashboardUsageData) {
 
   if (!rows.length) {
     eventSource = [];
+    eventPage = 1;
+    if ($('eventPager')) $('eventPager').hidden = true;
     if (!dashboardSignature('dashboard.events', [])) return;
     $('eventList').innerHTML = `<div class="list-empty">
       <strong>No activity yet</strong>
@@ -245,7 +247,9 @@ function renderEvents(data, report = dashboardUsageData) {
   }
 
   const eventSignature = rows.map((event) => [event.at, event.type, event.message]);
-  if (!dashboardSignature('dashboard.events', eventSignature)) return;
+  // Include the layout mode and page: a resize or pager click re-renders with
+  // the same rows but a different slice.
+  if (!dashboardSignature('dashboard.events', [dashPaged(), eventPage, eventSignature])) return;
   eventSource = rows;
   paintEvents();
 }

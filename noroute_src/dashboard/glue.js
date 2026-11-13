@@ -1,12 +1,17 @@
 /* ---------------- data + routing glue ---------------- */
 
+let recentPage = 1;
+
 function renderRecent(data, report = dashboardUsageData) {
   const table = $('recentTable');
   if (!table) return;
 
   const rows = report?.activity || [];
   $('recentCount').textContent = `${rows.length}`;
+  const pager = $('recentPager');
   if (!rows.length) {
+    if (pager) pager.hidden = true;
+    recentPage = 1;
     if (dashboardSignature('dashboard.recent', [])) table.innerHTML = `<tr><td colspan="4" class="empty-cell">
       <div class="list-empty"><strong>No requests yet</strong><span>Recent calls appear here with model, tokens, latency and status.</span></div>
     </td></tr>`;
@@ -14,8 +19,30 @@ function renderRecent(data, report = dashboardUsageData) {
   }
 
   const recentSignature = rows.map((r) => [r.at, r.model, r.tokensIn, r.tokensOut, r.ms, r.ok, r.status]);
-  if (!dashboardSignature('dashboard.recent', recentSignature)) return;
-  table.innerHTML = rows.map((r) => {
+  // Paging and the mobile/desktop switch both re-run this with identical data,
+  // so the signature has to carry them or the redraw is skipped.
+  if (!dashboardSignature('dashboard.recent', [dashPaged(), recentPage, recentSignature])) return;
+
+  // Phones get five rows per page; wider screens keep filling the card.
+  let visible = rows;
+  if (dashPaged()) {
+    recentPage = paintUsagePager({
+      pager,
+      info: $('recentPageInfo'),
+      btns: $('recentPageBtns'),
+      items: rows,
+      page: recentPage,
+      pageSize: DASH_MOBILE_PAGE_SIZE,
+      noun: 'requests',
+      onSelect: (page) => { recentPage = page; renderRecent(data, report); },
+    });
+    visible = usagePageSlice(rows, recentPage, DASH_MOBILE_PAGE_SIZE).items;
+  } else if (pager) {
+    pager.hidden = true;
+    recentPage = 1;
+  }
+
+  table.innerHTML = visible.map((r) => {
     const tokens = r.tokensIn + r.tokensOut;
     return `<tr>
       <td class="model">${escapeHtml(r.model || 'unknown')}</td>
@@ -25,6 +52,7 @@ function renderRecent(data, report = dashboardUsageData) {
     </tr>`;
   }).join('');
 
+  if (dashPaged()) return;
   trimRecentToCard();
   requestAnimationFrame(trimRecentToCard);
 }
@@ -32,6 +60,7 @@ function renderRecent(data, report = dashboardUsageData) {
 // Rows are dropped from the bottom until the table fits its card, so a tall
 // screen shows more history and a short one shows less, never a half row.
 function trimRecentToCard() {
+  if (dashPaged()) return;
   const body = $('recentTable');
   const wrap = body?.closest('.table-wrap');
   const table = wrap?.querySelector('table');

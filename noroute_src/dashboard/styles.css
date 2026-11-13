@@ -4917,8 +4917,12 @@ h1 {
   .dash-note { width: 100%; margin-left: 0; }
   .dash-side { grid-template-columns: minmax(0, 1fr); }
   .dash-side > .card { min-height: 0; }
-  .dash-side .evlist, .dash-side .mlist { max-height: 300px; overflow-y: auto; }
+  /* Paged cards show five rows, so the inner scroller would only fight the
+     pager. Models still trims to its own box. */
+  .dash-side .evlist { max-height: none; overflow: visible; }
+  .dash-side .mlist { max-height: 300px; overflow-y: auto; }
   .dash-chart .spark { height: 160px; }
+  .dash-recent .usage-pager { margin-top: 12px; }
 }
 
 /* ---------- shared flat primitives ---------- */

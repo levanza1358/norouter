@@ -212,23 +212,23 @@ function activityTime(iso) {
 // /api/usage keeps returning the complete range report.
 const USAGE_PAGE_SIZE = 10;
 
-function usagePageSlice(items, page) {
+function usagePageSlice(items, page, pageSize = USAGE_PAGE_SIZE) {
   const total = items.length;
-  const pages = Math.max(1, Math.ceil(total / USAGE_PAGE_SIZE));
+  const pages = Math.max(1, Math.ceil(total / pageSize));
   const current = Math.min(Math.max(1, Number(page) || 1), pages);
-  const start = (current - 1) * USAGE_PAGE_SIZE;
-  return { items: items.slice(start, start + USAGE_PAGE_SIZE), current, pages, total, start };
+  const start = (current - 1) * pageSize;
+  return { items: items.slice(start, start + pageSize), current, pages, total, start };
 }
 
 // Render "1 2 3" buttons plus prev/next. Long ranges collapse the middle so the
 // control never wraps into a wall of numbers.
-function paintUsagePager({ pager, info, btns, items, page, onSelect, noun }) {
+function paintUsagePager({ pager, info, btns, items, page, onSelect, noun, pageSize = USAGE_PAGE_SIZE }) {
   if (!pager || !info || !btns) return 1;
-  const slice = usagePageSlice(items, page);
+  const slice = usagePageSlice(items, page, pageSize);
   info.textContent = slice.total === 0
     ? `0 ${noun}`
     : `${fmtFull(slice.start + 1)}–${fmtFull(slice.start + slice.items.length)} of ${fmtFull(slice.total)}`;
-  pager.hidden = slice.total <= USAGE_PAGE_SIZE && slice.pages === 1;
+  pager.hidden = slice.total <= pageSize && slice.pages === 1;
 
   const make = (label, target, { disabled = false, current = false, aria } = {}) => {
     const button = document.createElement('button');

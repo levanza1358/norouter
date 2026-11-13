@@ -104,8 +104,18 @@ function density() {
 // space it actually has. Trimming re-reads layout on the next frame because the
 // card's final height is only known once the rest of the board has settled.
 let eventSource = [];
+let eventPage = 1;
+
+// Phones have no fixed card height to fill, so the dashboard cards paginate
+// instead of trimming: five rows per page, with the usual pager underneath.
+const DASH_MOBILE_PAGE_SIZE = 5;
+
+function dashPaged() {
+  return window.matchMedia?.('(max-width: 760px)')?.matches || false;
+}
 
 function trimEventsToColumn() {
+  if (dashPaged()) return;
   const list = $('eventList');
   if (!list) return;
 
@@ -130,7 +140,27 @@ function paintEvents() {
   const list = $('eventList');
   if (!list) return;
 
-  list.innerHTML = eventSource.map(rowHtml).join('');
+  const pager = $('eventPager');
+  let visible = eventSource;
+  if (dashPaged()) {
+    eventPage = paintUsagePager({
+      pager,
+      info: $('eventPageInfo'),
+      btns: $('eventPageBtns'),
+      items: eventSource,
+      page: eventPage,
+      pageSize: DASH_MOBILE_PAGE_SIZE,
+      noun: 'events',
+      onSelect: (page) => { eventPage = page; paintEvents(); },
+    });
+    visible = usagePageSlice(eventSource, eventPage, DASH_MOBILE_PAGE_SIZE).items;
+  } else if (pager) {
+    pager.hidden = true;
+    eventPage = 1;
+  }
+
+  list.innerHTML = visible.map(rowHtml).join('');
+  if (dashPaged()) return;
 
   // Synchronous pass (the loop forces layout), then two more on later frames
   // for the case where the card shrinks once its sibling columns settle.
