@@ -6,6 +6,7 @@
 // provider-specific part is unwrapping the response into the OpenAI shape.
 
 import { readJson, sendError, sendJson } from '../lib/http.js';
+import { nextLiveId, publishLive } from '../lib/live.js';
 import { resolveCredential, buildHeaders } from './chat.js';
 import { getProvider, providers } from '../providers/index.js';
 import {
@@ -79,8 +80,22 @@ export async function handleImageGeneration(req, res) {
     return sendError(res, 400, 'Field "prompt" is required.');
   }
 
+  const liveId = nextLiveId();
+  publishLive({
+    phase: 'start',
+    id: liveId,
+    at: Date.now(),
+    kind: 'image',
+    model: typeof body?.model === 'string' ? body.model : '',
+    stream: false,
+    tools: false,
+  });
+
   const resolved = resolveImageModel(body.model);
-  if (resolved.error) return sendError(res, 400, resolved.error);
+  if (resolved.error) {
+    publishLive({ phase: 'error', id: liveId, at: Date.now(), model: body?.model || null, status: 400, stage: 'model' });
+    return sendError(res, 400, resolved.error);
+  }
   const { provider, model } = resolved;
 
   const started = Date.now();
@@ -96,11 +111,28 @@ export async function handleImageGeneration(req, res) {
   try {
     for (let round = 0; round < accountAttemptLimit(provider.id); round += 1) {
       const credential = await resolveCredential(provider);
+      publishLive({
+        phase: 'route',
+        id: liveId,
+        at: Date.now(),
+        provider: provider.id,
+        model,
+        attempt: round + 1,
+      });
       if (!credential.token) {
         lastStatus = credential.pooled ? 429 : 401;
         lastError = credential.pooled
           ? `Every account for ${provider.id} is cooling down or out of tokens.`
           : `No account credential for ${provider.id}.`;
+        publishLive({
+          phase: 'error',
+          id: liveId,
+          at: Date.now(),
+          provider: provider.id,
+          model,
+          status: lastStatus,
+          stage: 'credential',
+        });
         break;
       }
 
@@ -115,6 +147,15 @@ export async function handleImageGeneration(req, res) {
       } catch (err) {
         if (err.name === 'AbortError') {
           recordError('Image generation timed out', { upstream: true, model, provider: provider.id });
+          publishLive({
+            phase: 'error',
+            id: liveId,
+            at: Date.now(),
+            provider: provider.id,
+            model,
+            status: 502,
+            stage: 'upstream',
+          });
           return sendError(res, 502, 'Image generation timed out.');
         }
         markFailure(credential.row.id, { message: err.message, cooldownMs: DEFAULT_COOLDOWN_MS });
@@ -128,12 +169,35 @@ export async function handleImageGeneration(req, res) {
         try {
           parsed = await response.json();
         } catch {
+          publishLive({
+            phase: 'error',
+            id: liveId,
+            at: Date.now(),
+            provider: provider.id,
+            model,
+            status: 502,
+            stage: 'upstream',
+          });
           return sendError(res, 502, 'Upstream returned an invalid image response.');
         }
         markSuccess(credential.row.id, { tokensIn: 0, tokensOut: 0 });
         recordRequest({ provider: provider.id, model });
         recordRequestLog({ provider: provider.id, model, account: credential.row.label, ms: Date.now() - started, status: 200 });
         notifyWebhook('request', { provider: provider.id, model, account: credential.row.label, ms: Date.now() - started, status: 200 });
+        publishLive({
+          phase: 'finish',
+          id: liveId,
+          at: Date.now(),
+          provider: provider.id,
+          model,
+          status: 200,
+          ms: Date.now() - started,
+          tokensIn: 0,
+          tokensOut: 0,
+          tool: false,
+          stream: false,
+          kind: 'image',
+        });
         return sendJson(res, 200, normalize(provider, parsed));
       }
 
@@ -157,6 +221,20 @@ export async function handleImageGeneration(req, res) {
             recordRequest({ provider: provider.id, model, ms: elapsed });
             recordRequestLog({ provider: provider.id, model, account: credential.row.label, ms: elapsed, status: 200 });
             notifyWebhook('request', { provider: provider.id, model, account: credential.row.label, ms: elapsed, status: 200 });
+            publishLive({
+              phase: 'finish',
+              id: liveId,
+              at: Date.now(),
+              provider: provider.id,
+              model,
+              status: 200,
+              ms: elapsed,
+              tokensIn: 0,
+              tokensOut: 0,
+              tool: false,
+              stream: false,
+              kind: 'image',
+            });
             return sendJson(res, 200, normalize(provider, parsed));
           }
         }
@@ -174,6 +252,15 @@ export async function handleImageGeneration(req, res) {
     recordError(lastError, { upstream: true, model, provider: provider.id });
     recordRequestLog({ provider: provider.id, model, status: lastStatus, error: lastError });
     notifyWebhook('error', { provider: provider.id, model, status: lastStatus, message: lastError });
+    publishLive({
+      phase: 'error',
+      id: liveId,
+      at: Date.now(),
+      provider: provider.id,
+      model,
+      status: lastStatus || 502,
+      stage: 'upstream',
+    });
     return sendError(res, lastStatus || 502, lastError);
   } finally {
     clearTimeout(timer);

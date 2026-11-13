@@ -1,6 +1,7 @@
 /* ---------------- dashboard ---------------- */
 
 const DASHBOARD_RANGE_LABELS = { day: 'today', week: 'this week', month: 'this month', all: 'all time' };
+const DASHBOARD_BUCKET_LABELS = { hour: 'hourly', day: 'daily', month: 'monthly' };
 
 function renderDashboardHistorical(report) {
   const totals = report?.totals || {};
@@ -31,38 +32,71 @@ function renderStatistics(data, report = dashboardUsageData) {
   $('statErrors').textContent = fmtFull(totals.errors);
 }
 
-// Sparkline: bars are decorative, so the chart carries a text summary that is
-// readable without hover or a pointer. Bars keep their title for mouse users,
-// and aria-hidden stops screen readers announcing 40 meaningless spans.
-function sparkSummary(history) {
-  if (!history.length) return 'No requests recorded yet.';
-  const ok = history.filter((h) => h.ok);
-  const failed = history.length - ok.length;
-  const waited = ok.filter((h) => typeof h.ms === 'number' && h.ms > 0).map((h) => h.ms);
-  const avg = waited.length ? Math.round(waited.reduce((sum, ms) => sum + ms, 0) / waited.length) : null;
-  const parts = [
-    `${history.length} recent request${history.length === 1 ? '' : 's'}`,
-    failed ? `${failed} failed` : 'no failures',
-  ];
-  if (avg != null) parts.push(`${avg} ms average`);
-  return `${parts.join(' · ')}.`;
+// Bucket keys are already in the server's timezone ("2026-11-13T03"). Building
+// the current key in that same zone keeps "upcoming" honest when the browser
+// sits somewhere else.
+function dashboardBucketNow(bucket, timeZone) {
+  let parts;
+  try {
+    parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date());
+  } catch {
+    return null;
+  }
+  const part = (type) => parts.find((entry) => entry.type === type)?.value || '';
+  const day = `${part('year')}-${part('month')}-${part('day')}`;
+  if (bucket === 'hour') return `${day}T${part('hour')}`;
+  return bucket === 'month' ? day.slice(0, 7) : day;
 }
 
+function dashboardBucketLabel(bucket, key) {
+  if (bucket === 'hour') return `${key.slice(11, 13)}:00`;
+  const [year, month, day] = key.split('-').map(Number);
+  const date = new Date(year, month - 1, day || 1);
+  if (bucket === 'month') {
+    return date.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+  }
+  return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+}
+
+// Request-volume bars: one slot per bucket, so the window keeps its time axis
+// even where traffic is zero. Heights compare total requests (successes plus
+// failures); failures cap the bar instead of recolouring the whole column.
+// The container keeps role="img", so the text summary below is the readable
+// path for screen readers and for anyone who does not hover.
 function sparkMarkup(history) {
   if (!history.length) {
-    return '<div class="spark-empty">No requests yet — send one to /v1 to see the chart.</div>';
+    return '<div class="spark-empty">No history yet.</div>';
   }
-  const weights = history.map((h) => Math.max(h.tokens, h.ms / 10, 1));
-  const max = Math.max(...weights);
+  if (!history.some((h) => h.requests + h.errors)) {
+    return '<div class="spark-empty">No requests in this range.</div>';
+  }
+  const volumes = history.map((h) => h.requests + h.errors);
+  const max = Math.max(...volumes, 1);
+  // The part of the window that has not happened yet is shaded as a whole, so
+  // a mostly-empty morning chart reads as "rest of the day" rather than dead
+  // space. Slots stay in place either way, which keeps the time axis honest.
+  const firstFuture = history.findIndex((h) => h.future);
+  const ahead = firstFuture < 0 ? '' : `<div class="spark-ahead" style="width:${Math.round(((history.length - firstFuture) / history.length) * 100)}%"></div>`;
   const bars = history.map((h, i) => {
-    const pct = Math.max(6, Math.round((weights[i] / max) * 100));
-    const cls = h.ok ? '' : ' is-err';
-    const label = h.ok ? `${h.ms} ms · ${h.tokens} tok` : 'failed';
-    return `<span class="${cls}" style="height:${pct}%" title="${label}"></span>`;
+    // An empty slot stays as a baseline tick: an hour or day with no traffic is
+    // still part of the window, and hiding it would compress the time axis.
+    if (!volumes[i]) {
+      return `<span class="${h.future ? 'is-future' : 'is-empty'}" style="height:2px" title="${h.future ? 'upcoming' : 'no requests'}"></span>`;
+    }
+    const pct = Math.max(6, Math.round((volumes[i] / max) * 100));
+    const failed = h.errors ? Math.max(2, Math.round((h.errors / volumes[i]) * 100)) : 0;
+    const label = `${fmtFull(h.requests)} ok${h.errors ? ` · ${fmtFull(h.errors)} failed` : ''} · ${fmtFull(h.tokens)} tok`;
+    const cap = failed ? `<span class="is-err" style="height:max(2px, ${failed}%)"></span>` : '';
+    return `<span class="bar" style="height:${pct}%" title="${label}"><span class="bar-fill">${cap}<span class="is-ok"></span></span></span>`;
   }).join('');
-  // The container keeps role="img", which already hides the bars from the
-  // accessibility tree; the text summary below the chart is the readable path.
-  return bars;
+  return ahead + bars;
 }
 
 function renderRequests(data, report = dashboardUsageData) {
@@ -82,16 +116,57 @@ function renderRequests(data, report = dashboardUsageData) {
     ? 'waiting for first call'
     : `${compact(totals.tokensIn)} in / ${compact(totals.tokensOut)} out`;
 
-  const history = (report?.series || []).map((bucket) => ({
-    ms: bucket.requests ? 0 : 0,
-    tokens: Number(bucket.tokensIn || 0) + Number(bucket.tokensOut || 0),
-    ok: Number(bucket.errors || 0) === 0,
-  }));
-  if (dashboardSignature('dashboard.spark', report?.series || [])) $('spark').innerHTML = sparkMarkup(history);
-  const summary = totals.requests ? `${fmtFull(totals.requests)} persisted requests · ${totals.successRate ?? 0}% success.` : 'No requests recorded yet.';
+  const series = report?.series || [];
+  const bucket = report?.bucket || 'hour';
+  const nowKey = series.length ? dashboardBucketNow(bucket, report?.timeZone) : null;
+  const history = series.map((entry) => {
+    const requests = Number(entry.requests || 0);
+    const errors = Number(entry.errors || 0);
+    return {
+      key: entry.bucket,
+      requests,
+      errors,
+      tokens: Number(entry.tokensIn || 0) + Number(entry.tokensOut || 0),
+      future: Boolean(nowKey && entry.bucket > nowKey),
+    };
+  });
+  const sparkSignature = {
+    nowKey,
+    series: series.map((entry) => [entry.bucket, entry.requests, entry.errors, entry.tokensIn, entry.tokensOut]),
+  };
+  if (dashboardSignature('dashboard.spark', sparkSignature)) $('spark').innerHTML = sparkMarkup(history);
+
+  const totalRequests = Number(totals.requests || 0);
+  const totalErrors = Number(totals.errors || 0);
+  const peak = history.reduce((best, entry) => {
+    const volume = entry.requests + entry.errors;
+    return volume > (best?.volume || 0) ? { ...entry, volume } : best;
+  }, null);
+  const parts = [];
+  if (!totalRequests && !totalErrors) {
+    parts.push('No requests recorded yet');
+  } else {
+    if (totalRequests && totalErrors) parts.push(`${fmtFull(totalRequests)} ok`, `${fmtFull(totalErrors)} failed`);
+    else if (totalErrors) parts.push(`${fmtFull(totalErrors)} failed`);
+    else parts.push(`${fmtFull(totalRequests)} requests`);
+    if (peak) parts.push(`peak ${fmtFull(peak.volume)} at ${dashboardBucketLabel(bucket, peak.key)}`);
+  }
+  const summary = `${parts.join(' · ')}.`;
   $('sparkSummary').textContent = summary;
   $('spark').setAttribute('aria-label', summary);
-  $('sparkWindow').textContent = report?.series?.length ? `${report.series.length} buckets` : 'no history';
+  $('sparkWindow').textContent = series.length ? (DASHBOARD_BUCKET_LABELS[bucket] || bucket) : 'no history';
+
+  // Three ticks are enough for an axis; repeating the same bucket for very short
+  // windows (a single month, two days) would just print the label twice.
+  const first = history[0];
+  const middle = history.length > 2 ? history[Math.floor(history.length / 2)] : null;
+  const last = history.length > 1 ? history[history.length - 1] : null;
+  $('sparkFrom').textContent = first ? dashboardBucketLabel(bucket, first.key) : '';
+  $('sparkMid').textContent = middle ? dashboardBucketLabel(bucket, middle.key) : '';
+  $('sparkTo').textContent = last ? dashboardBucketLabel(bucket, last.key) : '';
+  // One bucket has one centred bar, so its label sits centred under it instead
+  // of stranded at the left edge of the axis.
+  $('sparkFoot').classList.toggle('is-single', history.length === 1);
 }
 
 function renderModels(data, report = dashboardUsageData) {

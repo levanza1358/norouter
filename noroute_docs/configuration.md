@@ -24,6 +24,8 @@
 
 Provider credentials are entered manually through the dashboard/API and stored in the SQLite account pool. `.env` is not a provider credential source.
 
+These env budgets are display-only meters for the dashboard bar. Hard daily caps are a separate feature: they are stored in SQLite and edited in Settings → Daily budgets (see [`api/admin.md`](api/admin.md#budgets)).
+
 ## Test-only overrides
 
 | Variable | Meaning |

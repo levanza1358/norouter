@@ -1,9 +1,11 @@
 import { accessTokenFor, accountRows, getAccountRow, markFailure, markSuccess, pickAccount, publicAccount, updateAccount } from './accounts.js';
 import { codexAccountModels } from './codex-account.js';
 import { readSSEEvents } from './sse.js';
-import { wireFor } from '../providers/index.js';
+import { upstreamModelFor, wireFor, wireHeaders } from '../providers/index.js';
 import { codexModelAccounts } from './codex-account.js';
 import { fromResponsesStream, toResponsesRequest } from './responses-format.js';
+import { createAnthropicStream, toAnthropicRequest } from './anthropic-format.js';
+import { createAntigravityStream, toAntigravityRequest } from './antigravity-format.js';
 
 const TEST_TIMEOUT_MS = 30_000;
 export const MODEL_TEST_PROMPT = 'Hi, what your model AI ? and your training cut off ?';
@@ -20,11 +22,31 @@ function testBody(model, prompt = MODEL_TEST_PROMPT) {
   };
 }
 
-// Reads either wire. Responses SSE carries named events instead of choices, so
-// deltas are translated before they reach the accumulator.
+function wirePayload(wireFormat, body, provider, row) {
+  if (wireFormat === 'responses') return toResponsesRequest(body);
+  if (wireFormat === 'anthropic') return toAnthropicRequest(body);
+  if (wireFormat === 'antigravity') {
+    return toAntigravityRequest(
+      { ...body, model: upstreamModelFor(provider, body.model) },
+      { projectId: row?.project_id || '', sessionSeed: row?.id || `${provider.id}:${body.model}` },
+    );
+  }
+  return body;
+}
+
+// Reads any wire. Responses and Anthropic SSE carry named events instead of
+// choices, so their deltas are translated before they reach the accumulator.
 async function readProbe(stream, wireFormat) {
   let content = '';
   let error = null;
+  const consume = (frame) => {
+    if (frame?.error && !error) error = frame.error;
+    const delta = frame?.choices?.[0]?.delta;
+    if (typeof delta?.content === 'string') content += delta.content;
+  };
+  const translator = wireFormat === 'anthropic'
+    ? createAnthropicStream()
+    : wireFormat === 'antigravity' ? createAntigravityStream() : null;
   for await (const event of readSSEEvents(stream)) {
     if (wireFormat === 'responses') {
       const mapped = fromResponsesStream(event.data);
@@ -32,10 +54,11 @@ async function readProbe(stream, wireFormat) {
       if (mapped.kind === 'error' && !error) error = mapped.frame.error;
       continue;
     }
-    const chunk = event.data;
-    if (chunk?.error && !error) error = chunk.error;
-    const delta = chunk?.choices?.[0]?.delta;
-    if (typeof delta?.content === 'string') content += delta.content;
+    if (translator) {
+      for (const frame of translator.push(event.data)) consume(frame);
+      continue;
+    }
+    consume(event.data);
   }
   return { content, error };
 }
@@ -147,26 +170,18 @@ async function testOne(provider, model, { disableOnError = false } = {}) {
       return { model, ok: false, status: 401, error, account: publicAccount(getAccountRow(row.id)), disabled: disableOnError };
     }
 
-    const { format: wireFormat, url: wireUrl } = wireFor(provider, row);
-    const body = testBody(model);
-    let payload = body;
-    if (wireFormat === 'responses') {
-      try {
-        payload = toResponsesRequest(body);
-      } catch (err) {
-        return { model, ok: false, status: err.status || 400, error: err.message, account: publicAccount(getAccountRow(row.id)) };
-      }
+    const { format: wireFormat, url: wireUrl } = wireFor(provider, row, { stream: true });
+    let payload;
+    try {
+      payload = wirePayload(wireFormat, testBody(model), provider, row);
+    } catch (err) {
+      return { model, ok: false, status: err.status || 400, error: err.message, account: publicAccount(getAccountRow(row.id)) };
     }
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TEST_TIMEOUT_MS);
     try {
-      const headers = {
-        'content-type': 'application/json',
-        accept: 'text/event-stream',
-        ...provider.headers,
-        authorization: `Bearer ${token}`,
-      };
+      const headers = wireHeaders(provider, token, wireFormat);
       const response = await fetch(wireUrl, {
         method: 'POST',
         headers,
@@ -236,7 +251,8 @@ function retryAfterMs(response, text) {
   return 60_000;
 }
 
-async function testAccountRequest(provider, row, { prompt = PING_PROMPT } = {}) {  const model = probeModel(provider, row);
+async function testAccountRequest(provider, row, { prompt = PING_PROMPT } = {}) {
+  const model = probeModel(provider, row);
   const base = { account: row.label, accountId: row.id, model };
   if (!model) return { ...base, ok: false, skipped: true, status: 422, state: 'error', reason: 'No provider probe model is configured.' };
 
@@ -249,20 +265,19 @@ async function testAccountRequest(provider, row, { prompt = PING_PROMPT } = {}) 
       markFailure(row.id, { message: 'Account has no usable access token.', cooldownMs: 0 });
       return { ...base, ok: false, status: 401, state: 'error', reason: 'Account has no usable access token.' };
     }
-    const { format: wireFormat, url: wireUrl } = wireFor(provider, credential.account || row);
-    const body = testBody(model, prompt);
-    const payload = wireFormat === 'responses' ? toResponsesRequest(body) : body;
+    const { format: wireFormat, url: wireUrl } = wireFor(provider, credential.account || row, { stream: true });
+    let payload;
+    try {
+      payload = wirePayload(wireFormat, testBody(model, prompt), provider, credential.account || row);
+    } catch (err) {
+      return { ...base, ok: false, status: err.status || 400, state: publicAccount(getAccountRow(row.id)).status, reason: err.message, latencyMs: Date.now() - started };
+    }
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TEST_TIMEOUT_MS);
     try {
       const response = await fetch(wireUrl, {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          accept: 'text/event-stream',
-          ...provider.headers,
-          authorization: `Bearer ${token}`,
-        },
+        headers: wireHeaders(provider, token, wireFormat),
         body: JSON.stringify(payload),
         signal: controller.signal,
       });

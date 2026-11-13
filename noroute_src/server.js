@@ -9,6 +9,7 @@ import {
   handleAccountCheckin,
   handleAccountPing,
   handleAccountQuota,
+  handleAccountSummary,
   handleAccountWarmup,
   handleCheckinAllAccounts,
   handleCreateAccounts,
@@ -23,9 +24,16 @@ import {
   handleWarmupAccounts,
 } from './routes/accounts.js';
 import { handleChat } from './routes/chat.js';
+import { handleResponses } from './routes/responses.js';
+import { handleMessages } from './routes/messages.js';
 import { handleImageGeneration } from './routes/images.js';
 import { handleEmbeddings } from './routes/embeddings.js';
 import { handleCodexOAuthCancel, handleCodexOAuthStart, handleCodexOAuthStatus } from './routes/codex-oauth.js';
+import {
+  handleAntigravityOAuthCancel,
+  handleAntigravityOAuthStart,
+  handleAntigravityOAuthStatus,
+} from './routes/antigravity-oauth.js';
 import {
   handleAppendChatMessage,
   handleCreateChatSession,
@@ -38,19 +46,27 @@ import {
   handleCreateCombo,
   handleDeleteCombo,
   handleGetCombo,
+  handleGetVisionRouting,
   handleListCombos,
   handleUpdateCombo,
+  handleUpdateVisionRouting,
 } from './routes/combos.js';
 import { handleAsset, handleDashboard } from './routes/dashboard.js';
+import { handleGetRoutingRules, handleUpdateRoutingRules } from './routes/routing-rules.js';
+import { handleGetBudgets, handleUpdateBudgets } from './routes/budgets.js';
+import { handleGetMaintenance, handleRunMaintenance, handleUpdateMaintenance } from './routes/maintenance.js';
+import { startMaintenance, stopMaintenance } from './lib/maintenance.js';
 import { handleModels } from './routes/models.js';
 import { handleAddModel, handleCreateProvider, handleDeleteProvider, handleFetchModels, handleProviderDetail, handleRemoveModel, handleSetModelEnabled, handleTestModels, handleUpdateProvider } from './routes/provider.js';
 import { handleStatus } from './routes/status.js';
+import { handleLive } from './routes/live.js';
+import { closeLiveStreams } from './lib/live.js';
 import { handleAutostartGet, handleAutostartUpdate, handlePortGet, handlePortUpdate } from './routes/settings.js';
 import { handleAccountExport, handleAccountRestore } from './routes/account-backup.js';
 import { handleRequestLog, handleRequestLogClear } from './routes/request-log.js';
 import { handleWebhookGet, handleWebhookUpdate } from './routes/webhook.js';
 import { writeLocalConfig } from './lib/local-config.js';
-import { handleUsage } from './routes/usage.js';
+import { handleProviderUsage, handleUsage } from './routes/usage.js';
 import { handleGetTokenSaver, handleUpdateTokenSaver } from './routes/token-saver.js';
 import { handleGetReplyFilters, handleUpdateReplyFilters } from './routes/reply-filters.js';
 import {
@@ -65,6 +81,12 @@ import {
 import { isDashboardPasswordEnabled } from './lib/dashboard-auth.js';
 import { clearManagedPid, writeManagedPid } from './lib/process-control.js';
 import { closeDb } from './lib/db.js';
+import { normalizeAutoAccountLabels } from './lib/accounts.js';
+import {
+  backfillAccountIdentity,
+  ensureAccountIdentityIndex,
+  mergeDuplicateAccounts,
+} from './lib/account-identity.js';
 import {
   handleCreateApiKey,
   handleDeleteApiKey,
@@ -76,7 +98,7 @@ import {
   handleUpdateAuthSettings,
 } from './routes/api-keys.js';
 
-const PAGES = new Set(['/', '/dashboard', '/providers', '/usage', '/chat', '/settings', '/api-keys', '/combos']);
+const PAGES = new Set(['/', '/dashboard', '/providers', '/usage', '/chat', '/settings', '/api-keys', '/combos', '/map']);
 
 function authorizationContext(req, settings, consume = true) {
   if (!getRequireApiKey(settings.requireApiKey)) return { managedId: null };
@@ -128,6 +150,9 @@ export function createServer(overrides = {}) {
       if (path === '/api/status') {
         return handleStatus(req, res);
       }
+      if (path === '/api/live' && req.method === 'GET') {
+        return handleLive(req, res);
+      }
       if (path === '/api/settings/autostart' && req.method === 'GET') {
         return handleAutostartGet(req, res);
       }
@@ -158,6 +183,9 @@ export function createServer(overrides = {}) {
       if (path === '/api/settings/port' && req.method === 'PATCH') {
         return await handlePortUpdate(req, res, settings, readJson, async (port) => {
           const previous = settings.port;
+          // An open event stream would keep close() waiting until the browser
+          // reconnects elsewhere; release dashboard streams first.
+          closeLiveStreams();
           await new Promise((resolve, reject) => {
             server.close((error) => {
               if (error) return reject(error);
@@ -204,6 +232,13 @@ export function createServer(overrides = {}) {
       if (codexOAuthStatus && req.method === 'GET') return handleCodexOAuthStatus(req, res, decodeURIComponent(codexOAuthStatus[1]));
       const codexOAuthCancel = path.match(/^\/api\/providers\/codex\/oauth\/cancel\/([^/]+)$/);
       if (codexOAuthCancel && req.method === 'POST') return handleCodexOAuthCancel(req, res, decodeURIComponent(codexOAuthCancel[1]));
+      if (path === '/api/providers/antigravity/oauth/start' && req.method === 'POST') {
+        return await handleAntigravityOAuthStart(req, res);
+      }
+      const antigravityOAuthStatus = path.match(/^\/api\/providers\/antigravity\/oauth\/status\/([^/]+)$/);
+      if (antigravityOAuthStatus && req.method === 'GET') return handleAntigravityOAuthStatus(req, res, decodeURIComponent(antigravityOAuthStatus[1]));
+      const antigravityOAuthCancel = path.match(/^\/api\/providers\/antigravity\/oauth\/cancel\/([^/]+)$/);
+      if (antigravityOAuthCancel && req.method === 'POST') return handleAntigravityOAuthCancel(req, res, decodeURIComponent(antigravityOAuthCancel[1]));
       if (path === '/api/chat/sessions' && req.method === 'GET') return handleListChatSessions(req, res);
       if (path === '/api/chat/sessions' && req.method === 'POST') return await handleCreateChatSession(req, res);
       const chatSessionMatch = path.match(/^\/api\/chat\/sessions\/([^/]+)$/);
@@ -219,12 +254,26 @@ export function createServer(overrides = {}) {
 
       if (path === '/api/combos' && req.method === 'GET') return handleListCombos(req, res);
       if (path === '/api/combos' && req.method === 'POST') return await handleCreateCombo(req, res);
+      if (path === '/api/vision-routing' && req.method === 'GET') return handleGetVisionRouting(req, res);
+      if (path === '/api/vision-routing' && req.method === 'PATCH') return await handleUpdateVisionRouting(req, res);
+      if (path === '/api/routing-rules' && req.method === 'GET') return handleGetRoutingRules(req, res);
+      if (path === '/api/routing-rules' && req.method === 'PATCH') return await handleUpdateRoutingRules(req, res);
+      if (path === '/api/budgets' && req.method === 'GET') return handleGetBudgets(req, res);
+      if (path === '/api/budgets' && req.method === 'PATCH') return await handleUpdateBudgets(req, res);
+      if (path === '/api/maintenance' && req.method === 'GET') return handleGetMaintenance(req, res);
+      if (path === '/api/maintenance' && req.method === 'PATCH') return await handleUpdateMaintenance(req, res);
+      if (path === '/api/maintenance/run' && req.method === 'POST') return await handleRunMaintenance(req, res);
       const comboMatch = path.match(/^\/api\/combos\/([^/]+)$/);
       if (comboMatch) {
         const comboId = decodeURIComponent(comboMatch[1]);
         if (req.method === 'GET') return handleGetCombo(req, res, comboId);
         if (req.method === 'PATCH') return await handleUpdateCombo(req, res, comboId);
         if (req.method === 'DELETE') return handleDeleteCombo(req, res, comboId);
+      }
+
+      const providerUsageMatch = path.match(/^\/api\/providers\/([^/]+)\/usage$/);
+      if (providerUsageMatch && req.method === 'GET') {
+        return handleProviderUsage(req, res, providerUsageMatch[1], url);
       }
 
       const detailMatch = path.match(/^\/api\/providers\/([^/]+)$/);
@@ -295,6 +344,11 @@ export function createServer(overrides = {}) {
         return await handleAccountWarmup(res, accountWarmupMatch[1], decodeURIComponent(accountWarmupMatch[2]));
       }
 
+      const accountSummaryMatch = path.match(/^\/api\/providers\/([^/]+)\/accounts\/([^/]+)\/summary$/);
+      if (accountSummaryMatch && req.method === 'GET') {
+        return handleAccountSummary(res, accountSummaryMatch[1], decodeURIComponent(accountSummaryMatch[2]));
+      }
+
       const accountMatch = path.match(/^\/api\/providers\/([^/]+)\/accounts\/([^/]+)$/);
       if (accountMatch) {
         const providerId = decodeURIComponent(accountMatch[1]);
@@ -344,6 +398,12 @@ export function createServer(overrides = {}) {
         if (path === '/v1/chat/completions' && req.method === 'POST') {
           return await handleChat(req, res, settings, auth);
         }
+        if (path === '/v1/responses' && req.method === 'POST') {
+          return await handleResponses(req, res, settings, auth);
+        }
+        if (path === '/v1/messages' && req.method === 'POST') {
+          return await handleMessages(req, res, settings, auth);
+        }
         if (path === '/v1/images/generations' && req.method === 'POST') {
           return await handleImageGeneration(req, res);
         }
@@ -366,6 +426,13 @@ const isMain =
   process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isMain) {
+  const renamedLabels = normalizeAutoAccountLabels(providers);
+  // Older databases could hold the same login twice, once per rotated token.
+  // Recover the identity from the stored JWTs, fold those rows together, and
+  // only then let the pool enforce one row per provider identity.
+  const identified = backfillAccountIdentity();
+  const mergedAccounts = mergeDuplicateAccounts();
+  const identityIndex = ensureAccountIdentityIndex();
   const { server, settings } = createServer();
 
   server.on('error', (err) => {
@@ -391,14 +458,31 @@ if (isMain) {
     }
     console.log(`  dashboard: ${base}/`);
     console.log(`  base URL:  ${base}/v1`);
+    if (renamedLabels) {
+      console.log(
+        `  renamed ${renamedLabels} automatic account label${renamedLabels === 1 ? '' : 's'}`,
+      );
+    }
+    if (identified) {
+      console.log(`  recovered ${identified} account identit${identified === 1 ? 'y' : 'ies'} from stored tokens`);
+    }
+    if (mergedAccounts) {
+      console.log(`  merged ${mergedAccounts} duplicate account row${mergedAccounts === 1 ? '' : 's'}`);
+    }
+    if (!identityIndex) {
+      console.warn('  account identity index was not installed; one-login-one-account is enforced on import only');
+    }
+    startMaintenance();
   });
 
   let shuttingDown = false;
   const shutdown = () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    stopMaintenance();
     clearManagedPid();
     closeDb();
+    closeLiveStreams();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 1000).unref();
   };

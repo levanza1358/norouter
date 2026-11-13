@@ -8,6 +8,7 @@ import {
 import { fetchProviderQuota } from './quota.js';
 import { refreshProviderToken } from './refresh.js';
 import { getDb, transaction } from './db.js';
+import { normalizePlan } from './plan.js';
 import { notifyWebhook } from './webhook.js';
 
 // Accounts are the thing that scales: a pool can hold thousands of rows, so
@@ -89,7 +90,9 @@ export function publicAccount(row) {
     tokensOut: row.tokens_out,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    plan: row.provider === 'codex' ? (row.plan || 'unknown') : null,
+    // Every provider reports a tier now; `unknown` means "not read yet" and the
+    // dashboard hides it rather than guessing.
+    plan: normalizePlan(row.plan),
   };
 }
 
@@ -187,9 +190,22 @@ export function listQuotaAccounts(providerId, options = {}) {
   };
 }
 
+function quotaWindows(quota) {
+  return Object.values(quota?.quotas || {}).filter((window) => (
+    window && typeof window === 'object' && Number(window.total) > 0
+  ));
+}
+
 function rememberQuotaOrder(id, quota) {
-  const total = Number(quota?.total ?? quota?.quotas?.session?.total) || 0;
-  const used = Number(quota?.used ?? quota?.quotas?.session?.used) || 0;
+  // Providers without a top-level credit pool (Antigravity, Codex) report
+  // capacity as named windows. Codex keeps ranking on its session window;
+  // Antigravity has no session on free tier, so its windows are summed.
+  const windows = quotaWindows(quota);
+  const windowTotal = windows.reduce((sum, window) => sum + Number(window.total), 0);
+  const windowUsed = windows.reduce((sum, window) => sum + (Number(window.used) || 0), 0);
+  const total = Number(quota?.total ?? quota?.quotas?.session?.total) || windowTotal;
+  const used = Number(quota?.used ?? quota?.quotas?.session?.used)
+    || (total === windowTotal ? windowUsed : 0);
   quotaOrderByAccount.set(id, {
     hasQuota: Boolean(total),
     used,
@@ -265,6 +281,18 @@ function setCodexQuotaState(id, quota, { failed = false } = {}) {
   ).run(now(), id);
 }
 
+// A quota read is the only place most providers state the subscription tier.
+// Store it on the account so the badge is available without another probe; an
+// unreadable plan must never erase the last known one.
+function persistPlan(id, quota) {
+  const plan = normalizePlan(quota?.planKey ?? quota?.plan);
+  if (plan === 'unknown') return false;
+  const time = now();
+  getDb().prepare('UPDATE accounts SET plan = ?, plan_updated_at = ?, updated_at = ? WHERE id = ?')
+    .run(plan, time, time, id);
+  return true;
+}
+
 export function listAccounts(providerId, options = {}) {
   const page = Math.max(1, Number(options.page) || 1);
   const pageSize = Math.min(
@@ -304,21 +332,36 @@ export function listAccounts(providerId, options = {}) {
   };
 }
 
-function nextLabel(providerId, uid, taken = null) {
-  if (uid) return `Account · ${uid}`;
+// Unnamed accounts read as `cbcn_1`, `cbcn_2`, and so on. The provider prefix
+// comes from the provider registry (`codebuddy-cn` -> `cbcn`); direct library
+// callers that do not pass one fall back to the provider id.
+function labelBase(providerId, prefix = '') {
+  const raw = String(prefix || providerId || '').trim();
+  return raw.replace(/[^A-Za-z0-9_-]+/g, '') || 'account';
+}
+
+function labelSequence(providerId, labels, prefix = '') {
+  const head = `${labelBase(providerId, prefix)}_`;
+  const used = new Set();
+  for (const label of labels) {
+    if (typeof label !== 'string' || !label.startsWith(head)) continue;
+    const number = Number(label.slice(head.length));
+    if (Number.isInteger(number) && number > 0) used.add(number);
+  }
+  let number = 1;
+  return () => {
+    while (used.has(number)) number += 1;
+    const label = `${head}${number}`;
+    used.add(number);
+    return label;
+  };
+}
+
+function nextLabel(providerId, taken = null, prefix = '') {
   const labels = taken || new Set(
     getDb().prepare('SELECT label FROM accounts WHERE provider = ?').all(providerId).map((r) => r.label),
   );
-  const prefix = `${providerId}_`;
-  const used = new Set(
-    [...labels]
-      .filter((label) => label.startsWith(prefix))
-      .map((label) => Number(label.slice(prefix.length)))
-      .filter((number) => Number.isInteger(number) && number > 0),
-  );
-  let number = 1;
-  while (used.has(number)) number += 1;
-  return `${prefix}${number}`;
+  return labelSequence(providerId, labels, prefix)();
 }
 
 function normalise(input = {}) {
@@ -327,6 +370,10 @@ function normalise(input = {}) {
   ).trim();
   const refreshToken = String(input.refreshToken ?? input.refresh_token ?? '').trim();
   const uid = String(input.uid ?? input.userId ?? input.user_id ?? '').trim();
+  // Antigravity onboarding binds the account to a Cloud Code project; the
+  // other providers never set it.
+  const projectId = String(input.projectId ?? input.project_id ?? '').trim();
+  const plan = normalizePlan(input.plan);
   const labelInput = String(input.label ?? input.name ?? '').trim();
 
   let kind = String(input.kind || '').trim();
@@ -338,7 +385,7 @@ function normalise(input = {}) {
         : 'access_token';
   }
 
-  return { accessToken, refreshToken, uid, label: labelInput, kind };
+  return { accessToken, refreshToken, uid, label: labelInput, kind, projectId, plan };
 }
 
 // Validates one entry. Returns { error } or the values to insert.
@@ -356,6 +403,9 @@ function prepareEntry(input) {
   if (entry.accessToken.length > 8192 || entry.refreshToken.length > 8192) {
     return { error: 'Token is too long.' };
   }
+  if (entry.projectId.length > 200) {
+    return { error: 'Project id must be at most 200 characters.' };
+  }
   return { entry };
 }
 
@@ -364,11 +414,11 @@ function entryFingerprint(entry) {
   return hash(`${entry.kind}:${secret}`);
 }
 
-function previewEntry(entry, index, status, error = '') {
+function previewEntry(entry, index, status, error = '', assignedLabel = '') {
   const secret = entry.accessToken || entry.refreshToken;
   return {
     index,
-    label: entry.label || '',
+    label: entry.label || assignedLabel || '',
     uid: entry.uid || '',
     kind: entry.kind,
     masked: maskToken(secret),
@@ -377,14 +427,31 @@ function previewEntry(entry, index, status, error = '') {
   };
 }
 
-export function previewAccounts(providerId, entries) {
+export function previewAccounts(providerId, entries, options = {}) {
   if (!Array.isArray(entries)) return { status: 400, error: 'Expected an array of accounts.' };
   if (entries.length > 5000) return { status: 400, error: 'Import at most 5000 accounts per request.' };
 
-  const existing = new Set(
-    getDb().prepare('SELECT fingerprint FROM accounts WHERE provider = ?').all(providerId).map((row) => row.fingerprint),
-  );
+  const rows = getDb()
+    .prepare('SELECT fingerprint, label, uid FROM accounts WHERE provider = ?')
+    .all(providerId);
+  const existing = new Map(rows.map((row) => [row.fingerprint, row.label]));
+  // uid is the durable key: a rotated refresh token is a new fingerprint but
+  // still the same provider account, so the preview must call it a duplicate.
+  const existingUids = new Map();
+  for (const row of rows) {
+    const uid = String(row.uid || '').trim();
+    if (uid && !existingUids.has(uid)) existingUids.set(uid, row.label);
+  }
+  // Explicit labels are reserved before any generated name, so the preview
+  // matches what the inserter will actually assign.
+  const taken = new Set(rows.map((row) => row.label));
+  for (const raw of entries) {
+    const label = normalise(raw).label;
+    if (label) taken.add(label);
+  }
+  const nextAssignedLabel = labelSequence(providerId, taken, options.prefix);
   const incoming = new Set();
+  const incomingUids = new Set();
   const items = [];
   let fresh = 0;
   let duplicates = 0;
@@ -400,16 +467,23 @@ export function previewAccounts(providerId, entries) {
     }
     const { entry } = prepared;
     const fingerprint = entryFingerprint(entry);
-    if (existing.has(fingerprint)) {
+    if (entry.uid && existingUids.has(entry.uid)) {
       duplicates += 1;
-      items.push(previewEntry(entry, index, 'duplicate'));
+      items.push(previewEntry(entry, index, 'duplicate', '', existingUids.get(entry.uid)));
+    } else if (entry.uid && incomingUids.has(entry.uid)) {
+      duplicates += 1;
+      items.push(previewEntry(entry, index, 'duplicate_input'));
+    } else if (existing.has(fingerprint)) {
+      duplicates += 1;
+      items.push(previewEntry(entry, index, 'duplicate', '', existing.get(fingerprint)));
     } else if (incoming.has(fingerprint)) {
       duplicates += 1;
       items.push(previewEntry(entry, index, 'duplicate_input'));
     } else {
       incoming.add(fingerprint);
+      if (entry.uid) incomingUids.add(entry.uid);
       fresh += 1;
-      items.push(previewEntry(entry, index, 'new'));
+      items.push(previewEntry(entry, index, 'new', '', nextAssignedLabel()));
     }
   });
 
@@ -423,67 +497,144 @@ export function previewAccounts(providerId, entries) {
   };
 }
 
-function insertEntry(providerId, entry, expiresIn, labelFor = null) {
+function insertEntry(providerId, entry, expiresIn, labelFor = null, labelPrefix = '') {
   const db = getDb();
   const secret = entry.accessToken || entry.refreshToken;
   const print = hash(`${entry.kind}:${secret}`);
   const time = now();
   const expiresAt = expiresIn ? time + Number(expiresIn) * 1000 : null;
   const label = entry.label
-    || (labelFor ? labelFor(entry.uid) : nextLabel(providerId, entry.uid));
+    || (labelFor ? labelFor() : nextLabel(providerId, null, labelPrefix));
+  const id = randomUUID();
+  const plan = normalizePlan(entry.plan);
+  const planAt = plan === 'unknown' ? null : time;
 
   const result = db.prepare(`
     INSERT OR IGNORE INTO accounts
-      (id, provider, label, kind, access_token, refresh_token, uid, fingerprint,
+      (id, provider, label, kind, access_token, refresh_token, uid, project_id,
+       plan, plan_updated_at, fingerprint,
        enabled, expires_at, cooldown_until, last_error, last_used_at,
        requests, errors, tokens_in, tokens_out, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, '', NULL, 0, 0, 0, 0, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 0, '', NULL, 0, 0, 0, 0, ?, ?)
   `).run(
-    randomUUID(),
+    id,
     providerId,
     label,
     entry.kind,
     entry.accessToken,
     entry.refreshToken,
     entry.uid,
+    entry.projectId || '',
+    plan,
+    planAt,
     print,
     expiresAt,
     time,
     time,
   );
 
-  return Number(result.changes) > 0;
+  return Number(result.changes) > 0 ? id : null;
 }
 
 // Labels are cheap to guess but expensive to check one row at a time, so a bulk
 // import builds the set once and hands the inserter a closure.
-function bulkLabeler(providerId, entries) {
+function bulkLabeler(providerId, entries, prefix = '') {
   const taken = new Set(
     getDb().prepare('SELECT label FROM accounts WHERE provider = ?').all(providerId).map((r) => r.label),
   );
   for (const entry of entries) if (entry.label) taken.add(entry.label);
-  return (uid) => {
-    const label = nextLabel(providerId, uid, taken);
-    taken.add(label);
-    return label;
-  };
+  return labelSequence(providerId, taken, prefix);
+}
+
+function findIdentityAccount(providerId, entry) {
+  if (!entry.uid) return null;
+  return getDb().prepare(
+    'SELECT * FROM accounts WHERE provider = ? AND uid = ? ORDER BY created_at, rowid LIMIT 1',
+  ).get(providerId, entry.uid) || null;
+}
+
+function findFingerprintAccount(providerId, entry) {
+  return getDb().prepare(
+    'SELECT * FROM accounts WHERE provider = ? AND fingerprint = ?',
+  ).get(providerId, entryFingerprint(entry)) || null;
+}
+
+// A new OAuth login for an account that is already pooled replaces the
+// credential on that row. The label, enabled flag, cooldowns, and counters
+// belong to the account, not to the token that happens to be current.
+function updateExistingEntry(existing, entry, expiresIn) {
+  const time = now();
+  const plan = normalizePlan(entry.plan);
+  const sets = [
+    'kind = ?', 'access_token = ?', 'refresh_token = ?', 'expires_at = ?',
+    'fingerprint = ?', 'last_refresh_at = ?', 'cooldown_until = 0',
+    "last_error = ''", 'updated_at = ?',
+  ];
+  const params = [
+    entry.kind,
+    entry.accessToken,
+    entry.refreshToken || existing.refresh_token,
+    expiresIn ? time + Number(expiresIn) * 1000 : null,
+    entryFingerprint(entry),
+    time,
+    time,
+  ];
+  if (entry.uid && !existing.uid) {
+    sets.push('uid = ?');
+    params.push(entry.uid);
+  }
+  if (entry.projectId) {
+    sets.push('project_id = ?');
+    params.push(entry.projectId);
+  }
+  if (plan !== 'unknown') {
+    sets.push('plan = ?', 'plan_updated_at = ?');
+    params.push(plan, time);
+  }
+  params.push(existing.id);
+  getDb().prepare(`UPDATE accounts SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+  quotaOrderByAccount.delete(existing.id);
+  return { updated: 1, id: existing.id };
 }
 
 export function createAccount(providerId, input, options = {}) {
   const prepared = prepareEntry(input);
   if (prepared.error) return { status: 400, error: prepared.error };
 
-  const added = insertEntry(providerId, prepared.entry, options.expiresIn);
-  if (!added) return { status: 409, error: 'This token is already in the pool.' };
+  const { entry } = prepared;
+  // Manual imports stay insert-only. OAuth callbacks pass updateExisting so a
+  // re-login lands on its own account instead of adding a token twin.
+  if (options.updateExisting) {
+    const existing = findIdentityAccount(providerId, entry)
+      || findFingerprintAccount(providerId, entry);
+    if (existing) {
+      invalidate(providerId);
+      return updateExistingEntry(existing, entry, options.expiresIn);
+    }
+  }
+
+  const id = insertEntry(providerId, entry, options.expiresIn, null, options.prefix);
+  if (!id) {
+    // The unique index can fire after the lookup when another login is in
+    // flight; update that row instead of reporting a duplicate token.
+    if (options.updateExisting) {
+      const existing = findIdentityAccount(providerId, entry);
+      if (existing) {
+        invalidate(providerId);
+        return updateExistingEntry(existing, entry, options.expiresIn);
+      }
+    }
+    return { status: 409, error: 'This account is already in the pool.' };
+  }
 
   invalidate(providerId);
-  return { added: 1 };
+  return { added: 1, id };
 }
 
 // Bulk import is the path that matters at 1,000 accounts: one transaction,
 // one prepared statement, and per-entry errors instead of an all-or-nothing
 // failure.
-export function bulkCreateAccounts(providerId, entries) {
+export function bulkCreateAccounts(providerId, entries, options = {}) {
   if (!Array.isArray(entries)) {
     return { status: 400, error: 'Expected an array of accounts.' };
   }
@@ -504,15 +655,84 @@ export function bulkCreateAccounts(providerId, entries) {
   let duplicates = 0;
 
   transaction(() => {
-    const labelFor = bulkLabeler(providerId, accepted.map((item) => item.entry));
+    const labelFor = bulkLabeler(providerId, accepted.map((item) => item.entry), options.prefix);
+    const identities = new Set(
+      getDb().prepare("SELECT uid FROM accounts WHERE provider = ? AND uid <> ''")
+        .all(providerId)
+        .map((row) => row.uid),
+    );
     for (const item of accepted) {
-      if (insertEntry(providerId, item.entry, item.expiresIn, labelFor)) added += 1;
-      else duplicates += 1;
+      // Identity beats fingerprint here: a restore file can carry a fresh
+      // token for an account that is already pooled, and importing it must not
+      // add a second row.
+      if (item.entry.uid && identities.has(item.entry.uid)) {
+        duplicates += 1;
+        continue;
+      }
+      if (insertEntry(providerId, item.entry, item.expiresIn, labelFor, options.prefix)) {
+        added += 1;
+        if (item.entry.uid) identities.add(item.entry.uid);
+      } else {
+        duplicates += 1;
+      }
     }
   });
 
   invalidate(providerId);
   return { added, duplicates, invalid, total: entries.length };
+}
+
+// Older builds named an account after its uid (`Account · <uid>`) and, when
+// there was no uid, after the full provider id (`codebuddy-cn_1`). Rename only
+// those machine-made labels; anything the operator typed stays exactly as it is.
+export function normalizeAutoAccountLabels(knownProviders = []) {
+  const db = getDb();
+  let renamed = 0;
+
+  transaction(() => {
+    for (const provider of knownProviders || []) {
+      const providerId = String(provider?.id || '').trim();
+      if (!providerId) continue;
+      const prefix = String(provider.prefix || providerId);
+      const rows = db.prepare(
+        'SELECT id, label, uid FROM accounts WHERE provider = ? ORDER BY created_at, rowid',
+      ).all(providerId);
+      if (!rows.length) continue;
+
+      const currentHead = `${labelBase(providerId, prefix)}_`;
+      const legacyHead = `${providerId}_`;
+      const isAuto = (row) => {
+        const label = String(row.label || '').trim();
+        const uid = String(row.uid || '').trim();
+        if (!label) return true;
+        // OAuth logins used to be saved with this fixed label instead of the
+        // provider prefix; rename those, but only on providers with OAuth.
+        if (provider.oauth && label === 'ChatGPT OAuth') return true;
+        if (label.startsWith('Account · ')) return !uid || label === `Account · ${uid}`;
+        if (uid && label === uid) return true;
+        // Already in the target format: a restart must not renumber names the
+        // operator has seen, even when a number was deleted.
+        if (label.startsWith(currentHead)) return false;
+        if (legacyHead !== currentHead && label.startsWith(legacyHead)) {
+          return /^[1-9]\d*$/.test(label.slice(legacyHead.length));
+        }
+        return false;
+      };
+
+      const taken = new Set(
+        rows.filter((row) => !isAuto(row)).map((row) => String(row.label || '').trim()),
+      );
+      const next = labelSequence(providerId, taken, prefix);
+      const rename = db.prepare('UPDATE accounts SET label = ? WHERE id = ?');
+      for (const row of rows) {
+        if (!isAuto(row)) continue;
+        rename.run(next(), row.id);
+        renamed += 1;
+      }
+    }
+  });
+
+  return renamed;
 }
 
 export function updateAccount(id, patch = {}) {
@@ -557,6 +777,18 @@ export function updateAccount(id, patch = {}) {
   quotaOrderByAccount.delete(id);
   invalidate(row.provider);
   return { account: getAccount(id) };
+}
+
+// Antigravity resolves its Cloud Code project after the account already exists
+// (loadCodeAssist/onboardUser run during the OAuth callback), so the project id
+// is written in a second step rather than at insert time.
+export function setAccountProject(id, projectId) {
+  const row = getAccountRow(id);
+  if (!row) return false;
+  getDb()
+    .prepare('UPDATE accounts SET project_id = ?, updated_at = ? WHERE id = ?')
+    .run(String(projectId || '').trim(), now(), id);
+  return true;
 }
 
 export function deleteAccount(id) {
@@ -841,6 +1073,7 @@ export async function testAccount(provider, id) {
   else getDb().prepare(
     "UPDATE accounts SET last_error = '', cooldown_until = 0, updated_at = ? WHERE id = ?",
   ).run(now(), id);
+  persistPlan(id, quota);
 
   return { ok: true, quota, account: getAccount(id) };
 }
@@ -859,12 +1092,9 @@ export async function quotaForAccount(provider, id) {
     return { status: quota.invalid ? 401 : quota.status || 502, error: quota.error };
   }
   rememberQuotaOrder(id, quota);
+  persistPlan(id, quota);
   if (provider.id === 'codex') {
     setCodexQuotaState(id, quota);
-    if (quota.plan) {
-      getDb().prepare('UPDATE accounts SET plan = ?, plan_updated_at = ?, updated_at = ? WHERE id = ?')
-        .run(String(quota.plan).toLowerCase(), now(), now(), id);
-    }
   } else if (quotaExhausted(provider, quota)) {
     parkExhaustedQuota(id, quota);
   }
@@ -900,10 +1130,6 @@ export async function warmupAccount(provider, id) {
     rememberQuotaOrder(id, quota);
     if (provider.id === 'codex') {
       setCodexQuotaState(id, quota);
-      if (quota.plan) {
-        getDb().prepare('UPDATE accounts SET plan = ?, plan_updated_at = ?, updated_at = ? WHERE id = ?')
-          .run(String(quota.plan).toLowerCase(), now(), now(), id);
-      }
     } else if (quotaExhausted(provider, quota)) {
       parkExhaustedQuota(id, quota);
     } else {
@@ -911,6 +1137,7 @@ export async function warmupAccount(provider, id) {
         "UPDATE accounts SET last_error = '', cooldown_until = 0, updated_at = ? WHERE id = ?",
       ).run(now(), id);
     }
+    persistPlan(id, quota);
     return { ok: !quotaExhausted(provider, quota), account: getAccount(id), quota };
   })().finally(() => inflightWarmup.delete(id));
 
@@ -944,7 +1171,7 @@ export async function refreshQuotaOrder(provider) {
     while (queue.length) {
       const row = queue.shift();
       const result = await quotaForAccount(provider, row.id);
-      if (result.quota?.total > 0 || result.quota?.quotas?.session) withQuota += 1;
+      if (result.quota?.total > 0 || quotaWindows(result.quota).length) withQuota += 1;
       else if (result.quota) empty += 1;
       else {
         // The probe failed, so the account is unknown rather than empty: it
@@ -1031,6 +1258,66 @@ export function usageByDay(providerId, days = 14) {
   `).all(providerId, since);
 }
 
+// Per-account summary for the dashboard popup. account_usage is keyed by UTC
+// day and only counts successful requests, so the windows are rolling (today,
+// last 7 days, last 30 days) rather than local-calendar buckets. Lifetime
+// errors come from the account row, which also counts failures.
+export function accountUsageSummary(providerId, accountId, now = Date.now()) {
+  const row = getAccountRow(accountId);
+  if (!row || row.provider !== providerId) return null;
+
+  const since = dayKey(now - 29 * 86400000);
+  const rows = getDb().prepare(`
+    SELECT day, requests, tokens_in, tokens_out
+      FROM account_usage
+     WHERE account_id = ? AND day >= ?
+     ORDER BY day
+  `).all(accountId, since);
+  const byDay = new Map(rows.map((item) => [item.day, item]));
+
+  // 30 fixed buckets, so a quiet day is drawn as a gap instead of collapsing
+  // the timeline. Keys are UTC dates from account_usage.
+  const series = [];
+  for (let offset = 29; offset >= 0; offset -= 1) {
+    const key = dayKey(now - offset * 86400000);
+    const item = byDay.get(key);
+    series.push({
+      day: key,
+      requests: Number(item?.requests || 0),
+      tokensIn: Number(item?.tokens_in || 0),
+      tokensOut: Number(item?.tokens_out || 0),
+    });
+  }
+
+  const sumSince = (fromDay) => rows.reduce((total, item) => {
+    if (item.day < fromDay) return total;
+    return {
+      requests: total.requests + Number(item.requests || 0),
+      tokensIn: total.tokensIn + Number(item.tokens_in || 0),
+      tokensOut: total.tokensOut + Number(item.tokens_out || 0),
+    };
+  }, { requests: 0, tokensIn: 0, tokensOut: 0 });
+
+  return {
+    provider: providerId,
+    timeZone: 'UTC',
+    day: dayKey(now),
+    account: publicAccount(row),
+    windows: {
+      day: sumSince(dayKey(now)),
+      week: sumSince(dayKey(now - 6 * 86400000)),
+      month: sumSince(since),
+      all: {
+        requests: Number(row.requests || 0),
+        tokensIn: Number(row.tokens_in || 0),
+        tokensOut: Number(row.tokens_out || 0),
+      },
+    },
+    errors: Number(row.errors || 0),
+    series,
+  };
+}
+
 // The operator backup file. Raw tokens are included on purpose: this file is the
 // credential source for a restore, so it must be handled like the database.
 export function exportAccounts() {
@@ -1045,6 +1332,8 @@ export function exportAccounts() {
       access_token: row.access_token,
       refresh_token: row.refresh_token,
       uid: row.uid,
+      project_id: row.project_id || '',
+      plan: normalizePlan(row.plan),
       expires_at: row.expires_at ? new Date(row.expires_at).toISOString() : null,
       enabled: Boolean(row.enabled),
     })),
@@ -1061,17 +1350,20 @@ function restoreExpiresIn(value) {
 
 // Merges a backup into the pool. Duplicates are skipped by fingerprint; existing
 // accounts are never deleted. Unknown providers are counted but not written.
-export function restoreAccounts(payload, knownProviderIds = new Set()) {
+export function restoreAccounts(payload, knownProviders = []) {
   const accounts = Array.isArray(payload) ? payload : payload?.accounts;
   if (!Array.isArray(accounts)) return { status: 400, error: 'Expected an accounts array.' };
   if (accounts.length > 5000) return { status: 400, error: 'Restore at most 5000 accounts per request.' };
 
+  const providerPrefixes = new Map(
+    (knownProviders || []).map((entry) => [entry.id, entry.prefix || entry.id]),
+  );
   const byProvider = new Map();
   let unknownProviders = 0;
 
   for (const raw of accounts) {
     const provider = String(raw?.provider || '').trim();
-    if (!provider || !knownProviderIds.has(provider)) {
+    if (!provider || !providerPrefixes.has(provider)) {
       unknownProviders += 1;
       continue;
     }
@@ -1081,6 +1373,8 @@ export function restoreAccounts(payload, knownProviderIds = new Set()) {
         access_token: raw.access_token ?? raw.accessToken ?? raw.api_key ?? raw.apiKey ?? '',
         refresh_token: raw.refresh_token ?? raw.refreshToken ?? '',
         uid: raw.uid ?? '',
+        project_id: raw.project_id ?? raw.projectId ?? '',
+        plan: raw.plan ?? '',
         label: raw.label ?? '',
         kind: raw.kind || '',
         expiresIn: restoreExpiresIn(raw.expires_at),
@@ -1093,7 +1387,7 @@ export function restoreAccounts(payload, knownProviderIds = new Set()) {
   let invalid = 0;
 
   for (const [provider, entries] of byProvider) {
-    const result = bulkCreateAccounts(provider, entries);
+    const result = bulkCreateAccounts(provider, entries, { prefix: providerPrefixes.get(provider) });
     added += result.added || 0;
     duplicates += result.duplicates || 0;
     invalid += (result.invalid || []).length;

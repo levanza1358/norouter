@@ -63,6 +63,10 @@ function paintUsageChartTabs() {
 
 function usageChartMarkup(series, bucket, box = {}) {
   if (!series.length) return '<div class="spark-empty">No saved usage for this range yet.</div>';
+  // A range with buckets but no traffic must not draw 24 flat heatmap tiles:
+  // empty cells look like measured zeros. Say there was nothing instead.
+  const hasTraffic = series.some((item) => item.requests || item.tokensIn || item.tokensOut || item.errors);
+  if (!hasTraffic) return '<div class="spark-empty">No requests in this range.</div>';
   const cells = usageSparkCells(series, bucket);
   if (usageChartType === 'heatmap') {
     return `<div class="uchart-heat">${cells

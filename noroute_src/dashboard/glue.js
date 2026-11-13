@@ -26,11 +26,7 @@ function renderRecent(data, report = dashboardUsageData) {
   }).join('');
 
   trimRecentToCard();
-  padRecentToCard();
-  requestAnimationFrame(() => {
-    trimRecentToCard();
-    padRecentToCard();
-  });
+  requestAnimationFrame(trimRecentToCard);
 }
 
 // Rows are dropped from the bottom until the table fits its card, so a tall
@@ -52,43 +48,8 @@ function trimRecentToCard() {
   }
 }
 
-// A short history leaves the bottom of the card blank; placeholder rows keep it
-// filled without pretending to be data. They are added in one batch and the
-// overshoot is trimmed off the end, because the card's final height is only
-// known once the browser has laid out the rest of the board.
-function padRecentToCard() {
-  const body = $('recentTable');
-  const wrap = body?.closest('.table-wrap');
-  const table = wrap?.querySelector('table');
-  if (!wrap || !table) return;
-
-  for (const ghost of [...body.querySelectorAll('.rghost')]) ghost.remove();
-
-  const first = body.firstElementChild;
-  if (!first || first.querySelector('.empty')) return;
-
-  const available = wrap.clientHeight;
-  if (!available) return;
-
-  const widths = [74, 56, 66, 48, 61];
-  const ghosts = [];
-  // Append optimistically, then drop whatever overshoots: the exact height of a
-  // placeholder row depends on the theme's font scale, so guessing it up front
-  // would either stop early or clip.
-  while (ghosts.length < 40 && table.getBoundingClientRect().height + 24 <= available) {
-    const i = ghosts.length;
-    const tr = document.createElement('tr');
-    tr.className = 'rghost';
-    tr.innerHTML = `<td colspan="4"><span class="ghostbar" style="width:${widths[i % widths.length]}%"></span></td>`;
-    body.appendChild(tr);
-    ghosts.push(tr);
-  }
-
-  while (ghosts.length && table.getBoundingClientRect().height > available + 1) {
-    ghosts.pop().remove();
-  }
-}
-
+// A short history leaves the bottom of the card blank on purpose: an empty
+// slot is honest, placeholder rows would look like data that never arrived.
 function paintDashboardRangeTabs() {
   const tabs = [...document.querySelectorAll('[data-dashboard-range]')];
   const active = tabs.find((tab) => tab.dataset.dashboardRange === dashboardUsageRange) || tabs[0];
@@ -164,6 +125,7 @@ function renderCurrent() {
   }
   if (!latest) return;
   if (currentPath === '/') {
+    renderDashboardMap(latest);
     renderStatistics(latest, dashboardUsageData);
     renderRequests(latest, dashboardUsageData);
     renderModels(latest, dashboardUsageData);
@@ -183,6 +145,8 @@ function renderCurrent() {
     renderSettings(latest);
   } else if (currentPath === '/api-keys') {
     renderApiKeys();
+  } else if (currentPath === '/map') {
+    renderServiceMapPage(latest);
   }
 }
 

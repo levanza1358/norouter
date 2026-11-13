@@ -1,4 +1,5 @@
 import { getDb, transaction } from './db.js';
+import { isKnownPlan, normalizePlan } from './plan.js';
 
 export function codexActiveAccounts() {
   return getDb().prepare("SELECT * FROM accounts WHERE provider = 'codex' AND enabled = 1 ORDER BY created_at, rowid").all();
@@ -59,7 +60,9 @@ export function codexModelAccess(model) {
 }
 
 export function codexModelPlans() {
-  const order = { free: 0, plus: 1, pro: 2, unknown: 3 };
+  // Cheapest plan first so the dashboard lists a model under the tier that
+  // actually unlocks it; the tail plans only exist for completeness.
+  const order = { free: 0, plus: 1, pro: 2, ultra: 3, team: 4, business: 5, enterprise: 6, unknown: 7 };
   const grouped = new Map();
   for (const row of getDb().prepare(`
     SELECT m.model, m.plan
@@ -72,12 +75,15 @@ export function codexModelPlans() {
   }
   return new Map([...grouped].map(([model, plans]) => [
     model,
-    [...plans].sort((a, b) => (order[a] ?? 3) - (order[b] ?? 3)),
+    [...plans].sort((a, b) => (order[a] ?? 7) - (order[b] ?? 7)),
   ]));
 }
 
 export function saveCodexAccountCatalog(accountId, plan, models) {
-  const cleanPlan = ['free', 'plus', 'pro'].includes(String(plan).toLowerCase()) ? String(plan).toLowerCase() : 'unknown';
+  const existing = getDb().prepare('SELECT plan FROM accounts WHERE id = ?').get(accountId)?.plan;
+  // `/models` does not always name the plan. When it doesn't, keep the tier a
+  // login or quota read already stored instead of erasing it.
+  const cleanPlan = isKnownPlan(plan) ? normalizePlan(plan) : normalizePlan(existing);
   const now = Date.now();
   transaction((db) => {
     db.prepare('UPDATE accounts SET plan = ?, plan_updated_at = ?, updated_at = ? WHERE id = ?').run(cleanPlan, now, now, accountId);
@@ -88,8 +94,10 @@ export function saveCodexAccountCatalog(accountId, plan, models) {
     const removeCustom = db.prepare('DELETE FROM custom_models WHERE provider = ? AND model = ?');
     const removeState = db.prepare('DELETE FROM model_states WHERE provider = ? AND model = ?');
     for (const model of cleanModels) {
-      removeCustom.run('codex', model);
-      removeState.run('codex', model);
+      // A promoted custom id's state belonged to that stale local label, so it
+      // is dropped. States on native models are user intent (a disabled model)
+      // and must survive a catalog refresh.
+      if (removeCustom.run('codex', model).changes > 0) removeState.run('codex', model);
     }
     db.prepare('DELETE FROM codex_account_models WHERE account_id = ?').run(accountId);
     const insert = db.prepare('INSERT INTO codex_account_models (account_id, model, plan, updated_at) VALUES (?, ?, ?, ?)');

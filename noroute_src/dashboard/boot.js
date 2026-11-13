@@ -32,6 +32,7 @@ function dismissSplash() {
 
 paintDate();
 paintAppearanceControls();
+syncToggleLabels();
 $('baseUrl').textContent = `${location.origin}/v1`;
 navigate(location.pathname, { push: false, initial: true });
 refresh();
@@ -54,7 +55,6 @@ if ('ResizeObserver' in window) {
       trimEventsToColumn();
       trimModelsToCard();
       trimRecentToCard();
-      padRecentToCard();
     });
   });
   if (eventCard) observer.observe(eventCard);

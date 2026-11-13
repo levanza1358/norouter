@@ -1,5 +1,4 @@
 import { allModels, providers } from '../providers/index.js';
-import { codexCatalog } from './codex-account.js';
 
 // Accepts "cbcn/deepseek-v4.1-flash" and the bare "deepseek-v4.1-flash".
 // Returns { provider, model } or { error }.
@@ -15,7 +14,7 @@ export function resolveModel(raw) {
     const rest = name.slice(slash + 1);
     const provider = providers.find((p) => p.id === prefix || p.prefix === prefix);
     if (provider) {
-      const available = provider.id === 'codex' ? codexCatalog() : allModels(provider);
+      const available = allModels(provider);
       if (!available.includes(rest)) {
         return { error: `Unknown model "${rest}" for provider "${provider.id}"` };
       }
@@ -23,7 +22,7 @@ export function resolveModel(raw) {
     }
   }
 
-  const owners = providers.filter((p) => (p.id === 'codex' ? codexCatalog() : allModels(p)).includes(name));
+  const owners = providers.filter((p) => allModels(p).includes(name));
   if (owners.length === 1) return { provider: owners[0], model: name };
   if (owners.length > 1) {
     const options = owners.map((p) => `${p.id}/${name}`).join(', ');

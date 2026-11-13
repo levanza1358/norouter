@@ -8,7 +8,7 @@ import { getDb } from './db.js';
 const URL_KEY = 'webhook.url';
 const ENABLED_KEY = 'webhook.enabled';
 
-const MAX_EVENTS = ['request', 'error', 'cooldown'];
+const MAX_EVENTS = ['request', 'error', 'cooldown', 'budget'];
 
 function readValue(key, fallback = '') {
   const row = getDb().prepare('SELECT value FROM meta WHERE key = ?').get(key);
@@ -19,7 +19,7 @@ export function getWebhookSettings() {
   return {
     enabled: readValue(ENABLED_KEY, 'false') === 'true',
     url: readValue(URL_KEY, ''),
-    events: ['request', 'error', 'cooldown'],
+    events: [...MAX_EVENTS],
   };
 }
 

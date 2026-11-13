@@ -1,5 +1,9 @@
 /* ---------------- settings page ---------------- */
 
+// A hidden key renders a fixed mask instead of the secret itself: the DOM then
+// never holds the token until someone asks to see it.
+const KEY_MASK = '••••••••••••••••';
+
 function limitBar(label, used, limit) {
   if (limit == null) return '';
   const ratio = Math.min(1, used / Math.max(limit, 1));
@@ -17,12 +21,13 @@ function renderApiKeys() {
   $('keyActive').textContent = apiKeys.filter((key) => key.enabled).length;
   $('keyProtection').textContent = requireKey ? 'Protected' : 'Not protected';
   $('requireKeyToggle').checked = requireKey;
+  syncToggleLabels();
   list.innerHTML = apiKeys.length ? apiKeys.map((key) => `<div class="key-row">
     <div class="key-icon" aria-hidden="true">⌁</div>
     <div class="key-main">
       <div class="key-identity"><strong>${escapeHtml(key.name)}</strong><span class="status-pill ${key.status === 'enabled' ? 'ok' : 'bad'}"><span class="dot"></span>${escapeHtml(key.status)}</span></div>
       <small>${key.expiresAt ? `expires ${escapeHtml(new Date(key.expiresAt).toLocaleString())}` : 'no expiry'}</small>
-      <code class="key-secret ${key.secret ? 'is-hidden' : 'key-secret-missing'}" id="key-secret-${escapeHtml(key.id)}">${escapeHtml(key.secret || 'No secret stored — rotate to issue one')}</code>
+      <code class="key-secret ${key.secret ? 'is-hidden' : 'key-secret-missing'}" id="key-secret-${escapeHtml(key.id)}">${escapeHtml(key.secret ? KEY_MASK : 'No secret stored — rotate to issue one')}</code>
     </div>
     <div class="key-limits">${limitBar('Requests', key.requests, key.requestLimit)}${limitBar('Tokens', key.tokens, key.tokenLimit)}</div>
     <div class="key-row-actions">
@@ -48,6 +53,7 @@ async function loadApiKeys() {
     apiKeys = keysBody.keys || [];
     if (latest) latest.requireApiKey = settingsBody.requireApiKey === true;
     renderApiKeys();
+    loadKeyModelOptions();
   } catch (err) {
     detailNote($('keyNote'), err.message, 'bad');
   }
@@ -108,8 +114,27 @@ function setKeyFormValues(form, key) {
   form.elements.secret.value = key.secret || '';
   form.elements.secret.placeholder = key.secret ? '' : 'Rotate or enter a replacement token';
   form.elements.expiresAt.value = key.expiresAt ? new Date(key.expiresAt - new Date(key.expiresAt).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '';
+  if (form.elements.defaultModel) form.elements.defaultModel.value = key.defaultModel || '';
   setLimitControl(form, 'request', key.requestLimit);
   setLimitControl(form, 'token', key.tokenLimit);
+}
+
+// The default-model field suggests the same enabled models and combos the
+// routing page offers. Suggestions are optional; a free-typed value is still
+// validated by the server when the key is saved.
+async function loadKeyModelOptions() {
+  const list = $('routingModelList');
+  if (!list) return;
+  try {
+    const res = await fetch('/api/routing-rules', { cache: 'no-store' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return;
+    const models = (body.catalog || []).map((entry) => entry.id);
+    const combos = body.combos || [];
+    list.innerHTML = [...models, ...combos].map((id) => `<option value="${escapeHtml(id)}"></option>`).join('');
+  } catch {
+    // Suggestions only; leave the field usable as plain text.
+  }
 }
 
 function keyFormValues(form) {
@@ -303,6 +328,7 @@ $('keyList')?.addEventListener('click', async (event) => {
   if (show) {
     const secret = $(`key-secret-${id}`);
     const hidden = secret.classList.toggle('is-hidden');
+    secret.textContent = hidden ? KEY_MASK : (key.secret || '');
     show.textContent = hidden ? 'Show' : 'Hide';
     return;
   }
@@ -361,8 +387,15 @@ function renderDashboardAuth() {
   const toggle = $('dashboardAuthToggle');
   if (!toggle) return;
   toggle.checked = dashboardAuth.enabled;
+  syncToggleLabels();
   const warning = $('dashboardAuthWarning');
-  if (warning) warning.textContent = dashboardAuth.hasPassword ? '' : 'Default password 123456 is active. Change it before enabling protection.';
+  // The toggle can already be on while the password is still the built-in one,
+  // so the warning has to describe the state that is actually on screen.
+  if (warning) warning.textContent = dashboardAuth.hasPassword
+    ? ''
+    : dashboardAuth.enabled
+      ? 'Protection is on with the default password 123456. Change it now.'
+      : 'Default password 123456 is active. Change it before enabling protection.';
 }
 
 async function loadDashboardAuth() {
@@ -415,6 +448,7 @@ function renderTokenSaver() {
   if (rtk) rtk.checked = tokenSaver.rtk.enabled;
   const caveman = $('tokenSaverCaveman');
   if (caveman) caveman.checked = tokenSaver.caveman.enabled;
+  syncToggleLabels();
   const note = $('tokenSaverNote');
   if (note && tokenSaverLoading) note.textContent = 'Loading…';
 }
@@ -462,6 +496,34 @@ function fmtTime(iso) {
   return d.toLocaleTimeString('en-GB', { hour12: false });
 }
 
+// The route cell answers "why this model": the reason the request left the
+// requested model, plus a note when the newest message carried an image.
+function requestRouteCell(r) {
+  if (!r.route) return '—';
+  const chip = r.route === 'direct' ? 'chip chip-quiet' : 'chip';
+  const image = r.image
+    ? '<span class="chip chip-quiet" title="The newest message carried an image">image</span>'
+    : '';
+  const via = r.via && r.via !== r.requested
+    ? `<div class="req-sub" title="${escapeHtml(r.via)}">via ${escapeHtml(r.via)}</div>`
+    : '';
+  return `<div class="req-route"><span class="${chip}">${escapeHtml(r.route)}</span>${image}</div>${via}`;
+}
+
+// The served model keeps the row's headline; a remapped request names what the
+// client actually asked for, and a fallback names the chain that was walked.
+function requestModelCell(r) {
+  const served = escapeHtml(r.model || '—');
+  const asked = r.route && r.route !== 'direct' && r.requested && r.requested !== r.model
+    ? `<div class="req-sub" title="Requested ${escapeHtml(r.requested)}">asked ${escapeHtml(r.requested)}</div>`
+    : '';
+  const chain = Array.isArray(r.attempted) && r.attempted.length > 1 ? r.attempted.join(' → ') : '';
+  const tried = chain
+    ? `<div class="req-sub" title="${escapeHtml(chain)}">tried ${escapeHtml(chain)}</div>`
+    : '';
+  return `<div class="req-served">${served}</div>${asked}${tried}`;
+}
+
 function renderRequestLog(rows) {
   const table = $('requestLogTable');
   if (!table) return;
@@ -469,13 +531,14 @@ function renderRequestLog(rows) {
     ? rows.map((r) => `<tr>
         <td class="mono">${fmtTime(r.at)}</td>
         <td class="r">${r.status == null ? '—' : r.status}</td>
+        <td>${requestRouteCell(r)}</td>
         <td>${escapeHtml(r.provider || '—')}</td>
-        <td class="model">${escapeHtml(r.model || '—')}</td>
+        <td class="model">${requestModelCell(r)}</td>
         <td class="r">${fmtFull(r.tokensIn)}</td>
         <td class="r">${fmtFull(r.tokensOut)}</td>
         <td class="r">${r.ms == null ? '—' : r.ms + ' ms'}</td>
       </tr>`).join('')
-    : '<tr><td colspan="7" class="empty" style="border-bottom:0">No chat requests recorded yet.</td></tr>';
+    : '<tr><td colspan="8" class="empty" style="border-bottom:0">No chat requests recorded yet.</td></tr>';
 }
 
 async function loadRequestLog() {
@@ -511,6 +574,7 @@ function renderWebhook() {
   const url = $('webhookUrl');
   if (toggle) toggle.checked = webhookSettings.enabled;
   if (url) url.value = webhookSettings.url || '';
+  syncToggleLabels();
 }
 
 async function loadWebhook() {
@@ -549,6 +613,202 @@ $('webhookUrl')?.addEventListener('change', (event) => {
   saveWebhook({ url: event.currentTarget.value.trim() });
 });
 
+/* Daily budgets: each managed key and provider can cap tokens, spend, or both
+   for the current local day. Saving a row sends both fields because the server
+   replaces the whole limit object for that scope; two blank fields clear it. */
+let budgetData = { enabled: false, day: '', keys: [], providers: [] };
+
+function budgetBar(label, value, percent) {
+  const ratio = Math.max(0, Math.min(100, Number(percent) || 0));
+  const tone = ratio >= 80 ? 'bad' : ratio >= 50 ? 'warn' : 'ok';
+  return `<div class="key-limit"><span>${label} <b>${value}</b></span><i class="${tone}"><em style="width:${Math.max(2, ratio)}%"></em></i></div>`;
+}
+
+function budgetRow(group, item) {
+  const limit = item.limit || {};
+  const used = item.used || {};
+  const bars = [
+    limit.tokens != null ? budgetBar('Tokens', `${compact(used.tokens)} / ${compact(limit.tokens)}`, item.percent) : '',
+    limit.cost != null ? budgetBar('Cost', `${fmtCost(used.cost)} / ${fmtCost(limit.cost)}`, item.costPercent) : '',
+  ].join('');
+  return `<div class="budget-row" data-budget-group="${group}" data-budget-id="${escapeHtml(item.id)}">` +
+    `<div class="budget-row-head"><strong>${escapeHtml(item.name || item.id)}</strong><small>${compact(used.tokens)} tokens · ${fmtCost(used.cost)} today</small></div>` +
+    `<div class="budget-fields">` +
+    `<label class="apfield"><span>Tokens / day</span><input type="number" min="1" step="1" inputmode="numeric" placeholder="No cap" value="${limit.tokens ?? ''}" data-budget-field="tokens"></label>` +
+    `<label class="apfield"><span>USD / day</span><input type="number" min="0" step="any" inputmode="decimal" placeholder="No cap" value="${limit.cost ?? ''}" data-budget-field="cost"></label>` +
+    `</div>${bars}</div>`;
+}
+
+function budgetGroupRows(rows, group, title, empty) {
+  return `<div class="budget-group" data-budget-section="${group}"><h3 class="budget-group-title">${title}</h3>${rows.length
+    ? rows.map((item) => budgetRow(group, item)).join('')
+    : `<p class="desc">${empty}</p>`}</div>`;
+}
+
+function renderBudgets() {
+  const toggle = $('budgetToggle');
+  if (toggle) toggle.checked = budgetData.enabled;
+  syncToggleLabels();
+  const list = $('budgetList');
+  if (!list) return;
+  list.innerHTML = `<p class="budget-meta">Day ${escapeHtml(budgetData.day || 'today')} · limits reset at local midnight</p>` +
+    budgetGroupRows(budgetData.keys, 'keys', 'API keys', 'No API keys yet.') +
+    budgetGroupRows(budgetData.providers, 'providers', 'Providers', 'No providers yet.');
+}
+
+async function loadBudgets() {
+  const note = $('budgetNote');
+  try {
+    const res = await fetch('/api/budgets', { cache: 'no-store' });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error?.message || 'Could not load budgets.');
+    budgetData = body;
+    renderBudgets();
+    if (note) note.textContent = '';
+  } catch (err) {
+    if (note) note.textContent = err.message;
+  }
+}
+
+async function saveBudgets(patch) {
+  const note = $('budgetNote');
+  if (note) note.textContent = 'Saving…';
+  try {
+    const res = await fetch('/api/budgets', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error?.message || 'Could not save budgets.');
+    budgetData = body;
+    renderBudgets();
+    if (note) note.textContent = 'Saved';
+  } catch (err) {
+    renderBudgets();
+    if (note) note.textContent = err.message;
+  }
+}
+
+$('budgetToggle')?.addEventListener('change', (event) => {
+  saveBudgets({ enabled: event.currentTarget.checked });
+});
+
+$('budgetList')?.addEventListener('change', (event) => {
+  const input = event.target.closest('[data-budget-field]');
+  const row = input?.closest('[data-budget-group]');
+  if (!input || !row) return;
+  const limit = {};
+  const tokens = row.querySelector('[data-budget-field="tokens"]').value.trim();
+  const cost = row.querySelector('[data-budget-field="cost"]').value.trim();
+  if (tokens !== '') limit.tokens = Number(tokens);
+  if (cost !== '') limit.cost = Number(cost);
+  saveBudgets({ [row.dataset.budgetGroup]: { [row.dataset.budgetId]: Object.keys(limit).length ? limit : null } });
+});
+
+/* Scheduled upkeep: the interval and the three background tasks. The "Run"
+   button works even when the scheduler is idle, which makes it the quickest
+   way to check that upstream credentials still work. */
+let maintenanceState = { settings: { enabled: true, intervalMinutes: 15 }, running: false, lastTickAt: null, tasks: [] };
+let maintenanceRunning = false;
+
+function maintenanceTaskRow(task) {
+  const when = task.lastRunAt ? `Last run ${relTime(task.lastRunAt)}` : 'Never run';
+  const summary = task.lastResult?.summary ? ` · ${task.lastResult.summary}` : '';
+  const chip = task.lastResult
+    ? `<span class="chip ${task.lastResult.ok ? 'chip-ok' : 'chip-bad'}">${task.lastResult.ok ? 'ok' : 'failed'}</span>`
+    : '<span class="chip chip-quiet">pending</span>';
+  return `<div class="maintenance-row"><div class="maintenance-row-main"><strong>${escapeHtml(task.label)}</strong>` +
+    `<small>${when} · every ${task.everyMinutes}m${escapeHtml(summary)}</small></div>${chip}</div>`;
+}
+
+function renderMaintenance() {
+  const settings = maintenanceState.settings || {};
+  const toggle = $('maintenanceToggle');
+  if (toggle) toggle.checked = settings.enabled !== false;
+  const interval = $('maintenanceInterval');
+  if (interval && document.activeElement !== interval) interval.value = settings.intervalMinutes ?? 15;
+  syncToggleLabels();
+  const clock = $('maintenanceClock');
+  if (clock) {
+    clock.textContent = maintenanceState.running
+      ? `Scheduler active · last pass ${maintenanceState.lastTickAt ? relTime(maintenanceState.lastTickAt) : 'not yet'}`
+      : 'Scheduler idle until the server process starts it.';
+  }
+  const list = $('maintenanceTasks');
+  if (list) list.innerHTML = (maintenanceState.tasks || []).map(maintenanceTaskRow).join('');
+}
+
+function setMaintenanceButtons(disabled) {
+  const button = $('runMaintenance');
+  if (button) button.disabled = disabled;
+}
+
+async function loadMaintenance() {
+  const note = $('maintenanceNote');
+  try {
+    const res = await fetch('/api/maintenance', { cache: 'no-store' });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error?.message || 'Could not load maintenance status.');
+    maintenanceState = body;
+    renderMaintenance();
+    if (note) note.textContent = '';
+  } catch (err) {
+    if (note) note.textContent = err.message;
+  }
+}
+
+async function saveMaintenance(patch) {
+  const note = $('maintenanceNote');
+  try {
+    const res = await fetch('/api/maintenance', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error?.message || 'Could not save maintenance settings.');
+    maintenanceState = body;
+    renderMaintenance();
+    if (note) note.textContent = 'Saved';
+  } catch (err) {
+    renderMaintenance();
+    if (note) note.textContent = err.message;
+  }
+}
+
+async function runMaintenanceAll() {
+  const note = $('maintenanceNote');
+  if (maintenanceRunning) return;
+  maintenanceRunning = true;
+  setMaintenanceButtons(true);
+  if (note) note.textContent = 'Running…';
+  try {
+    const tasks = (maintenanceState.tasks || []).map((task) => task.id);
+    const res = await fetch('/api/maintenance/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tasks }) });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error?.message || 'Could not run maintenance.');
+    maintenanceState = body.snapshot || maintenanceState;
+    renderMaintenance();
+    const results = body.results || [];
+    const failed = results.filter((result) => !result.ok);
+    const elapsed = results.reduce((total, result) => total + (result.ms || 0), 0);
+    if (note) {
+      note.textContent = failed.length
+        ? `${failed.length} of ${results.length} failed: ${failed[0].summary}`
+        : `${results.length} tasks finished in ${elapsed} ms`;
+    }
+  } catch (err) {
+    renderMaintenance();
+    if (note) note.textContent = err.message;
+  } finally {
+    maintenanceRunning = false;
+    setMaintenanceButtons(false);
+  }
+}
+
+$('maintenanceToggle')?.addEventListener('change', (event) => {
+  saveMaintenance({ enabled: event.currentTarget.checked });
+});
+
+$('saveMaintenanceInterval')?.addEventListener('click', () => {
+  saveMaintenance({ intervalMinutes: Number($('maintenanceInterval')?.value) });
+});
+
+$('runMaintenance')?.addEventListener('click', runMaintenanceAll);
+
 function renderReplyFilters() {
   const verbosity = $('replyVerbosity');
   const coding = $('replyCoding');
@@ -559,6 +819,7 @@ function renderReplyFilters() {
     syncCustomSelects();
   }
   if (coding) coding.checked = replyFilters.coding;
+  syncToggleLabels();
 }
 
 async function loadReplyFilters() {
@@ -615,6 +876,7 @@ async function loadAutostart() {
     if (!res.ok) throw new Error(body.error?.message || 'Could not load autostart status.');
     toggle.checked = body.enabled;
     toggle.disabled = !body.supported;
+    syncToggleLabels();
     if (!body.supported) detailNote(note, `Autostart is not supported on ${body.platform}.`, 'bad');
   } catch (err) {
     toggle.disabled = true;

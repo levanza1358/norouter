@@ -193,15 +193,19 @@ function activitySince(range, now) {
   return date.getTime();
 }
 
-export function usageActivity(range = 'day', now = Date.now(), limit = 100) {
+export function usageActivity(range = 'day', now = Date.now(), limit = 100, provider = '') {
+  const scope = provider ? ' AND provider = ?' : '';
+  const params = [activitySince(range, now)];
+  if (provider) params.push(provider);
+  params.push(Math.min(200, Math.max(1, Number(limit) || 100)));
   const rows = getDb().prepare(`
     SELECT at, provider, model, account, tokens_in, tokens_out,
       latency_ms, status, ok, error
     FROM usage_activity
-    WHERE at >= ?
+    WHERE at >= ?${scope}
     ORDER BY at DESC, id DESC
     LIMIT ?
-  `).all(activitySince(range, now), Math.min(200, Math.max(1, Number(limit) || 100)));
+  `).all(...params);
   return rows.map((row) => ({
     at: new Date(Number(row.at)).toISOString(),
     provider: row.provider,
@@ -216,8 +220,15 @@ export function usageActivity(range = 'day', now = Date.now(), limit = 100) {
   }));
 }
 
-export function usageReport(range = 'day', now = Date.now()) {
+export function usageReport(range = 'day', now = Date.now(), options = {}) {
   if (!USAGE_RANGES.includes(range)) return { error: `Unknown usage range "${range}".` };
+
+  // A provider id narrows every part of the report (series, totals, models,
+  // activity, active requests) so the detail page can reuse this shape without
+  // a second aggregation path.
+  const provider = String(options.provider || '');
+  const scope = provider ? ' AND provider = ?' : '';
+  const scopeParams = provider ? [provider] : [];
 
   const db = getDb();
   const groupBy = range === 'day' ? 'hour' : range === 'all' ? 'month' : 'day';
@@ -227,7 +238,9 @@ export function usageReport(range = 'day', now = Date.now()) {
   if (!since) {
     // All time starts at the oldest recorded hour; an empty table still gets a
     // single current-month bucket so the chart has a frame.
-    const oldest = db.prepare('SELECT MIN(bucket) AS bucket FROM usage_hourly').get()?.bucket;
+    const oldest = db.prepare(
+      `SELECT MIN(bucket) AS bucket FROM usage_hourly WHERE 1 = 1${scope}`,
+    ).get(...scopeParams)?.bucket;
     since = oldest ? new Date(`${oldest}:00:00`) : new Date(now);
     since.setMinutes(0, 0, 0);
   }
@@ -241,10 +254,10 @@ export function usageReport(range = 'day', now = Date.now()) {
       SUM(tokens_in) AS tokens_in,
       SUM(tokens_out) AS tokens_out
     FROM usage_hourly
-    WHERE bucket >= ?
+    WHERE bucket >= ?${scope}
     GROUP BY ${segment}
     ORDER BY bucket
-  `).all(sinceKey);
+  `).all(sinceKey, ...scopeParams);
 
   const totalsRow = db.prepare(`
     SELECT COALESCE(SUM(requests), 0) AS requests,
@@ -254,8 +267,8 @@ export function usageReport(range = 'day', now = Date.now()) {
       COALESCE(SUM(latency_ms), 0) AS latency_ms,
       COALESCE(SUM(latency_count), 0) AS latency_count
     FROM usage_hourly
-    WHERE bucket >= ?
-  `).get(sinceKey);
+    WHERE bucket >= ?${scope}
+  `).get(sinceKey, ...scopeParams);
 
   const models = db.prepare(`
     SELECT provider, model,
@@ -266,11 +279,11 @@ export function usageReport(range = 'day', now = Date.now()) {
       SUM(latency_ms) AS latency_ms,
       SUM(latency_count) AS latency_count
     FROM usage_hourly
-    WHERE bucket >= ? AND model != ''
+    WHERE bucket >= ? AND model != ''${scope}
     GROUP BY provider, model
     HAVING SUM(requests) > 0 OR SUM(tokens_in) + SUM(tokens_out) > 0
     ORDER BY SUM(requests) DESC, SUM(tokens_in) + SUM(tokens_out) DESC
-  `).all(sinceKey).map((row) => {
+  `).all(sinceKey, ...scopeParams).map((row) => {
     const pricing = modelPricing(row.model);
     return {
       provider: row.provider,
@@ -293,15 +306,18 @@ export function usageReport(range = 'day', now = Date.now()) {
     errors: Number(totalsRow.errors || 0),
     tokensIn: Number(totalsRow.tokens_in || 0),
     tokensOut: Number(totalsRow.tokens_out || 0),
+    // Errors can outnumber recorded successes (failed auth, combo attempts), so
+    // the rate floors at zero instead of rendering a negative percentage.
     successRate: Number(totalsRow.requests || 0) === 0
       ? null
-      : Math.round(((Number(totalsRow.requests) - Number(totalsRow.errors)) / Number(totalsRow.requests)) * 1000) / 10,
+      : Math.max(0, Math.round(((Number(totalsRow.requests) - Number(totalsRow.errors)) / Number(totalsRow.requests)) * 1000) / 10),
     avgMs: Number(totalsRow.latency_count || 0) > 0
       ? Math.round(Number(totalsRow.latency_ms || 0) / Number(totalsRow.latency_count))
       : null,
     cost: totalCost,
   };
 
+  const active = activeRequestSnapshot();
   return {
     range,
     timeZone: usageTimeZone(),
@@ -310,7 +326,8 @@ export function usageReport(range = 'day', now = Date.now()) {
     totals,
     series: fillSeries(range, groupBy, since, now, series),
     models,
-    activity: usageActivity(range, now, 200),
-    active: activeRequestSnapshot(),
+    activity: usageActivity(range, now, provider ? 60 : 200, provider),
+    active: provider ? active.filter((entry) => entry.provider === provider) : active,
+    ...(provider ? { provider } : {}),
   };
 }

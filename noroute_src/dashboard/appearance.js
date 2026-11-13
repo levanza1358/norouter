@@ -1,8 +1,15 @@
 /* ---------------- appearance ---------------- */
 
+const ACCENTS = ['blue', 'amber', 'rose', 'ink', 'graphite', 'slate'];
+const ACCENT_NAMES = { blue: 'Blue', amber: 'Amber', rose: 'Rose', ink: 'Ink', graphite: 'Graphite', slate: 'Slate' };
+// Older builds stored coloured accents under names this build no longer
+// paints. Fold those onto the closest current hue rather than losing the
+// saved choice to a neutral swatch.
+const LEGACY_ACCENTS = { violet: 'blue', purple: 'blue', indigo: 'blue', teal: 'blue', green: 'blue', cyan: 'blue', orange: 'amber', red: 'rose' };
+const savedAccent = document.documentElement.dataset.accent;
 const appearance = {
   theme: document.documentElement.dataset.theme || 'light',
-  accent: document.documentElement.dataset.accent || 'violet',
+  accent: ACCENTS.includes(savedAccent) ? savedAccent : (LEGACY_ACCENTS[savedAccent] || 'blue'),
 };
 
 function saveAppearance() {
@@ -34,7 +41,7 @@ function paintAppearanceControls() {
   const themeNote = $('themeNote');
   const accentNote = $('accentNote');
   if (themeNote) themeNote.textContent = appearance.theme;
-  if (accentNote) accentNote.textContent = appearance.accent;
+  if (accentNote) accentNote.textContent = ACCENT_NAMES[appearance.accent] || appearance.accent;
 }
 
 document.querySelectorAll('[data-theme-value]').forEach((btn) => {
@@ -238,7 +245,7 @@ const resetBtn = $('resetAppearance');
 if (resetBtn) {
   resetBtn.addEventListener('click', () => {
     appearance.theme = 'light';
-    appearance.accent = 'violet';
+    appearance.accent = 'blue';
     saveAppearance();
     applyAppearance();
   });

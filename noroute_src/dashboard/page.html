@@ -1,16 +1,23 @@
 <!doctype html>
-<html lang="en" data-theme="light" data-accent="violet">
+<html lang="en" data-theme="light" data-accent="blue">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>norouter · dashboard</title>
+<meta name="description" content="Local gateway console for routing OpenAI-compatible requests through your own provider accounts.">
+<meta name="page-type" content="software">
 <script>
   // Applied before first paint so a saved theme never flashes light.
   try {
     var t = localStorage.getItem('norouter.theme');
     var a = localStorage.getItem('norouter.accent');
-    if (t) document.documentElement.dataset.theme = t;
-    if (a) document.documentElement.dataset.accent = a;
+    if (t === 'light' || t === 'dark' || t === 'black') document.documentElement.dataset.theme = t;
+    // Older builds stored coloured accents under names this build no longer
+    // paints (violet, teal, …). Fold those onto the closest current hue
+    // instead of dropping the saved choice.
+    var legacy = { violet: 'blue', purple: 'blue', indigo: 'blue', teal: 'blue', green: 'blue', cyan: 'blue', orange: 'amber', red: 'rose' };
+    if (legacy[a]) a = legacy[a];
+    if (['blue', 'amber', 'rose', 'ink', 'graphite', 'slate'].indexOf(a) !== -1) document.documentElement.dataset.accent = a;
   } catch (e) {}
   document.documentElement.classList.add('dashboard-booting');
 </script>
@@ -25,89 +32,135 @@
 <style>
   #dashboardLogin[hidden] { display: none; }
   body.dashboard-locked {
-    --lock-pointer-x: 50%;
-    --lock-pointer-y: 35%;
-    isolation: isolate;
-    overflow: hidden;
     margin: 0;
     min-height: 100vh;
-    background:
-      radial-gradient(520px circle at var(--lock-pointer-x) var(--lock-pointer-y), #6540d82b, transparent 68%),
-      #0d0d12;
-    color: #f5f5f5;
-    font: 14px system-ui, sans-serif;
-  }
-  body.dashboard-locked::before,
-  body.dashboard-locked::after {
-    content: '';
-    position: fixed;
-    inset: -28%;
-    z-index: -1;
-    pointer-events: none;
-  }
-  body.dashboard-locked::before {
-    background:
-      radial-gradient(38% 34% at 18% 22%, #6540d826, transparent 72%),
-      radial-gradient(34% 38% at 82% 74%, #2f7cf626, transparent 72%),
-      radial-gradient(28% 30% at 54% 92%, #b14cff18, transparent 72%);
-    filter: blur(34px);
-    animation: dashboard-lock-drift 18s ease-in-out infinite alternate;
-  }
-  body.dashboard-locked::after {
-    background-image: linear-gradient(#ffffff08 1px, transparent 1px), linear-gradient(90deg, #ffffff08 1px, transparent 1px);
-    background-size: 42px 42px;
-    mask-image: radial-gradient(ellipse at center, #000 18%, transparent 78%);
-    opacity: .18;
-  }
-  @keyframes dashboard-lock-drift {
-    from { transform: translate3d(-3%, -2%, 0) scale(1); }
-    to { transform: translate3d(3%, 2%, 0) scale(1.08); }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    body.dashboard-locked::before { animation: none; }
+    overflow: auto;
+    background: var(--bg, #f3f3f1);
+    color: var(--ink, #151515);
+    font: 13.5px/1.5 "Host Grotesk", system-ui, sans-serif;
   }
   body.dashboard-locked .app { display: none; }
   body.dashboard-locked #dashboardLogin { display: none; }
   body.dashboard-locked.dashboard-lock-ready .splash { display: none; }
-  body.dashboard-locked.dashboard-lock-ready #dashboardLogin { display: grid; place-items: center; min-height: 100vh; padding: 24px; box-sizing: border-box; background: #111; }
+  body.dashboard-locked.dashboard-lock-ready #dashboardLogin {
+    display: grid;
+    place-items: center;
+    min-height: 100vh;
+    padding: clamp(16px, 4vw, 32px);
+    box-sizing: border-box;
+  }
   body.dashboard-locked:not(.dashboard-lock-ready) .splash {
     position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
-    background: #111; color: #f5f5f5;
+    background: var(--bg, #f3f3f1); color: var(--ink, #151515);
   }
-  body.dashboard-locked:not(.dashboard-lock-ready) .splash-card {
-    display: flex; align-items: center; gap: 12px; min-width: 218px;
-    padding: 14px 16px; border: 1px solid #333; border-radius: 16px;
-    background: #1b1b1b; box-shadow: 0 20px 60px #0008; box-sizing: border-box;
+  body.dashboard-locked .dashboard-login-card {
+    display: grid;
+    grid-template-columns: minmax(0, .92fr) minmax(0, 1fr);
+    width: min(780px, 100%);
+    overflow: hidden;
+    border: 1px solid var(--line-strong, #cfcfcb);
+    border-radius: 12px;
+    background: var(--surface, #fbfbfa);
+    box-sizing: border-box;
   }
-  body.dashboard-locked:not(.dashboard-lock-ready) .splash-mark {
-    width: 38px; height: 38px; flex: 0 0 38px; border-radius: 13px; overflow: hidden;
+  .unlock-brand {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: clamp(22px, 3.4vw, 34px);
+    background: var(--rail, #141414);
+    color: var(--rail-ink, #f0f0f0);
   }
-  body.dashboard-locked:not(.dashboard-lock-ready) .splash-mark svg { display: block; width: 100%; height: 100%; }
-  body.dashboard-locked:not(.dashboard-lock-ready) .splash-copy { display: flex; flex-direction: column; }
-  body.dashboard-locked:not(.dashboard-lock-ready) .splash-copy strong { font-size: 14px; }
-  body.dashboard-locked:not(.dashboard-lock-ready) .splash-copy span { margin-top: 1px; color: #aaa; font-size: 11px; }
-  body.dashboard-locked:not(.dashboard-lock-ready) .splash-loader { width: 42px; height: 4px; margin-left: auto; border-radius: 999px; background: #333; overflow: hidden; }
-  body.dashboard-locked:not(.dashboard-lock-ready) .splash-loader span { display: block; width: 100%; height: 100%; border-radius: inherit; background: #6540d8; }
-  body.dashboard-locked .dashboard-login-card { width: min(390px, 100%); padding: 28px; border: 1px solid #333; border-radius: 16px; background: #1b1b1b; box-shadow: 0 20px 60px #0008; box-sizing: border-box; }
-  body.dashboard-locked .dashboard-login-logo { display: block; width: 48px; height: 48px; margin: 0 0 18px; border-radius: 13px; }
-  body.dashboard-locked .dashboard-login-card h1 { margin: 0 0 8px; font-size: 24px; }
-  body.dashboard-locked .dashboard-login-card p { margin: 0 0 20px; color: #aaa; }
-  body.dashboard-locked .dashboard-login-card form { display: grid; gap: 10px; }
-  body.dashboard-locked .dashboard-login-card input { min-height: 42px; padding: 9px 11px; border: 1px solid #555; border-radius: 9px; color: #fff; background: #111; font: inherit; box-sizing: border-box; }
-  body.dashboard-locked .dashboard-login-card button { min-height: 42px; border: 0; border-radius: 9px; color: #fff; background: #6540d8; font: inherit; font-weight: 650; cursor: pointer; }
-  body.dashboard-locked .dashboard-login-card span { min-height: 18px; color: #ff8f8f; font-size: 12px; }
+  .unlock-brand-top { display: flex; align-items: center; gap: 10px; }
+  .unlock-mark {
+    display: block; width: 36px; height: 36px; flex: 0 0 36px;
+    overflow: hidden; border-radius: 8px; background: var(--rail-accent, #ffffff);
+  }
+  .unlock-mark svg { display: block; width: 100%; height: 100%; }
+  .unlock-wordmark { display: flex; flex-direction: column; gap: 1px; font-size: 14px; font-weight: 600; line-height: 1.2; }
+  .unlock-wordmark small {
+    color: var(--rail-muted, #9a9a9a);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 8px; font-weight: 500; letter-spacing: .14em; text-transform: uppercase;
+  }
+  .unlock-statement {
+    margin: auto 0 0;
+    color: var(--rail-ink, #f0f0f0);
+    font-size: clamp(22px, 2.4vw, 28px);
+    font-weight: 600; letter-spacing: -.03em; line-height: 1.15;
+  }
+  .unlock-copy { margin: 0; color: var(--rail-muted, #9a9a9a); font-size: 12px; line-height: 1.55; }
+  .unlock-foot {
+    padding-top: 13px;
+    border-top: 1px solid var(--rail-line, #2a2a2a);
+    color: var(--rail-muted, #9a9a9a);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 8.5px; letter-spacing: .06em; text-transform: uppercase;
+  }
+  .unlock-panel {
+    display: flex; flex-direction: column; justify-content: center;
+    padding: clamp(22px, 3.4vw, 34px);
+    background: var(--surface, #fbfbfa);
+  }
+  .unlock-kicker {
+    margin: 0 0 8px;
+    color: var(--faint, #6b6b6b);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 8.5px; font-weight: 500; letter-spacing: .16em; text-transform: uppercase;
+  }
+  .unlock-panel h1 { margin: 0 0 6px; color: var(--ink, #151515); font-size: 24px; font-weight: 600; letter-spacing: -.02em; }
+  .unlock-panel > p:not(.unlock-kicker) { margin: 0 0 20px; color: var(--muted, #595959); font-size: 12.5px; line-height: 1.5; }
+  .unlock-panel form { display: grid; gap: 10px; }
+  .unlock-panel label {
+    color: var(--ink-2, #3b3b3b);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 8.5px; font-weight: 500; letter-spacing: .1em; text-transform: uppercase;
+  }
+  .unlock-panel input {
+    min-height: 40px; padding: 8px 11px;
+    border: 1px solid var(--line-strong, #cfcfcb); border-radius: 7px;
+    background: var(--bg, #f3f3f1); color: var(--ink, #151515);
+    font: inherit; font-size: 13.5px; box-sizing: border-box;
+  }
+  .unlock-panel input:focus-visible { outline: 2px solid var(--accent, #1b1b1b); outline-offset: 2px; }
+  .unlock-panel button {
+    min-height: 40px;
+    border: 1px solid var(--accent, #1b1b1b); border-radius: 7px;
+    background: var(--accent, #1b1b1b); color: var(--accent-ink, #ffffff);
+    font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  .unlock-panel button:hover { background: color-mix(in srgb, var(--accent, #1b1b1b) 86%, var(--ink, #151515)); }
+  .unlock-panel #dashboardLoginNote { min-height: 17px; color: var(--bad, #a83a2c); font-size: 11.5px; }
+  @media (max-width: 640px) {
+    body.dashboard-locked .dashboard-login-card { grid-template-columns: minmax(0, 1fr); }
+    .unlock-brand { gap: 12px; padding: 20px; }
+    .unlock-statement { font-size: 22px; }
+    .unlock-copy, .unlock-foot { display: none; }
+    .unlock-panel { padding: 22px 20px 24px; }
+  }
 </style>
 <div class="dashboard-login" id="dashboardLogin" hidden>
   <div class="dashboard-login-card" role="dialog" aria-modal="true" aria-labelledby="dashboardLoginTitle">
-    <svg class="dashboard-login-logo" viewBox="0 0 64 64" role="img" aria-label="norouter"><rect width="64" height="64" rx="16" fill="#000"/><path d="M20 45V19l24 26V19" fill="none" stroke="#fff" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    <h1 id="dashboardLoginTitle">Dashboard locked</h1>
-    <p>Enter the dashboard password to continue.</p>
-    <form id="dashboardLoginForm">
-      <label for="dashboardLoginPassword">Password</label>
-      <input id="dashboardLoginPassword" name="password" type="password" autocomplete="current-password" minlength="4" required>
-      <button type="submit">Unlock dashboard</button>
-      <span id="dashboardLoginNote" role="status" aria-live="polite"></span>
-    </form>
+    <div class="unlock-brand">
+      <div class="unlock-brand-top">
+        <span class="unlock-mark"><svg viewBox="0 0 64 64" role="img" aria-label="norouter"><rect width="64" height="64" rx="16" fill="#ffffff"/><path d="M20 45V19l24 26V19" fill="none" stroke="#141414" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <span class="unlock-wordmark">norouter<small>Local gateway</small></span>
+      </div>
+      <p class="unlock-statement">One endpoint.<br>Every provider.</p>
+      <p class="unlock-copy">Traffic, accounts and API keys stay on this machine.</p>
+      <span class="unlock-foot">SQLite account pool · OpenAI-compatible /v1</span>
+    </div>
+    <div class="unlock-panel">
+      <p class="unlock-kicker">Dashboard access</p>
+      <h1 id="dashboardLoginTitle">Locked</h1>
+      <p>Enter the dashboard password to continue.</p>
+      <form id="dashboardLoginForm">
+        <label for="dashboardLoginPassword">Password</label>
+        <input id="dashboardLoginPassword" name="password" type="password" autocomplete="current-password" minlength="4" required>
+        <button type="submit">Unlock dashboard</button>
+        <span id="dashboardLoginNote" role="status" aria-live="polite"></span>
+      </form>
+    </div>
   </div>
 </div>
 <script>
@@ -123,22 +176,6 @@
       input.focus();
     };
     if (document.body.dataset.dashboardLocked === 'true') {
-      const supportsMotion = !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-      if (supportsMotion && window.matchMedia?.('(pointer: fine)').matches) {
-        let frame = 0;
-        let x = 50;
-        let y = 35;
-        window.addEventListener('pointermove', (event) => {
-          x = (event.clientX / Math.max(window.innerWidth, 1)) * 100;
-          y = (event.clientY / Math.max(window.innerHeight, 1)) * 100;
-          if (frame) return;
-          frame = requestAnimationFrame(() => {
-            frame = 0;
-            document.body.style.setProperty('--lock-pointer-x', `${x}%`);
-            document.body.style.setProperty('--lock-pointer-y', `${y}%`);
-          });
-        }, { passive: true });
-      }
       window.setTimeout(() => show(), 260);
     } else {
       fetch('/api/auth/status', { cache: 'no-store' }).then((response) => response.json()).then((body) => {
@@ -155,7 +192,6 @@
     });
   })();
 </script>
-<div class="pointer-glow" aria-hidden="true"></div>
 <div class="splash" id="appSplash" role="status" aria-live="polite">
   <div class="splash-card">
     <div class="splash-mark"><svg viewBox="0 0 64 64" role="img" aria-label="norouter"><rect width="64" height="64" rx="16" fill="#000"/><path d="M20 45V19l24 26V19" fill="none" stroke="#fff" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
@@ -168,39 +204,65 @@
 </div>
 <div class="app">
 
+  <!-- First Tab stop: a keyboard user reaches the page content without walking the whole rail. -->
+  <a class="skip-link" href="#top">Skip to content</a>
+
   <aside class="rail">
-    <div class="rail-logo"><svg viewBox="0 0 64 64" role="img" aria-label="norouter"><rect width="64" height="64" rx="16" fill="#000"/><path d="M20 45V19l24 26V19" fill="none" stroke="#fff" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <a class="rail-brand" href="/">
+      <span class="rail-logo"><svg viewBox="0 0 64 64" role="img" aria-label="norouter"><rect width="64" height="64" rx="16" fill="#000"/><path d="M20 45V19l24 26V19" fill="none" stroke="#fff" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      <span class="rail-brand-copy">
+        <span class="rail-brand-name">norouter</span>
+        <span class="rail-brand-sub">Local gateway</span>
+      </span>
+    </a>
+    <span class="rail-label">Workspace</span>
     <nav class="rail-nav">
       <a class="rail-btn" href="/" data-route="/" title="Dashboard" aria-label="Dashboard">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9.5 21v-6h5v6"/></svg>
+        <span class="rail-btn-label">Dashboard</span>
+      </a>
+      <a class="rail-btn" href="/map" data-route="/map" title="Service map" aria-label="Service map">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="12" r="2.5"/><circle cx="18.5" cy="6" r="2.5"/><circle cx="18.5" cy="18" r="2.5"/><path d="M8 12h3.5M11.5 12 16 7M11.5 12 16 17"/></svg>
+        <span class="rail-btn-label">Map</span>
       </a>
       <a class="rail-btn" href="/chat" data-route="/chat" title="Chat" aria-label="Chat">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5.5h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H11l-4.5 3v-3H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2Z"/><path d="M7.5 10h9M7.5 13h5"/></svg>
+        <span class="rail-btn-label">Chat</span>
       </a>
       <a class="rail-btn" href="/providers" data-route="/providers" title="Providers" aria-label="Providers">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="6" rx="2"/><rect x="3.5" y="14" width="17" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg>
+        <span class="rail-btn-label">Providers</span>
       </a>
       <a class="rail-btn" href="/usage" data-route="/usage" title="Usage" aria-label="Usage">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M9.5 19V5M15 19v-6M20.5 19v-9"/></svg>
+        <span class="rail-btn-label">Usage</span>
       </a>
       <a class="rail-btn" href="/api-keys" data-route="/api-keys" title="API Keys" aria-label="API Keys">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="m11 12 8-8M16 7l2 2M14 9l2 2"/></svg>
+        <span class="rail-btn-label">API keys</span>
       </a>
       <a class="rail-btn" href="/combos" data-route="/combos" title="Combos" aria-label="Combos">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h6M4 12h6M4 18h6"/><path d="M14 6h6M14 12h6M14 18h6"/><path d="m10 6 2 6-2 6"/></svg>
+        <span class="rail-btn-label">Combos</span>
       </a>
       <a class="rail-btn" href="/settings" data-route="/settings" title="Settings" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 1 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.5-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 4.6a2 2 0 1 1 4 0A1.7 1.7 0 0 0 16.9 6l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 21 11a2 2 0 1 1 0 4z"/></svg>
+        <span class="rail-btn-label">Settings</span>
       </a>
     </nav>
+    <div class="rail-foot">
+      <span class="rail-foot-label">Account pool</span>
+      <span class="rail-foot-value"><i aria-hidden="true"></i>SQLite · local</span>
+    </div>
   </aside>
 
-  <main class="main">
+  <main class="main" id="top" tabindex="-1">
 
     <header class="topbar">
       <div>
-<h1 id="pageTitle">Dashboard</h1>
-      <p id="tagline">Monitor gateway health, traffic, and recent activity.</p>
+        <span class="topbar-kicker">Local gateway</span>
+        <h1 id="pageTitle">Dashboard</h1>
+        <p id="tagline">Traffic, provider health and recent activity.</p>
       </div>
       <div class="topbar-right">
         <div class="today">
@@ -223,88 +285,70 @@
     </header>
 
     <!-- ============ DASHBOARD ============ -->
-    <section class="page" data-page="/" hidden>
+    <section class="page dashboard-page" data-page="/" hidden>
 
-      <div class="grid">
-        <div class="col">
-          <article class="card">
-            <div class="card-head">
-              <div><h2 class="card-title">Statistics</h2></div>
-              <span class="chip chip-quiet" id="statRangeChip">since start</span>
-            </div>
-            <div class="pair">
-              <div>
-                <div class="stat-big" id="statIn">0</div>
-                <div class="stat-cap">tokens in</div>
-              </div>
-              <div>
-                <div class="stat-big" id="statOut">0</div>
-                <div class="stat-cap">tokens out</div>
-              </div>
-            </div>
-            <div class="tiles">
-              <div class="tile">
-                <span class="tile-label">Last latency</span>
-                <span class="tile-value" id="statLatency">—</span>
-              </div>
-              <div class="tile">
-                <span class="tile-label">Errors</span>
-                <span class="tile-value" id="statErrors">0</span>
-              </div>
-            </div>
-            <div class="dashboard-history" aria-label="Historical usage">
-              <div class="dashboard-history-head"><strong>History</strong><span class="chip chip-quiet" id="dashboardHistoryRange">today</span></div>
-              <div class="dashboard-history-pair"><span><b id="dashboardHistoryIn">—</b><small>tokens in</small></span><span><b id="dashboardHistoryOut">—</b><small>tokens out</small></span><span><b id="dashboardHistoryErrors">—</b><small>errors</small></span></div>
-              <p class="dashboard-history-note" id="dashboardHistoryStatsNote" role="status" aria-live="polite">Loading historical usage…</p>
-            </div>
-          </article>
-
-          <article class="card card-models">
-            <div class="card-head">
-              <h2 class="card-title">Models</h2>
-              <span class="chip chip-quiet" id="modelCount">—</span>
-            </div>
-            <div class="mlist" id="modelList"></div>
-          </article>
-
+      <div class="dash-toolbar">
+        <div class="dtabs" id="dashboardRangeTabs" role="tablist" aria-label="Dashboard usage range">
+          <button class="dtab is-active" id="dashboardRangeDay" type="button" role="tab" data-dashboard-range="day" aria-selected="true" aria-controls="dashboardHistoryPanel">Daily</button>
+          <button class="dtab" id="dashboardRangeWeek" type="button" role="tab" data-dashboard-range="week" aria-selected="false" aria-controls="dashboardHistoryPanel" tabindex="-1">Weekly</button>
+          <button class="dtab" id="dashboardRangeMonth" type="button" role="tab" data-dashboard-range="month" aria-selected="false" aria-controls="dashboardHistoryPanel" tabindex="-1">Monthly</button>
+          <button class="dtab" id="dashboardRangeAll" type="button" role="tab" data-dashboard-range="all" aria-selected="false" aria-controls="dashboardHistoryPanel" tabindex="-1">All time</button>
         </div>
+        <span class="sr-only" id="reqRangeChip">since start</span>
+        <span class="sr-only" id="inOutChip">no traffic</span>
+      </div>
 
-        <div class="col">
-          <div class="dashboard-range-bar">
-            <div class="dtabs" id="dashboardRangeTabs" role="tablist" aria-label="Dashboard historical usage range">
-              <button class="dtab is-active" id="dashboardRangeDay" type="button" role="tab" data-dashboard-range="day" aria-selected="true" aria-controls="dashboardHistoryPanel">Daily</button>
-              <button class="dtab" id="dashboardRangeWeek" type="button" role="tab" data-dashboard-range="week" aria-selected="false" aria-controls="dashboardHistoryPanel" tabindex="-1">Weekly</button>
-              <button class="dtab" id="dashboardRangeMonth" type="button" role="tab" data-dashboard-range="month" aria-selected="false" aria-controls="dashboardHistoryPanel" tabindex="-1">Monthly</button>
-              <button class="dtab" id="dashboardRangeAll" type="button" role="tab" data-dashboard-range="all" aria-selected="false" aria-controls="dashboardHistoryPanel" tabindex="-1">All time</button>
-            </div>
-            <span class="chip chip-quiet" id="dashboardHistorySource">History</span>
+      <article class="card dash-traffic">
+        <div class="card-head">
+          <div><h2 class="card-title">Traffic</h2></div>
+          <span class="chip chip-quiet" id="statRangeChip">today</span>
+        </div>
+        <div class="dash-stats">
+          <div class="dash-stat">
+            <span class="dash-stat-label">Requests</span>
+            <span class="dash-stat-value" id="statRequests">0</span>
           </div>
-          <article class="card dashboard-primary" id="dashboardHistoryPanel" role="tabpanel" aria-labelledby="dashboardRangeDay">
+          <div class="dash-stat">
+            <span class="dash-stat-label">Tokens in</span>
+            <span class="dash-stat-value" id="statIn">0</span>
+          </div>
+          <div class="dash-stat">
+            <span class="dash-stat-label">Tokens out</span>
+            <span class="dash-stat-value" id="statOut">0</span>
+          </div>
+          <div class="dash-stat">
+            <span class="dash-stat-label">Avg latency</span>
+            <span class="dash-stat-value" id="statLatency">—</span>
+          </div>
+          <div class="dash-stat">
+            <span class="dash-stat-label">Errors</span>
+            <span class="dash-stat-value" id="statErrors">0</span>
+          </div>
+        </div>
+        <div class="dash-traffic-foot">
+          <span class="chip chip-quiet" id="uptimeChip">up —</span>
+          <span class="chip chip-quiet" id="successChip">—</span>
+          <span class="dash-note">Persisted usage for the selected range, plus live uptime.</span>
+        </div>
+      </article>
+
+      <div class="dash-layout">
+        <div class="dash-main">
+          <article class="card dashboard-primary dash-chart" id="dashboardHistoryPanel" role="tabpanel" aria-labelledby="dashboardRangeDay">
             <div class="card-head">
-              <div><h2 class="card-title">Requests</h2></div>
-              <div class="head-chips">
-                <span class="chip chip-quiet" id="reqRangeChip">since start</span>
-                <span class="chip chip-quiet" id="uptimeChip">up —</span>
-              </div>
-            </div>
-            <div class="big-row">
-              <div class="stat-huge" id="statRequests">0</div>
-              <div class="chips">
-                <span class="chip chip-quiet" id="successChip">—</span>
-                <span class="chip chip-quiet" id="inOutChip">no traffic</span>
-              </div>
+              <div><h2 class="card-title">Request volume</h2></div>
+              <span class="chip chip-quiet" id="sparkWindow">no history</span>
             </div>
             <div class="spark" id="spark" role="img" aria-label="Request activity chart"></div>
             <p class="spark-summary" id="sparkSummary"></p>
-            <div class="spark-foot">
-              <span>oldest</span>
-              <span id="sparkWindow">recent requests</span>
-              <span>newest</span>
+            <div class="spark-foot" id="sparkFoot" aria-hidden="true">
+              <span id="sparkFrom"></span>
+              <span id="sparkMid"></span>
+              <span id="sparkTo"></span>
             </div>
-            <div class="dashboard-history-request"><span><b id="dashboardHistoryRequests">—</b><small>historical requests</small></span><span><b id="dashboardHistorySuccess">—</b><small>historical success</small></span><p class="dashboard-history-note" id="dashboardHistoryRequestsNote" role="status" aria-live="polite">Loading historical usage…</p></div>
           </article>
 
-          <article class="card card-fill-card dashboard-primary">
+          <article class="card dashboard-primary dash-recent">
             <div class="card-head">
               <h2 class="card-title">Recent requests</h2>
               <span class="chip chip-quiet" id="recentCount">0</span>
@@ -325,7 +369,7 @@
           </article>
         </div>
 
-        <div class="col">
+        <div class="dash-side">
           <article class="card dashboard-primary">
             <div class="card-head">
               <h2 class="card-title">Activity</h2>
@@ -333,8 +377,23 @@
             </div>
             <div class="evlist" id="eventList"></div>
           </article>
+
+          <article class="card">
+            <div class="card-head">
+              <h2 class="card-title">Models</h2>
+              <span class="chip chip-quiet" id="modelCount">—</span>
+            </div>
+            <div class="mlist" id="modelList"></div>
+          </article>
         </div>
       </div>
+    </section>
+
+    <!-- ============ SERVICE MAP ============ -->
+    <section class="page map-page" data-page="/map" hidden>
+      <article class="card map-board">
+        <div class="service-map" data-service-map="full"></div>
+      </article>
     </section>
 
     <!-- ============ PROVIDERS ============ -->
@@ -348,40 +407,6 @@
       </header>
 
       <div class="pgrid" id="providerCards"></div>
-
-      <article class="card addprovider" id="addProviderCard" hidden>
-        <div class="card-head">
-          <h2 class="card-title">Add an [OI]-compatible provider</h2>
-          <button class="iconbtn" id="closeAddProvider" type="button" aria-label="Close">×</button>
-        </div>
-        <form class="apform" id="addProviderForm" autocomplete="off">
-          <label class="apfield">
-            <span>Name</span>
-            <input name="name" placeholder="Ollama (local)" required maxlength="60">
-          </label>
-          <label class="apfield">
-            <span>Prefix</span>
-            <input name="prefix" placeholder="ollama" required maxlength="40" pattern="[a-z0-9][a-z0-9-]{0,39}" spellcheck="false">
-          </label>
-          <label class="apfield">
-            <span>Base URL</span>
-            <input name="baseUrl" placeholder="http://127.0.0.1:11434/v1" required maxlength="300" spellcheck="false">
-          </label>
-          <label class="apfield">
-            <span>Chat path</span>
-            <input name="chatPath" value="/chat/completions" maxlength="120" spellcheck="false">
-          </label>
-          <label class="apfield apwide">
-            <span>Models <em>space or comma separated</em></span>
-            <input name="models" placeholder="llama3.3, qwen2.5-coder" required spellcheck="false">
-          </label>
-          <div class="apactions">
-            <button class="btn btn-primary" type="submit">Create provider</button>
-            <span class="toolnote" id="addProviderNote" role="status" aria-live="polite"></span>
-          </div>
-        </form>
-      </article>
-
     </section>
 
     <!-- ============ USAGE ============ -->
@@ -515,9 +540,9 @@
         <button class="dtab" id="settingsTabDebug" type="button" role="tab" data-settings-tab="debug" aria-selected="false" aria-controls="settingsPanelDebug" tabindex="-1">Request log</button>
       </div>
       <div class="settings-panel" data-settings-panel="general" id="settingsPanelGeneral" role="tabpanel" aria-labelledby="settingsTabGeneral">
-        <div class="sgrid"><div class="scol"><article class="card"><div class="card-head"><h2 class="card-title">Connection</h2></div><p class="desc">Clients use the endpoint below. Provider credentials stay in the local account pool.</p><div class="kv"><span class="k">Base URL</span><code class="v" id="sBaseUrl">—</code></div><div class="kv"><span class="k">Providers</span><span class="v" id="sProviders">—</span></div><div class="kv"><span class="k">Credential var</span><code class="v" id="sTokenEnv">—</code></div><div class="kv"><span class="k">Status</span><span class="v" id="sStatus">—</span></div><div class="kv"><span class="k">Uptime</span><span class="v" id="sUptime">—</span></div><div class="kv"><span class="k">Listening</span><span class="v" id="sPort">—</span></div><div class="kv"><span class="k">API key protection</span><span class="v" id="sRequireKey">—</span></div></article><article class="card"><div class="card-head"><div><h2 class="card-title">Listening port</h2><p class="desc">Change the local port. The new port must be free; the server reconnects automatically.</p></div></div><div class="port-setting-row"><label class="apfield" for="serverPort"><span>Port</span><input id="serverPort" type="number" min="1" max="65535" step="1" inputmode="numeric" required></label><button class="btn btn-primary" id="saveServerPort" type="button">Apply</button></div><p class="toolnote" id="serverPortNote" role="status" aria-live="polite"></p></article><article class="card"><div class="card-head"><div><h2 class="card-title">Autostart</h2><p class="desc">Start norouter automatically when this user signs in.</p></div><label class="key-toggle"><input id="autostartToggle" type="checkbox"><span></span><b>Enabled</b></label></div><p class="toolnote" id="autostartNote" role="status" aria-live="polite"></p></article><article class="card"><div class="card-head"><div><h2 class="card-title">Backup &amp; restore</h2><p class="desc">Save or merge the account pool as a JSON file. Restore adds accounts and skips duplicates; it never deletes existing accounts.</p></div></div><div class="apactions"><button class="btn btn-ghost" id="exportAccounts" type="button">Download accounts (.json)</button><label class="btn btn-ghost" for="restoreAccountsFile">Choose restore file</label><input type="file" id="restoreAccountsFile" class="afile" accept=".json" hidden></div><p class="toolnote" id="backupNote" role="status" aria-live="polite"></p></article><article class="card"><div class="card-head"><div><h2 class="card-title">Webhook</h2><p class="desc">POST a notification to a URL on chat requests, errors, and account cooldowns. Metadata only — never credentials or message bodies.</p></div><label class="key-toggle"><input id="webhookToggle" type="checkbox"><span></span><b>Enabled</b></label></div><label class="apfield" for="webhookUrl"><span>Webhook URL</span><input id="webhookUrl" type="url" placeholder="https://example.com/hook" autocomplete="off"></label><p class="toolnote" id="webhookNote" role="status" aria-live="polite"></p></article></div><div class="scol"><article class="card"><div class="card-head"><h2 class="card-title">Reset</h2></div><p class="desc">Restore the default light theme and violet accent.</p><button class="btn btn-ghost" id="resetAppearance" type="button">Reset appearance</button></article><article class="card dashboard-auth-card"><div class="card-head"><div><h2 class="card-title">Dashboard password</h2><p class="desc">Protect dashboard pages, assets, and admin API routes.</p></div><label class="key-toggle"><input id="dashboardAuthToggle" type="checkbox"><span></span><b>Enabled</b></label></div><p class="toolnote" id="dashboardAuthWarning" role="status" aria-live="polite"></p><div class="dashboard-auth-password"><label class="apfield"><span class="key-field-label">Change password</span><input id="dashboardAuthPassword" type="password" minlength="4" autocomplete="new-password" placeholder="At least 4 characters"></label><button class="btn btn-ghost" id="saveDashboardAuthPassword" type="button">Save password</button></div><p class="toolnote" id="dashboardAuthNote" role="status" aria-live="polite"></p></article></div></div></div>
+        <div class="sgrid"><div class="scol"><article class="card"><div class="card-head"><h2 class="card-title">Connection</h2></div><p class="desc">Clients use the endpoint below. Provider credentials stay in the local account pool.</p><div class="kv"><span class="k">Base URL</span><code class="v" id="sBaseUrl">—</code></div><div class="kv"><span class="k">Providers</span><span class="v" id="sProviders">—</span></div><div class="kv"><span class="k">Credential var</span><code class="v" id="sTokenEnv">—</code></div><div class="kv"><span class="k">Status</span><span class="v" id="sStatus">—</span></div><div class="kv"><span class="k">Uptime</span><span class="v" id="sUptime">—</span></div><div class="kv"><span class="k">Listening</span><span class="v" id="sPort">—</span></div><div class="kv"><span class="k">API key protection</span><span class="v" id="sRequireKey">—</span></div></article><article class="card"><div class="card-head"><div><h2 class="card-title">Listening port</h2><p class="desc">Change the local port. The new port must be free; the server reconnects automatically.</p></div></div><div class="port-setting-row"><label class="apfield" for="serverPort"><span>Port</span><input id="serverPort" type="number" min="1" max="65535" step="1" inputmode="numeric" required></label><button class="btn btn-primary" id="saveServerPort" type="button">Apply</button></div><p class="toolnote" id="serverPortNote" role="status" aria-live="polite"></p></article><article class="card"><div class="card-head"><div><h2 class="card-title">Autostart</h2><p class="desc">Start norouter automatically when this user signs in.</p></div><label class="key-toggle"><input id="autostartToggle" type="checkbox"><span></span><b>Enabled</b></label></div><p class="toolnote" id="autostartNote" role="status" aria-live="polite"></p></article><article class="card"><div class="card-head"><div><h2 class="card-title">Backup &amp; restore</h2><p class="desc">Save or merge the account pool as a JSON file. Restore adds accounts and skips duplicates; it never deletes existing accounts.</p></div></div><div class="apactions"><button class="btn btn-ghost" id="exportAccounts" type="button">Download accounts (.json)</button><label class="btn btn-ghost" for="restoreAccountsFile">Choose restore file</label><input type="file" id="restoreAccountsFile" class="afile" accept=".json" hidden></div><p class="toolnote" id="backupNote" role="status" aria-live="polite"></p></article><article class="card"><div class="card-head"><div><h2 class="card-title">Webhook</h2><p class="desc">POST a notification to a URL on chat requests, errors, account cooldowns, and budget alerts. Metadata only — never credentials or message bodies.</p></div><label class="key-toggle"><input id="webhookToggle" type="checkbox"><span></span><b>Enabled</b></label></div><label class="apfield" for="webhookUrl"><span>Webhook URL</span><input id="webhookUrl" type="url" placeholder="https://example.com/hook" autocomplete="off"></label><p class="toolnote" id="webhookNote" role="status" aria-live="polite"></p></article></div><div class="scol"><article class="card"><div class="card-head"><h2 class="card-title">Reset</h2></div><p class="desc">Restore the default paper theme and blue accent.</p><button class="btn btn-ghost" id="resetAppearance" type="button">Reset appearance</button></article><article class="card dashboard-auth-card"><div class="card-head"><div><h2 class="card-title">Dashboard password</h2><p class="desc">Protect dashboard pages, assets, and admin API routes.</p></div><label class="key-toggle"><input id="dashboardAuthToggle" type="checkbox"><span></span><b>Enabled</b></label></div><p class="toolnote" id="dashboardAuthWarning" role="status" aria-live="polite"></p><div class="dashboard-auth-password"><label class="apfield"><span class="key-field-label">Change password</span><input id="dashboardAuthPassword" type="password" minlength="4" autocomplete="new-password" placeholder="At least 4 characters"></label><button class="btn btn-ghost" id="saveDashboardAuthPassword" type="button">Save password</button></div><p class="toolnote" id="dashboardAuthNote" role="status" aria-live="polite"></p></article><article class="card maintenance-card"><div class="card-head"><div><h2 class="card-title">Scheduled upkeep</h2><p class="desc">Refresh expiring tokens, re-read quota, and re-fetch the model catalog in the background. Runs only while the server is up.</p></div><label class="key-toggle"><input id="maintenanceToggle" type="checkbox"><span></span><b>Enabled</b></label></div><div class="setting-inline-row"><label class="apfield" for="maintenanceInterval"><span>Interval (minutes)</span><input id="maintenanceInterval" type="number" min="5" max="1440" step="1" inputmode="numeric" required></label><button class="btn btn-ghost" id="saveMaintenanceInterval" type="button">Set interval</button></div><p class="desc" id="maintenanceClock">—</p><div class="maintenance-tasks" id="maintenanceTasks"></div><div class="maintenance-actions"><button class="btn btn-ghost" id="runMaintenance" type="button">Run all now</button><p class="toolnote" id="maintenanceNote" role="status" aria-live="polite"></p></div></article></div></div><article class="card budget-card"><div class="card-head"><div><h2 class="card-title">Daily budgets</h2><p class="desc">Cap tokens or spend per API key and per provider for one local day. A capped key gets 429; a capped provider is skipped by failover chains. Alerts go to the webhook above.</p></div><label class="key-toggle"><input id="budgetToggle" type="checkbox"><span></span><b>Enabled</b></label></div><div id="budgetList"></div><p class="toolnote" id="budgetNote" role="status" aria-live="polite"></p></article></div>
       <div class="settings-panel" data-settings-panel="appearance" id="settingsPanelAppearance" role="tabpanel" aria-labelledby="settingsTabAppearance" hidden>
-        <div class="sgrid"><div class="scol"><article class="card"><div class="card-head"><h2 class="card-title">Appearance</h2><span class="chip chip-quiet" id="themeNote">light</span></div><p class="desc">Pick how the dashboard renders. The choice is stored in this browser only.</p><div class="theme-grid" id="themeGrid"><button class="theme-opt" data-theme-value="light" type="button"><span class="theme-prev" data-prev="light"><span class="tp-rail"></span><span class="tp-body"><span class="tp-card"></span><span class="tp-card"></span></span></span><span class="theme-name">Light</span><span class="theme-desc">Soft lavender</span></button><button class="theme-opt" data-theme-value="dark" type="button"><span class="theme-prev" data-prev="dark"><span class="tp-rail"></span><span class="tp-body"><span class="tp-card"></span><span class="tp-card"></span></span></span><span class="theme-name">Dark</span><span class="theme-desc">Slate at night</span></button><button class="theme-opt" data-theme-value="black" type="button"><span class="theme-prev" data-prev="black"><span class="tp-rail"></span><span class="tp-body"><span class="tp-card"></span><span class="tp-card"></span></span></span><span class="theme-name">Black</span><span class="theme-desc">True black OLED</span></button></div></article></div><div class="scol"><article class="card"><div class="card-head"><h2 class="card-title">Accent</h2><span class="chip chip-quiet" id="accentNote">violet</span></div><p class="desc">Used for the active nav pill, buttons, bars and chart fills.</p><div class="accent-row" id="accentRow"><button class="accent-dot" data-accent-value="violet" type="button" style="--dot:#7b5cf0" title="Violet" aria-label="Violet"></button><button class="accent-dot" data-accent-value="blue" type="button" style="--dot:#2563eb" title="Blue" aria-label="Blue"></button><button class="accent-dot" data-accent-value="teal" type="button" style="--dot:#0d9488" title="Teal" aria-label="Teal"></button><button class="accent-dot" data-accent-value="amber" type="button" style="--dot:#b45309" title="Amber" aria-label="Amber"></button><button class="accent-dot" data-accent-value="rose" type="button" style="--dot:#be185d" title="Rose" aria-label="Rose"></button></div></article></div></div>
+        <div class="sgrid"><div class="scol"><article class="card"><div class="card-head"><h2 class="card-title">Appearance</h2><span class="chip chip-quiet" id="themeNote">light</span></div><p class="desc">Pick how the dashboard renders. The choice is stored in this browser only.</p><div class="theme-grid" id="themeGrid"><button class="theme-opt" data-theme-value="light" type="button"><span class="theme-prev" data-prev="light"><span class="tp-rail"></span><span class="tp-body"><span class="tp-card"></span><span class="tp-card"></span></span></span><span class="theme-name">Light</span><span class="theme-desc">Paper and ink</span></button><button class="theme-opt" data-theme-value="dark" type="button"><span class="theme-prev" data-prev="dark"><span class="tp-rail"></span><span class="tp-body"><span class="tp-card"></span><span class="tp-card"></span></span></span><span class="theme-name">Dark</span><span class="theme-desc">Charcoal at night</span></button><button class="theme-opt" data-theme-value="black" type="button"><span class="theme-prev" data-prev="black"><span class="tp-rail"></span><span class="tp-body"><span class="tp-card"></span><span class="tp-card"></span></span></span><span class="theme-name">Black</span><span class="theme-desc">Terminal black</span></button></div></article></div><div class="scol"><article class="card"><div class="card-head"><h2 class="card-title">Accent</h2><span class="chip chip-quiet" id="accentNote">Blue</span></div><p class="desc">Used for the active nav mark, buttons, bars and chart fills.</p><div class="accent-row" id="accentRow"><button class="accent-dot" data-accent-value="blue" type="button" title="Blue" aria-label="Blue"></button><button class="accent-dot" data-accent-value="amber" type="button" title="Amber" aria-label="Amber"></button><button class="accent-dot" data-accent-value="rose" type="button" title="Rose" aria-label="Rose"></button><button class="accent-dot" data-accent-value="ink" type="button" title="Ink" aria-label="Ink"></button><button class="accent-dot" data-accent-value="graphite" type="button" title="Graphite" aria-label="Graphite"></button><button class="accent-dot" data-accent-value="slate" type="button" title="Slate" aria-label="Slate"></button></div></article></div></div>
       </div>
       <div class="settings-panel" data-settings-panel="token-saver" id="settingsPanelTokenSaver" role="tabpanel" aria-labelledby="settingsTabTokenSaver" hidden>
         <div class="sgrid token-saver-grid"><div class="scol"><article class="card token-saver-card"><div class="card-head"><div><h2 class="card-title">RTK</h2><p class="desc">Compress tool output (git diff, grep, logs) before it reaches the model. Saves input tokens.</p></div><label class="key-toggle"><input id="tokenSaverRtk" type="checkbox"><span></span><b>Enabled</b></label></div></article><article class="card token-saver-card"><div class="card-head"><div><h2 class="card-title">Ponytail</h2><p class="desc">Bias code toward YAGNI, stdlib/native features, and minimal diffs.</p></div><label class="key-toggle"><input id="tokenSaverPonytail" type="checkbox"><span></span><b>Enabled</b></label></div></article><article class="card token-saver-card"><div class="card-head"><div><h2 class="card-title">Caveman</h2><p class="desc">Terse, direct replies — less filler, fewer output tokens. Stacks with Ponytail.</p></div><label class="key-toggle"><input id="tokenSaverCaveman" type="checkbox"><span></span><b>Enabled</b></label></div></article></div><div class="scol"><article class="card token-saver-card"><div class="card-head"><h2 class="card-title">Headroom</h2></div><p class="card-note">Not included: it requires an external proxy (pip install). RTK, Ponytail, and Caveman run locally with no dependency.</p></article></div></div><p class="toolnote" id="tokenSaverNote" role="status" aria-live="polite"></p>
@@ -536,7 +561,7 @@
         </div>
       </div>
       <div class="settings-panel" data-settings-panel="debug" id="settingsPanelDebug" role="tabpanel" aria-labelledby="settingsTabDebug" hidden>
-        <div class="sgrid"><div class="scol"><article class="card"><div class="card-head"><div><h2 class="card-title">Request log</h2><p class="desc">Last chat requests, redacted — no tokens, keys, or message bodies. In-memory only; clears on restart.</p></div><button class="btn btn-ghost btn-xs" id="clearRequestLog" type="button">Clear</button></div><div class="table-wrap"><table class="tbl"><thead><tr><th>Time</th><th class="r">Status</th><th>Provider</th><th>Model</th><th class="r">In</th><th class="r">Out</th><th class="r">Latency</th></tr></thead><tbody id="requestLogTable"></tbody></table></div><p class="toolnote" id="requestLogNote" role="status" aria-live="polite"></p></article></div></div>
+        <div class="sgrid"><div class="scol"><article class="card"><div class="card-head"><div><h2 class="card-title">Request log</h2><p class="desc">Last chat requests, redacted — no keys, credentials, or message bodies. Names the model that served, why routing moved it, and the chain tried. In-memory only; clears on restart.</p></div><button class="btn btn-ghost btn-xs" id="clearRequestLog" type="button">Clear</button></div><div class="table-wrap"><table class="tbl reqlog"><thead><tr><th>Time</th><th class="r">Status</th><th>Route</th><th>Provider</th><th>Model</th><th class="r">In</th><th class="r">Out</th><th class="r">Latency</th></tr></thead><tbody id="requestLogTable"></tbody></table></div><p class="toolnote" id="requestLogNote" role="status" aria-live="polite"></p></article></div></div>
       </div>
     </section>
 
@@ -548,7 +573,7 @@
       <div class="key-kpis">
         <article class="card key-kpi"><span class="tile-label">Total keys</span><strong id="keyTotal">0</strong><span class="tile-label">All issued keys</span></article>
         <article class="card key-kpi"><span class="tile-label">Active</span><strong id="keyActive">0</strong><span class="tile-label">Ready for requests</span></article>
-        <article class="card key-kpi"><span class="tile-label">Protection</span><strong id="keyProtection">Not protected</strong><span class="tile-label">Status of the /v1 guard</span></article>
+        <article class="card key-kpi"><span class="tile-label">Protection</span><strong id="keyProtection" class="key-kpi-word">Not protected</strong><span class="tile-label">Status of the /v1 guard</span></article>
       </div>
       <article class="card key-endpoint">
         <div class="card-head"><div><h2 class="card-title">API endpoint</h2></div><button class="btn btn-ghost" id="copyKeyEndpoint" type="button">Copy URL</button></div>
@@ -562,7 +587,7 @@
         <pre class="curl" id="curlBlock">—</pre>
       </article>
       <article class="card key-vault">
-        <div class="card-head key-vault-head"><div><h2 class="card-title">Issued credentials</h2><p class="desc">Secrets appear once when created. Store them in your client now.</p></div><label class="key-toggle"><input id="requireKeyToggle" type="checkbox"><span></span>Require API key</label></div>
+        <div class="card-head key-vault-head"><div><h2 class="card-title">Issued credentials</h2><p class="desc">Stored in the local database. Reveal or copy a secret when you configure a client.</p></div><label class="key-toggle"><input id="requireKeyToggle" type="checkbox"><span></span>Require API key</label></div>
         <p class="toolnote" id="keyNote" role="status" aria-live="polite"></p>
         <div class="key-list" id="keyList"></div>
       </article>
@@ -625,7 +650,6 @@
     <!-- ============ COMBOS ============ -->
     <section class="page" data-page="/combos" hidden>
       <div class="key-actions">
-        <p class="desc">Create virtual model names with ordered fallback.</p>
         <button class="btn btn-primary" id="openCreateCombo" type="button">+ Create combo</button>
       </div>
 
@@ -638,6 +662,69 @@
         </div>
         <p class="toolnote" id="comboNote" role="status" aria-live="polite"></p>
         <div class="combo-list" id="comboList"></div>
+      </article>
+
+      <article class="card vision-card" id="visionCard">
+        <div class="card-head">
+          <div>
+            <h2 class="card-title">Vision routing</h2>
+          </div>
+          <label class="mini-toggle vision-switch">
+            <input type="checkbox" id="visionEnabled">
+            <span></span>
+            <b>Route images</b>
+          </label>
+        </div>
+        <p class="toolnote" id="visionStateNote">Off — requests use the model they asked for.</p>
+        <div class="vision-toolbar">
+          <div class="dtabs" id="visionStrategy" role="group" aria-label="Vision routing strategy">
+            <button class="dtab" type="button" data-vision-strategy="order">Order</button>
+            <button class="dtab" type="button" data-vision-strategy="round-robin">Round robin</button>
+          </div>
+          <span class="chip chip-quiet" id="visionCount">0 models</span>
+        </div>
+        <div class="combo-add-row vision-add-row">
+          <label class="apfield key-field combo-add-field">
+            <span class="key-field-label">Add a vision model <em>enabled models only</em></span>
+            <select id="visionModelEntry" aria-label="Choose a vision model" data-custom-select></select>
+          </label>
+          <button class="btn btn-ghost" id="visionAddModel" type="button">Add model</button>
+        </div>
+        <div class="combo-chain-head"><span class="key-field-label">Fallback order</span><span class="toolnote" id="visionChainNote"></span></div>
+        <ol class="combo-chain vision-chain" id="visionChain"></ol>
+        <p class="toolnote" id="visionNote" role="status" aria-live="polite"></p>
+      </article>
+
+      <article class="card routing-card" id="routingCard">
+        <div class="card-head">
+          <div>
+            <h2 class="card-title">Aliases and rules</h2>
+          </div>
+          <button class="btn btn-ghost" id="openRoutingRule" type="button">New rule</button>
+        </div>
+        <p class="toolnote" id="routingStateNote">Aliases rename a target for clients. Rules reroute a request when its headers, key, size, or tools match.</p>
+
+        <div class="routing-block">
+          <div class="combo-chain-head"><span class="key-field-label">Model aliases</span><span class="chip chip-quiet" id="routingAliasCount">0 aliases</span></div>
+          <ul class="routing-alias-list" id="routingAliasList"></ul>
+          <div class="combo-add-row routing-add-row">
+            <label class="apfield key-field combo-add-field">
+              <span class="key-field-label">Alias</span>
+              <input id="routingAliasName" maxlength="120" placeholder="fast-chat" spellcheck="false">
+            </label>
+            <label class="apfield key-field combo-add-field">
+              <span class="key-field-label">Target</span>
+              <select id="routingAliasTarget" aria-label="Alias target" data-custom-select></select>
+            </label>
+            <button class="btn btn-ghost" id="routingAliasAdd" type="button">Add alias</button>
+          </div>
+        </div>
+
+        <div class="routing-block">
+          <div class="combo-chain-head"><span class="key-field-label">Routing rules</span><span class="chip chip-quiet" id="routingRuleCount">0 rules</span></div>
+          <div class="routing-rule-list" id="routingRuleList"></div>
+        </div>
+        <p class="toolnote" id="routingNote" role="status" aria-live="polite"></p>
       </article>
     </section>
 
@@ -665,6 +752,41 @@
       </section>
     </div>
 
+    <div class="key-modal" id="routingRuleModal" hidden>
+      <div class="key-modal-backdrop" data-routing-rule-close></div>
+      <section class="key-dialog routing-dialog" role="dialog" aria-modal="true" aria-labelledby="routingRuleTitle">
+        <div class="card-head"><h2 class="card-title" id="routingRuleTitle">New rule</h2><button class="iconbtn" type="button" data-routing-rule-close aria-label="Close">×</button></div>
+        <form class="key-create-form" id="routingRuleForm" autocomplete="off">
+          <div class="routing-form-grid">
+            <label class="apfield key-field"><span class="key-field-label">Rule name</span><input name="name" maxlength="60" placeholder="Premium tier" required spellcheck="false"></label>
+            <label class="mini-toggle routing-enable"><input name="enabled" type="checkbox"><span></span><b>Enabled</b></label>
+          </div>
+          <div class="routing-match">
+            <p class="key-field-label">Matches when <em>every filled condition holds</em></p>
+            <div class="routing-match-grid">
+              <label class="apfield key-field"><span class="key-field-label">Header name <em>optional</em></span><input name="headerName" maxlength="80" placeholder="x-route-tier" spellcheck="false"></label>
+              <label class="apfield key-field"><span class="key-field-label">Header value <em>contains</em></span><input name="headerValue" maxlength="120" placeholder="premium" spellcheck="false"></label>
+              <label class="apfield key-field"><span class="key-field-label">API key <em>managed keys only</em></span><select name="apiKeyId" id="routingRuleKey" data-custom-select><option value="">Any key</option></select></label>
+              <label class="apfield key-field"><span class="key-field-label">Min context <em>estimated tokens</em></span><input name="minContextTokens" type="number" min="1" step="1" inputmode="numeric" placeholder="No minimum"></label>
+              <label class="apfield key-field"><span class="key-field-label">Tools <em>request shape</em></span><select name="tools" data-custom-select><option value="any">Any request</option><option value="has">Carries tools</option><option value="none">No tools</option></select></label>
+            </div>
+          </div>
+          <div class="combo-add-row">
+            <label class="apfield key-field combo-add-field">
+              <span class="key-field-label">Add a model <em>enabled models only</em></span>
+              <select name="modelEntry" id="routingRuleModelEntry" data-custom-select></select>
+            </label>
+            <button class="btn btn-ghost" id="routingRuleAddModel" type="button">Add to chain</button>
+          </div>
+          <div class="combo-chain-head"><span class="key-field-label">Fallback order</span><span class="toolnote" id="routingRuleChainNote"></span></div>
+          <ol class="combo-chain" id="routingRuleChain"></ol>
+          <div class="key-form-footer"><span class="toolnote" id="routingRuleFormNote" role="status" aria-live="polite"></span><button class="btn btn-primary" type="submit">Save rule</button></div>
+        </form>
+      </section>
+    </div>
+
+    <datalist id="routingModelList"></datalist>
+
     <div class="key-modal" id="createKeyModal" hidden>
       <div class="key-modal-backdrop" data-key-close></div>
       <section class="key-dialog" role="dialog" aria-modal="true" aria-labelledby="keyDialogTitle">
@@ -673,6 +795,7 @@
           <label class="apfield key-field"><span class="key-field-label">Name</span><input name="name" maxlength="80" placeholder="Desktop client" required></label>
           <label class="apfield key-field"><span class="key-field-label">Secret <em>generated now; editable before saving</em></span><span class="key-secret-row"><input name="secret" maxlength="160" placeholder="nr_live_custom_name" spellcheck="false"><button class="btn btn-ghost" id="generateKeySecret" type="button">Generate new</button></span></label>
           <label class="apfield key-field"><span class="key-field-label">Expires <em>optional; date and time</em></span><input name="expiresAt" type="datetime-local"></label>
+          <label class="apfield key-field"><span class="key-field-label">Default model <em>optional; fills a request that sends no model</em></span><input name="defaultModel" list="routingModelList" maxlength="160" placeholder="prefix/model or combo" spellcheck="false"></label>
           <div class="key-limit-grid">
             <div class="apfield key-field key-limit-field"><label class="key-field-label" for="requestLimit">Request limit</label><input id="requestLimit" name="requestLimit" type="number" min="0" placeholder="Requests" disabled><label class="mini-toggle"><input name="requestLimitEnabled" type="checkbox"><span></span><b>Enable limit</b></label></div>
             <div class="apfield key-field key-limit-field"><label class="key-field-label" for="tokenLimit">Token limit</label><input id="tokenLimit" name="tokenLimit" type="number" min="0" step="any" inputmode="decimal" placeholder="Select a unit first" disabled><select name="tokenLimitUnit" aria-label="Token limit unit" data-custom-select><option value="">None</option><option value="tokens">tokens</option><option value="K">K tokens</option><option value="M">M tokens</option><option value="B">B tokens</option><option value="T">T tokens</option></select></div>
@@ -690,6 +813,7 @@
           <label class="apfield key-field"><span class="key-field-label">Name</span><input name="name" maxlength="80" required></label>
           <label class="apfield key-field"><span class="key-field-label">Token <em>editable; leave legacy keys unchanged</em></span><span class="key-secret-row"><input name="secret" maxlength="160" spellcheck="false"><button class="btn btn-ghost" id="generateEditSecret" type="button">Generate new</button></span></label>
           <label class="apfield key-field"><span class="key-field-label">Expires <em>optional; date and time</em></span><input name="expiresAt" type="datetime-local"></label>
+          <label class="apfield key-field"><span class="key-field-label">Default model <em>optional; fills a request that sends no model</em></span><input name="defaultModel" list="routingModelList" maxlength="160" placeholder="prefix/model or combo" spellcheck="false"></label>
           <div class="key-limit-grid">
             <div class="apfield key-field key-limit-field"><label class="key-field-label" for="editRequestLimit">Request limit</label><input id="editRequestLimit" name="requestLimit" type="number" min="0" placeholder="Requests" disabled><label class="mini-toggle"><input name="requestLimitEnabled" type="checkbox"><span></span><b>Enable limit</b></label></div>
             <div class="apfield key-field key-limit-field"><label class="key-field-label" for="editTokenLimit">Token limit</label><input id="editTokenLimit" name="tokenLimit" type="number" min="0" step="any" inputmode="decimal" placeholder="Select a unit first" disabled><select name="tokenLimitUnit" aria-label="Token limit unit" data-custom-select><option value="">None</option><option value="tokens">tokens</option><option value="K">K tokens</option><option value="M">M tokens</option><option value="B">B tokens</option><option value="T">T tokens</option></select></div>
@@ -714,6 +838,14 @@
       <section class="key-dialog account-actions-dialog" role="dialog" aria-modal="true" aria-labelledby="accountActionsTitle" aria-describedby="accountActionsMessage">
         <div class="card-head"><div><h2 class="card-title" id="accountActionsTitle">Account actions</h2><p class="desc" id="accountActionsMessage"></p></div><button class="iconbtn" type="button" data-account-actions-close aria-label="Close account actions">×</button></div>
         <div class="account-action-list" id="accountActionsList"></div>
+      </section>
+    </div>
+
+    <div class="key-modal" id="accountSummaryModal" hidden>
+      <div class="key-modal-backdrop" data-account-summary-close></div>
+      <section class="key-dialog account-summary-dialog" role="dialog" aria-modal="true" aria-labelledby="accountSummaryTitle" aria-describedby="accountSummaryMeta">
+        <div class="card-head"><div><h2 class="card-title" id="accountSummaryTitle">Account summary</h2><p class="desc" id="accountSummaryMeta"></p></div><button class="iconbtn" type="button" data-account-summary-close aria-label="Close account summary">×</button></div>
+        <div id="accountSummaryBody"></div>
       </section>
     </div>
 
@@ -746,6 +878,7 @@
           Models <span class="tabcount" id="tabModelCount">0</span>
         </button>
         <button class="dtab" id="tabQuota" type="button" data-tab="quota" role="tab" aria-selected="false" aria-controls="panelQuota" tabindex="-1">Quota</button>
+        <button class="dtab" id="tabUsage" type="button" data-tab="usage" role="tab" aria-selected="false" aria-controls="panelUsage" tabindex="-1">Usage</button>
       </div>
 
       <section class="dpanel" id="panelAccounts" data-panel="accounts" role="tabpanel" aria-labelledby="tabAccounts">
@@ -757,7 +890,7 @@
             <div class="dtools">
               <button class="btn btn-ghost" id="editProvider" type="button">Edit</button>
               <button class="btn btn-ghost danger" id="removeProvider" type="button" hidden>Remove</button>
-              <button class="btn btn-ghost" id="apoolMore" type="button" aria-haspopup="menu">More <span class="caret">▾</span></button>
+              <button class="btn btn-ghost" id="apoolMore" type="button" aria-haspopup="menu" aria-expanded="false">More <span class="caret">▾</span></button>
               <div class="apool-menu" id="poolMenu" hidden>
                 <button class="apool-menuitem" id="poolItemWarmup" type="button" data-pool-action="warmup"><span class="apool-icon">↻</span> Warm up all</button>
                 <button class="apool-menuitem" id="poolItemTest" type="button" data-pool-action="test"><span class="apool-icon">◎</span> Test accounts all</button>
@@ -795,13 +928,12 @@
             <input class="ainput" id="accountSearch" type="search" placeholder="Search label or uid" maxlength="80" spellcheck="false">
           </div>
 
-          <p class="toolnote" id="accountNote" role="status" aria-live="polite"></p>
-
           <div class="apool-progress" id="poolHead" hidden>
-            <span class="pool-count" id="poolCount">0 of 0</span>
-            <div class="pool-bar"><span class="pool-fill" id="poolFill"></span></div>
+            <span class="pool-job" id="poolBusy" role="status" aria-live="polite" hidden></span>
+            <span class="pool-count" id="poolCount">0 / 0</span>
+            <span class="pool-bar" id="poolBar" role="progressbar" aria-labelledby="poolBusy" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="pool-fill" id="poolFill"></span></span>
           </div>
-          <button class="btn btn-ghost" id="poolBusy" type="button" hidden></button>
+          <p class="toolnote" id="accountNote" role="status" aria-live="polite"></p>
 
           <div class="abulk" id="bulkActions" hidden>
             <span class="abulk-count" id="bulkCount">0 selected</span>
@@ -905,6 +1037,73 @@
             </div>
           </article>
       </section>
+
+      <section class="dpanel" id="panelUsage" data-panel="usage" role="tabpanel" aria-labelledby="tabUsage" hidden>
+        <article class="card">
+          <div class="card-head dhead">
+            <div class="dhead-text">
+              <h2 class="card-title">Provider usage</h2>
+              <p class="desc" id="dUsageNote" role="status" aria-live="polite">Loading…</p>
+            </div>
+            <div class="dtools">
+              <div class="dtabs dusage-range" id="dUsageRangeTabs" role="tablist" aria-label="Provider usage range">
+                <button class="dtab is-active" type="button" data-dusage-range="day" role="tab" aria-selected="true">Daily</button>
+                <button class="dtab" type="button" data-dusage-range="week" role="tab" aria-selected="false" tabindex="-1">Weekly</button>
+                <button class="dtab" type="button" data-dusage-range="month" role="tab" aria-selected="false" tabindex="-1">Monthly</button>
+                <button class="dtab" type="button" data-dusage-range="all" role="tab" aria-selected="false" tabindex="-1">All time</button>
+              </div>
+            </div>
+          </div>
+          <div class="ugrid dusage-grid">
+            <article class="card ukpi">
+              <span class="tile-label">Requests</span>
+              <span class="ukpi-value" id="dUsageRequests">0</span>
+              <span class="tile-label" id="dUsageRangeNote">—</span>
+            </article>
+            <article class="card ukpi">
+              <span class="tile-label">Tokens in</span>
+              <span class="ukpi-value" id="dUsageTokIn">0</span>
+              <span class="tile-label" id="dUsageTokInNote">—</span>
+            </article>
+            <article class="card ukpi">
+              <span class="tile-label">Tokens out</span>
+              <span class="ukpi-value" id="dUsageTokOut">0</span>
+              <span class="tile-label" id="dUsageTokOutNote">—</span>
+            </article>
+            <article class="card ukpi">
+              <span class="tile-label">Success rate</span>
+              <span class="ukpi-value" id="dUsageSuccess">—</span>
+              <span class="tile-label" id="dUsageErrors">no errors</span>
+            </article>
+            <article class="card ukpi">
+              <span class="tile-label">Estimated cost</span>
+              <span class="ukpi-value" id="dUsageCost">—</span>
+              <span class="tile-label">list prices</span>
+            </article>
+          </div>
+          <div class="spark spark-tall" id="dUsageChart" role="img" aria-label="Provider usage chart"></div>
+          <div class="spark-foot">
+            <span id="dUsageStart">oldest</span>
+            <span id="dUsageLegend">color intensity = tokens, red = failed</span>
+            <span id="dUsageEnd">newest</span>
+          </div>
+          <div class="table-wrap dusage-models">
+            <table class="tbl">
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th class="r">Requests</th>
+                  <th class="r">Tokens in</th>
+                  <th class="r">Tokens out</th>
+                  <th class="r">Cost</th>
+                  <th class="r">Avg latency</th>
+                </tr>
+              </thead>
+              <tbody id="dUsageModels"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
     </section>
 
     <div class="key-modal" id="modelInfoModal" hidden>
@@ -929,6 +1128,25 @@
       </section>
     </div>
 
+    <div class="key-modal" id="createProviderModal" hidden>
+      <div class="key-modal-backdrop" data-create-provider-close></div>
+      <section class="key-dialog provider-create-dialog" role="dialog" aria-modal="true" aria-labelledby="createProviderDialogTitle" aria-describedby="createProviderDialogDesc">
+        <div class="card-head"><div><h2 class="card-title" id="createProviderDialogTitle">Add a custom provider</h2><p class="desc" id="createProviderDialogDesc">Connect any OpenAI- or Anthropic-compatible endpoint. Models are added later on the provider's Models tab.</p></div><button class="iconbtn" type="button" data-create-provider-close aria-label="Close">×</button></div>
+        <form class="apform" id="addProviderForm" autocomplete="off">
+          <label class="apfield"><span>Name</span><input name="name" placeholder="Ollama (local)" required maxlength="60"></label>
+          <label class="apfield"><span>Prefix</span><input name="prefix" placeholder="ollama" required maxlength="40" pattern="[a-z0-9][a-z0-9-]{0,39}" spellcheck="false"></label>
+          <label class="apfield apwide"><span>Base URL</span><input name="baseUrl" placeholder="http://127.0.0.1:11434/v1" required maxlength="300" spellcheck="false"></label>
+          <label class="apfield"><span>Format</span><select name="format" data-custom-select aria-label="Request format">
+            <option value="openai">OpenAI · Chat Completions</option>
+            <option value="responses">OpenAI · Responses</option>
+            <option value="anthropic">Anthropic · Messages</option>
+          </select></label>
+          <label class="apfield"><span>Chat path</span><input name="chatPath" value="/chat/completions" maxlength="120" spellcheck="false"></label>
+          <div class="apactions"><span class="toolnote" id="addProviderNote" role="status" aria-live="polite"></span><button class="btn btn-ghost" type="button" data-create-provider-close>Cancel</button><button class="btn btn-primary" type="submit">Create provider</button></div>
+        </form>
+      </section>
+    </div>
+
     <div class="key-modal" id="editProviderModal" hidden>
       <div class="key-modal-backdrop" data-edit-provider-close></div>
       <section class="key-dialog provider-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="editProviderDialogTitle">
@@ -940,9 +1158,13 @@
           <label class="apfield"><span>Website</span><input name="website" type="url" maxlength="300" spellcheck="false"></label>
           <label class="apfield"><span>Base URL</span><input name="baseUrl" type="url" required maxlength="500" spellcheck="false"></label>
           <label class="apfield"><span>Chat path</span><input name="chatPath" required maxlength="200" spellcheck="false"></label>
-          <label class="apfield"><span>Format</span><input name="format" required maxlength="80" spellcheck="false"></label>
+          <label class="apfield"><span>Format</span><select name="format" data-custom-select aria-label="Request format" required>
+            <option value="openai">OpenAI · Chat Completions</option>
+            <option value="responses">OpenAI · Responses</option>
+            <option value="anthropic">Anthropic · Messages</option>
+          </select></label>
           <label class="apfield"><span>Base URL env name</span><input name="baseUrlEnv" maxlength="120" spellcheck="false"></label>
-          <label class="apfield apwide"><span>Models <em>comma or one per line</em></span><textarea name="models" rows="4" required spellcheck="false"></textarea></label>
+          <label class="apfield apwide"><span>Models <em>comma or one per line</em></span><textarea name="models" rows="4" spellcheck="false"></textarea></label>
           <label class="apfield apwide"><span>Request headers <em>JSON object</em></span><textarea name="headers" rows="4" spellcheck="false">{}</textarea></label>
           <label class="apfield"><span>Refresh URL</span><input name="refreshUrl" type="url" maxlength="500" spellcheck="false"></label>
           <label class="apfield"><span>Refresh headers <em>JSON object</em></span><textarea name="refreshHeaders" rows="3" spellcheck="false">{}</textarea></label>
@@ -967,25 +1189,29 @@
           <button class="iconbtn account-dialog-close" id="closeAccountModal" type="button" aria-label="Close account dialog">×</button>
         </div>
 
-        <div class="account-modal-view" id="codexAccountChoice" hidden>
+        <div class="account-modal-view" id="oauthAccountChoice" hidden>
           <div class="oauth-choice-grid">
-            <button class="oauth-choice" id="startCodexOAuth" type="button">
-              <strong>Login with ChatGPT</strong>
-              <span>OAuth with PKCE. Recommended for Codex.</span>
+            <button class="oauth-choice" id="startProviderOAuth" type="button">
+              <strong id="providerOAuthTitle">Log in with the provider</strong>
+              <span id="providerOAuthHint">OAuth in your browser.</span>
             </button>
-            <button class="oauth-choice" id="chooseCodexApiKey" type="button">
-              <strong>API key</strong>
-              <span>Use the official OpenAI API endpoint, separate from Codex OAuth.</span>
+            <button class="oauth-choice" id="chooseProviderToken" type="button">
+              <strong id="providerTokenTitle">Paste a token</strong>
+              <span id="providerTokenHint">Import a token instead of logging in.</span>
             </button>
           </div>
-            <div class="oauth-choice-actions"><button class="btn btn-ghost" id="cancelCodexOAuth" type="button">Cancel login</button><span class="toolnote" id="codexOAuthNote" role="status" aria-live="polite"></span></div>
+          <p class="toolnote bad" id="providerOAuthRisk" role="note" hidden></p>
+          <div class="oauth-choice-actions">
+            <button class="btn btn-ghost" id="cancelProviderOAuth" type="button">Cancel login</button>
+            <span class="toolnote" id="providerOAuthNote" role="status" aria-live="polite"></span>
+          </div>
         </div>
 
         <div class="account-modal-view" id="addAccountPanel" hidden>
           <form class="apform" id="addAccountForm" autocomplete="off">
             <label class="apfield">
-              <span>Label</span>
-              <input name="label" placeholder="Laptop CLI" maxlength="80">
+              <span>Label <em>optional, auto-named</em></span>
+              <input name="label" placeholder="cbcn_1" maxlength="80">
             </label>
             <label class="apfield">
               <span>Type</span>
@@ -1061,6 +1287,7 @@
 <script src="/assets/provider-add.js"></script>
 <script src="/assets/account-detail.js"></script>
 <script src="/assets/account-events.js"></script>
+<script src="/assets/service-map.js"></script>
 <script src="/assets/glue.js"></script>
 <script src="/assets/actions.js"></script>
 <script src="/assets/boot.js"></script>

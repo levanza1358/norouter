@@ -1,16 +1,107 @@
 /* ---------------- add provider ---------------- */
 
-$('closeAddProvider')?.addEventListener('click', () => {
-  $('addProviderCard').hidden = true;
+let createProviderOpener = null;
+
+// Conventional endpoint per wire format. Used to prefill the chat path and to
+// decide whether a path is still auto-generated before replacing it.
+const FORMAT_PATHS = { openai: '/chat/completions', responses: '/responses', anthropic: '/messages' };
+const WIRE_FORMATS = Object.keys(FORMAT_PATHS);
+
+function createProviderModal() {
+  return $('createProviderModal');
+}
+
+function createProviderForm() {
+  return $('addProviderForm');
+}
+
+function slugifyProviderName(raw) {
+  return raw.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+}
+
+// Keep the path in step with the format without clobbering an endpoint the
+// user typed themselves: only empty or still-conventional paths are replaced.
+function syncChatPathToFormat(form) {
+  const chatPath = form.elements.chatPath;
+  const format = form.elements.format.value;
+  const preset = FORMAT_PATHS[format] || FORMAT_PATHS.openai;
+  const current = chatPath.value.trim();
+  if (!current || Object.values(FORMAT_PATHS).includes(current)) chatPath.value = preset;
+}
+
+function setFormatValue(form, value) {
+  form.elements.format.value = WIRE_FORMATS.includes(value) ? value : 'openai';
+}
+
+function fillPrefixFromName() {
+  const form = createProviderForm();
+  if (!form) return;
+  const name = form.querySelector('input[name="name"]');
+  const prefix = form.querySelector('input[name="prefix"]');
+  // Only auto-fill when the user hasn't touched the prefix field yet.
+  if (!name || !prefix || prefix.dataset.touched === 'true') return;
+  const raw = name.value.trim();
+  prefix.value = raw ? slugifyProviderName(raw).slice(0, 30) || 'provider' : '';
+}
+
+function closeCreateProvider() {
+  const modal = createProviderModal();
+  if (!modal || modal.hidden) return;
+  modal.hidden = true;
+  document.body.classList.remove('modal-open');
+  const opener = createProviderOpener;
+  createProviderOpener = null;
+  requestAnimationFrame(() => opener?.focus?.());
+}
+
+function openCreateProvider(opener = document.activeElement) {
+  const modal = createProviderModal();
+  const form = createProviderForm();
+  if (!modal || !form) return;
+  createProviderOpener = opener;
+  modal.hidden = false;
+  document.body.classList.add('modal-open');
+  detailNote($('addProviderNote'), '');
+  fillPrefixFromName();
+  requestAnimationFrame(() => form.querySelector('input[name="name"]')?.focus());
+}
+
+const addProviderForm = createProviderForm();
+
+if (addProviderForm) {
+  const addProviderName = addProviderForm.querySelector('input[name="name"]');
+  const addProviderPrefix = addProviderForm.querySelector('input[name="prefix"]');
+  const addProviderFormat = addProviderForm.querySelector('select[name="format"]');
+
+  addProviderName?.addEventListener('input', fillPrefixFromName);
+  // Mark prefix as touched when the user focuses it, so we don't overwrite
+  // a manual edit later.
+  addProviderPrefix?.addEventListener('focus', () => {
+    addProviderPrefix.dataset.touched = 'true';
+  });
+  addProviderFormat?.addEventListener('change', () => syncChatPathToFormat(addProviderForm));
+}
+
+document.querySelectorAll('[data-create-provider-close]').forEach((el) => el.addEventListener('click', closeCreateProvider));
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && createProviderModal() && !createProviderModal().hidden) closeCreateProvider();
 });
 
-$('addProviderForm')?.addEventListener('submit', async (event) => {
+addProviderForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
+  if (!form.reportValidity()) return;
   const note = $('addProviderNote');
   const button = form.querySelector('button[type="submit"]');
-  const data = Object.fromEntries(new FormData(form).entries());
-  data.prefix = data.prefix.trim();
+  const values = Object.fromEntries(new FormData(form).entries());
+  const format = WIRE_FORMATS.includes(values.format) ? values.format : 'openai';
+  const payload = {
+    name: values.name.trim(),
+    prefix: values.prefix.trim(),
+    baseUrl: values.baseUrl.trim(),
+    format,
+    chatPath: values.chatPath.trim() || FORMAT_PATHS[format],
+  };
 
   button.disabled = true;
   detailNote(note, 'Creating provider…');
@@ -18,12 +109,14 @@ $('addProviderForm')?.addEventListener('submit', async (event) => {
     const res = await fetch('/api/providers', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify(payload),
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error?.message || `Request failed (${res.status})`);
+    closeCreateProvider();
     form.reset();
-    $('addProviderCard').hidden = true;
+    const prefix = form.querySelector('input[name="prefix"]');
+    if (prefix) prefix.dataset.touched = 'false';
     detailNote(note, '');
     await refresh();
     navigate(`/providers/${encodeURIComponent(body.created)}`);
@@ -69,8 +162,10 @@ function openEditProvider(opener = document.activeElement) {
   form.elements.prefix.value = config.prefix || provider.prefix || provider.id;
   form.elements.website.value = config.website || summary.website || '';
   form.elements.baseUrl.value = config.baseUrl || summary.baseUrl || '';
-  form.elements.chatPath.value = config.chatPath || '/chat/completions';
-  form.elements.format.value = config.format || 'openai';
+  // The stored path is kept as-is; changing the format later only rewrites it
+  // while it is still one of the conventional endpoints.
+  setFormatValue(form, config.format);
+  form.elements.chatPath.value = config.chatPath || FORMAT_PATHS[form.elements.format.value];
   form.elements.forceStream.checked = config.forceStream === true;
   form.elements.requiresAccount.checked = config.requiresAccount === true;
   form.elements.models.value = providerList(config.models || detail.models?.map((model) => model.id));
@@ -82,10 +177,15 @@ function openEditProvider(opener = document.activeElement) {
   form.elements.quotaParser.value = config.quota?.parse || '';
   form.elements.checkinUrl.value = config.checkin?.url || '';
   form.elements.reasoning.value = JSON.stringify(config.reasoning || {}, null, 2);
+  // Assigning .value above does not fire `change`, so repaint the custom
+  // selects to show the stored format instead of the previous one.
+  syncCustomSelects();
   detailNote($('editProviderNote'), '');
   $('editProviderModal').hidden = false;
   form.elements.id.focus();
 }
+
+$('editProviderForm')?.elements.format?.addEventListener('change', () => syncChatPathToFormat($('editProviderForm')));
 
 $('editProviderForm')?.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -102,7 +202,10 @@ $('editProviderForm')?.addEventListener('submit', async (event) => {
       id: values.id.trim(), prefix, name: values.name.trim(), website: values.website.trim(),
       baseUrl: values.baseUrl.trim(), chatPath: values.chatPath.trim(), format: values.format.trim(),
       forceStream: form.elements.forceStream.checked, requiresAccount: form.elements.requiresAccount.checked,
-      models, headers: providerJson(values.headers, 'Request headers'), baseUrlEnv: values.baseUrlEnv.trim(),
+      // A provider may legitimately have no models until they are added on its
+      // Models tab; send nothing so PATCH keeps the current (empty) catalog.
+      ...(models.length ? { models } : {}),
+      headers: providerJson(values.headers, 'Request headers'), baseUrlEnv: values.baseUrlEnv.trim(),
       refresh: values.refreshUrl.trim() ? { url: values.refreshUrl.trim(), headers: providerJson(values.refreshHeaders, 'Refresh headers') } : null,
       quota: values.quotaUrl.trim() ? { url: values.quotaUrl.trim(), parse: values.quotaParser.trim() } : null,
       checkin: values.checkinUrl.trim() ? { url: values.checkinUrl.trim() } : null,
@@ -112,7 +215,12 @@ $('editProviderForm')?.addEventListener('submit', async (event) => {
     detailNote(note, err.message, 'bad');
     return;
   }
-  if (!models.length) { detailNote(note, 'Add at least one model.', 'bad'); return; }
+  // Clearing a catalog that already has models is almost always a mistake; a
+  // provider that never had models can still be saved.
+  if (!models.length && (detail?.models?.length || 0) > 0) {
+    detailNote(note, 'Add at least one model, or remove them from the Models tab.', 'bad');
+    return;
+  }
 
   button.disabled = true;
   detailNote(note, 'Saving provider…');

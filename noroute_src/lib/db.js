@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS accounts (
   updated_at    INTEGER NOT NULL,
   last_refresh_at INTEGER,
   plan          TEXT NOT NULL DEFAULT 'unknown',
-  plan_updated_at INTEGER
+  plan_updated_at INTEGER,
+  project_id    TEXT NOT NULL DEFAULT ''
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS accounts_fingerprint
@@ -126,7 +127,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
   last_used_at  INTEGER,
   expires_at    INTEGER,
   request_limit INTEGER,
-  token_limit   INTEGER
+  token_limit   INTEGER,
+  default_model TEXT
 );
 
 CREATE TABLE IF NOT EXISTS api_key_usage (
@@ -172,6 +174,21 @@ CREATE TABLE IF NOT EXISTS usage_activity (
   error        TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS usage_activity_at ON usage_activity(at DESC);
+
+-- Daily spend counters for API-key and provider budgets. day is a local date
+-- key so a budget resets at the operator's midnight, not UTC. scope is
+-- 'key:<id>' or 'provider:<id>'; cost_micro is USD millionths, which keeps
+-- integer math exact enough for per-request estimates.
+CREATE TABLE IF NOT EXISTS budget_usage (
+  day        TEXT NOT NULL,
+  scope      TEXT NOT NULL,
+  requests   INTEGER NOT NULL DEFAULT 0,
+  tokens_in  INTEGER NOT NULL DEFAULT 0,
+  tokens_out INTEGER NOT NULL DEFAULT 0,
+  cost_micro INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, scope)
+);
+CREATE INDEX IF NOT EXISTS budget_usage_day ON budget_usage(day);
 
 -- A combo is a named virtual model: an ordered list of real model ids tried in
 -- turn. Array order IS the priority, so there is no extra sort column.
@@ -290,13 +307,15 @@ export function getDb() {
   db.exec(SCHEMA);
 
   const columns = new Set(db.prepare('PRAGMA table_info(api_keys)').all().map((column) => column.name));
-  for (const [name, type] of [['expires_at', 'INTEGER'], ['request_limit', 'INTEGER'], ['token_limit', 'INTEGER'], ['secret', 'TEXT']]) {
+  for (const [name, type] of [['expires_at', 'INTEGER'], ['request_limit', 'INTEGER'], ['token_limit', 'INTEGER'], ['secret', 'TEXT'], ['default_model', 'TEXT']]) {
     if (!columns.has(name)) db.exec(`ALTER TABLE api_keys ADD COLUMN ${name} ${type}`);
   }
   const accountColumns = new Set(db.prepare('PRAGMA table_info(accounts)').all().map((column) => column.name));
   if (!accountColumns.has('last_refresh_at')) db.exec('ALTER TABLE accounts ADD COLUMN last_refresh_at INTEGER');
   if (!accountColumns.has('plan')) db.exec("ALTER TABLE accounts ADD COLUMN plan TEXT NOT NULL DEFAULT 'unknown'");
   if (!accountColumns.has('plan_updated_at')) db.exec('ALTER TABLE accounts ADD COLUMN plan_updated_at INTEGER');
+  // Antigravity pins each account to a Cloud Code project; Codex leaves it empty.
+  if (!accountColumns.has('project_id')) db.exec("ALTER TABLE accounts ADD COLUMN project_id TEXT NOT NULL DEFAULT ''");
   const chatMessageColumns = new Set(db.prepare('PRAGMA table_info(chat_messages)').all().map((column) => column.name));
   if (!chatMessageColumns.has('reasoning')) db.exec("ALTER TABLE chat_messages ADD COLUMN reasoning TEXT NOT NULL DEFAULT ''");
   const providerColumns = new Set(db.prepare('PRAGMA table_info(custom_providers)').all().map((column) => column.name));

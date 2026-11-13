@@ -1,4 +1,5 @@
 import {
+  accountUsageSummary,
   bulkCreateAccounts,
   checkinProvider,
   createAccount,
@@ -146,7 +147,7 @@ export async function handlePreviewAccounts(req, res, rawId) {
       : [body];
   if (!entries.length) return sendError(res, 400, 'No accounts in the request.');
 
-  const result = previewAccounts(provider.id, entries);
+  const result = previewAccounts(provider.id, entries, { prefix: provider.prefix });
   if (result.error) return sendError(res, result.status || 400, result.error);
   return sendJson(res, 200, { provider: provider.id, ...result });
 }
@@ -174,8 +175,11 @@ export async function handleCreateAccounts(req, res, rawId, url) {
   if (!entries.length) return sendError(res, 400, 'No accounts in the request.');
 
   const result = entries.length === 1 && !Array.isArray(body?.accounts) && !Array.isArray(body)
-    ? createAccount(provider.id, entries[0], { expiresIn: body?.expiresIn ?? body?.expires_in })
-    : bulkCreateAccounts(provider.id, entries);
+    ? createAccount(provider.id, entries[0], {
+      expiresIn: body?.expiresIn ?? body?.expires_in,
+      prefix: provider.prefix,
+    })
+    : bulkCreateAccounts(provider.id, entries, { prefix: provider.prefix });
 
   if (result.error) return sendError(res, result.status || 400, result.error);
 
@@ -272,4 +276,14 @@ export async function handleAccountCheckin(res, rawId, accountId) {
     });
   }
   return sendJson(res, 200, result);
+}
+
+// GET /api/providers/:id/accounts/:accountId/summary
+export function handleAccountSummary(res, rawId, accountId) {
+  const provider = resolveProvider(res, rawId);
+  if (!provider) return undefined;
+
+  const summary = accountUsageSummary(provider.id, accountId);
+  if (!summary) return sendError(res, 404, 'Account not found.');
+  return sendJson(res, 200, summary);
 }

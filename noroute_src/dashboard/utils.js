@@ -40,6 +40,23 @@ function escapeHtml(value) {
   ));
 }
 
+// The pool stores one canonical tier per account (`free`, `plus`, `pro`,
+// `ultra`, …). The badge and the summary line show the display form; an
+// unknown tier is shown as nothing rather than as a badge.
+const PLAN_LABELS = {
+  free: 'Free',
+  plus: 'Plus',
+  pro: 'Pro',
+  ultra: 'Ultra',
+  team: 'Team',
+  business: 'Business',
+  enterprise: 'Enterprise',
+};
+
+function accountPlanLabel(value) {
+  return PLAN_LABELS[String(value || '').toLowerCase()] || '';
+}
+
 // A provider is usable when env credentials exist, when the pool holds at
 // least one account, or when the endpoint needs no credential at all.
 function isReady(credential) {
@@ -118,55 +135,10 @@ function paintEvents() {
   // Synchronous pass (the loop forces layout), then two more on later frames
   // for the case where the card shrinks once its sibling columns settle.
   trimEventsToColumn();
-  padEventsToColumn();
   requestAnimationFrame(() => {
     trimEventsToColumn();
-    padEventsToColumn();
-    requestAnimationFrame(() => {
-      trimEventsToColumn();
-      padEventsToColumn();
-    });
+    requestAnimationFrame(trimEventsToColumn);
   });
-}
-
-// A quiet router leaves the bottom of the log card blank; placeholder rows keep
-// it filled with structure instead of a hollow block.
-function padEventsToColumn() {
-  const list = $('eventList');
-  if (!list) return;
-
-  for (const ghost of [...list.querySelectorAll('.evrow.ghost')]) ghost.remove();
-
-  // The idle-state hints are already placeholders.
-  if (list.querySelector('.evbar')) return;
-
-  const available = list.clientHeight;
-  if (!available) return;
-
-  // The list is a flex column, so scrollHeight equals clientHeight even when
-  // the rows stop short: measure where the last row actually ends.
-  const used = () => {
-    const last = list.lastElementChild;
-    if (!last) return 0;
-    return last.getBoundingClientRect().bottom - list.getBoundingClientRect().top;
-  };
-
-  const widths = [78, 62, 71, 55, 68];
-  const ghosts = [];
-  while (ghosts.length < 40 && used() + 24 <= available) {
-    const i = ghosts.length;
-    const row = document.createElement('div');
-    row.className = 'evrow ghost';
-    row.innerHTML = `<span class="evdot"></span>
-      <div class="evbody">
-        <div class="evbar" style="width:${widths[i % widths.length]}%"></div>
-        <div class="evtime" style="margin-top:7px">&nbsp;</div>
-      </div>`;
-    list.appendChild(row);
-    ghosts.push(row);
-  }
-
-  while (ghosts.length && used() > available + 1) ghosts.pop().remove();
 }
 
 function rowHtml(ev) {
@@ -181,3 +153,19 @@ function rowHtml(ev) {
     </div>`;
 }
 
+
+// A switch already shows its state; the word beside it has to agree, or a card
+// reads "Enabled" with the control off. Labels naming the setting itself
+// ("Coding focus") carry no state word and are left alone.
+function syncToggleLabels() {
+  document.querySelectorAll('.key-toggle input[type="checkbox"]').forEach((input) => {
+    const word = input.closest('.key-toggle')?.querySelector('b');
+    if (word && /^(enabled|disabled)$/i.test(word.textContent.trim())) {
+      word.textContent = input.checked ? 'Enabled' : 'Disabled';
+    }
+  });
+}
+
+document.addEventListener('change', (event) => {
+  if (event.target.matches?.('.key-toggle input')) syncToggleLabels();
+});

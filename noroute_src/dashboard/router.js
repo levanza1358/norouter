@@ -165,10 +165,16 @@ function navigate(path, { push = true, initial = false } = {}) {
     loadAutostart();
     loadTokenSaver();
     loadWebhook();
+    loadBudgets();
+    loadMaintenance();
   }
   if (target === '/usage') loadUsage();
   if (target === '/chat') loadChat();
-  if (target === '/combos') loadCombos();
+  if (target === '/combos') {
+    loadCombos();
+    loadVisionRouting();
+    loadRoutingRules();
+  }
   if (target === '/') loadDashboardApiKey();
 }
 

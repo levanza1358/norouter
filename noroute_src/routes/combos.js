@@ -1,11 +1,12 @@
 import { readJson, sendError, sendJson } from '../lib/http.js';
 import { createCombo, deleteCombo, getCombo, listCombos, updateCombo } from '../lib/combos.js';
+import { getVisionRouting, updateVisionRouting, validateVisionRoutingPatch } from '../lib/vision-routing.js';
 import { allModels, providers } from '../providers/index.js';
 
 // Models a combo may reference: exactly the enabled catalog, provider-prefixed
 // the same way /v1/models presents them. Served here because the dashboard's
 // admin routes are not behind REQUIRE_API_KEY, while /v1/models is.
-function comboCatalog() {
+export function comboCatalog() {
   const models = [];
   for (const provider of providers) {
     for (const model of allModels(provider)) {
@@ -59,4 +60,24 @@ export function handleGetCombo(req, res, id) {
   const combo = getCombo(id);
   if (!combo) return sendError(res, 404, `Unknown combo "${id}".`);
   return sendJson(res, 200, { combo });
+}
+
+// Vision routing shares the combo page and the same enabled-model catalog, so
+// its admin endpoints live here too.
+export function handleGetVisionRouting(req, res) {
+  return sendJson(res, 200, { vision: getVisionRouting(), catalog: comboCatalog() });
+}
+
+export async function handleUpdateVisionRouting(req, res) {
+  let body;
+  try {
+    body = await readJson(req, 32 * 1024);
+  } catch (err) {
+    return sendError(res, err.status || 400, err.message);
+  }
+  const error = validateVisionRoutingPatch(body);
+  if (error) return sendError(res, 400, error);
+  const result = updateVisionRouting(body);
+  if (result.error) return sendError(res, result.status, result.error);
+  return sendJson(res, 200, { vision: result.settings, catalog: comboCatalog() });
 }

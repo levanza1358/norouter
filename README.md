@@ -11,7 +11,13 @@ library (Node ≥ 22.5) with SQLite (`node:sqlite`) for persistence.
 - **Dashboard** — account pool, per-account test/ping/check-in, usage charts,
   API keys, model combos, and settings at `http://127.0.0.1:5555/`.
 - **Providers** — CodeBuddy CN (OAuth pool with quota + daily check-in), Codex
-  (Responses API), and any custom OpenAI-shaped base URL.
+  (Responses API), Antigravity (Google OAuth → Cloud Code Gemini wire), and any
+  custom OpenAI-shaped base URL.
+
+> Antigravity targets Google's undocumented Cloud Code gateway, which upstream
+> tooling flags as deprecated (`RISK_NOTICE`). It can change or be blocked
+> without notice, and no OAuth client is bundled: browser login needs your own
+> `ANTIGRAVITY_CLIENT_ID` / `ANTIGRAVITY_CLIENT_SECRET`.
 
 ## Quickstart
 
@@ -39,7 +45,7 @@ The full CLI: `start`, `stop`, `restart`, `dev`, `test`, `update`,
 npm test
 ```
 
-The smoke suite (104 tests) boots the real server in-process against a local
+The smoke suite (125 tests) boots the real server in-process against a local
 stub upstream, so it is hermetic: a temp SQLite file, no network, no
 credentials. It is the executable spec — behavior changes start there.
 
@@ -51,8 +57,8 @@ credentials. It is the executable spec — behavior changes start there.
 | `noroute_src/server.js` | HTTP server and route table |
 | `noroute_src/lib/` | Accounts, quotas, usage, masking, settings, DB |
 | `noroute_src/routes/` | Admin API + dashboard + chat handlers |
-| `noroute_src/providers/` | Provider adapters (CodeBuddy CN, Codex, custom) |
-| `noroute_src/dashboard/` | Dashboard HTML/CSS and ES-module views |
+| `noroute_src/providers/` | Provider adapters (CodeBuddy CN, Codex, Antigravity, custom) |
+| `noroute_src/dashboard/` | Dashboard HTML/CSS and per-area classic scripts |
 | `noroute_test/` | Smoke suite + stub upstream |
 | `noroute_docs/` | Design, API reference, ops, rules |
 | `data/` | Runtime SQLite DB (gitignored — holds plaintext tokens) |

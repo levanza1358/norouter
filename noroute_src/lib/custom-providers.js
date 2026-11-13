@@ -5,6 +5,8 @@ import { getDb, transaction } from './db.js';
 
 const ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,119}$/;
+const WIRE_FORMATS = ['openai', 'responses', 'anthropic'];
+const FORMAT_PATHS = { openai: '/chat/completions', responses: '/responses', anthropic: '/messages' };
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const CREDENTIAL_HEADERS = new Set([
   'authorization', 'proxy-authorization', 'cookie', 'set-cookie',
@@ -97,13 +99,13 @@ function aliasesFor(raw, id) {
   return { aliases };
 }
 
-function modelsFor(raw, creating) {
+function modelsFor(raw, allowEmpty) {
   const values = Array.isArray(raw)
     ? raw
     : typeof raw === 'string' ? raw.split(/[\s,]+/) : null;
   if (!values) return { error: 'Models must be an array or comma-separated string.' };
   const models = [...new Set(values.map((model) => String(model).trim()).filter(Boolean))];
-  if (!creating && !models.length) return { error: 'Provide 1-500 model ids.' };
+  if (!allowEmpty && !models.length) return { error: 'Provide 1-500 model ids.' };
   if (models.length > 500) return { error: 'Provide 1-500 model ids.' };
   const bad = models.find((model) => !MODEL_ID.test(model));
   if (bad) return { error: `"${bad}" is not a valid model id.` };
@@ -202,9 +204,16 @@ export function prepareProviderConfig(provider, patch = {}, { creating = false }
   const name = has(patch, 'name') ? String(patch.name || '').trim() : base.name;
   if (name.length < 2 || name.length > 60) return { status: 400, error: 'Provider name must be 2-60 characters.' };
 
+  const format = has(patch, 'format') ? String(patch.format || '').trim() : base.format;
+  if (!WIRE_FORMATS.includes(format)) return { status: 400, error: `Format must be one of: ${WIRE_FORMATS.join(', ')}.` };
+
   const baseUrl = validUrl(has(patch, 'baseUrl') ? patch.baseUrl : base.baseUrl, 'Base URL', true);
   if (baseUrl.error) return { status: 400, error: baseUrl.error };
-  let chatPath = has(patch, 'chatPath') ? String(patch.chatPath || '').trim() : base.chatPath;
+  // A new provider with a format but no explicit path gets the conventional
+  // endpoint for that wire format instead of a Chat Completions path.
+  let chatPath = has(patch, 'chatPath')
+    ? String(patch.chatPath || '').trim()
+    : creating ? FORMAT_PATHS[format] : base.chatPath;
   if (!chatPath.startsWith('/')) chatPath = `/${chatPath}`;
   if (chatPath.length > 120 || /[\s?#\r\n]/.test(chatPath)) return { status: 400, error: 'Chat path must be a URL path up to 120 characters.' };
 
@@ -214,12 +223,13 @@ export function prepareProviderConfig(provider, patch = {}, { creating = false }
   if (!ID.test(prefix) || /[\s,]/.test(prefix)) {
     return { status: 400, error: 'Prefix must be one lowercase token with letters, digits, or dashes only.' };
   }
-  const models = modelsFor(has(patch, 'models') ? patch.models : base.models, creating);
+  // A provider may stay model-less until models are added on its detail page.
+  // Clearing an existing catalog is still rejected so a stray empty PATCH
+  // cannot wipe routing.
+  const models = modelsFor(has(patch, 'models') ? patch.models : base.models, base.models.length === 0);
   if (models.error) return { status: 400, error: models.error };
   const headers = headersFor(has(patch, 'headers') ? patch.headers : base.headers);
   if (headers.error) return { status: 400, error: headers.error };
-  const format = has(patch, 'format') ? String(patch.format || '').trim() : base.format;
-  if (!['openai'].includes(format)) return { status: 400, error: 'Only the openai format is supported.' };
   const baseUrlEnv = has(patch, 'baseUrlEnv') ? String(patch.baseUrlEnv || '').trim() : base.baseUrlEnv;
   if (baseUrlEnv && !/^[A-Z][A-Z0-9_]{0,79}$/.test(baseUrlEnv)) return { status: 400, error: 'Base URL environment variable name is invalid.' };
   const refresh = optionalEndpoint(has(patch, 'refresh') ? patch.refresh : base.refresh, 'Refresh endpoint');
@@ -278,6 +288,7 @@ export function toProvider(entry) {
     refresh: entry.refresh || undefined,
     quota: entry.quota || undefined,
     checkin: entry.checkin || undefined,
+    reasoning: entry.reasoning || undefined,
     models: [...entry.models],
     accountStrategy: normalizeStrategy(entry.accountStrategy),
     custom: true,

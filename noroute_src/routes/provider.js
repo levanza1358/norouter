@@ -1,11 +1,12 @@
-import { accountCounts, accessTokenFor, getAccountRow, listAccounts, poolToken } from '../lib/accounts.js';
+import { accountCounts, getAccountRow, listAccounts, poolToken } from '../lib/accounts.js';
 import { readJson, sendError, sendJson } from '../lib/http.js';
 import { addCustomModel, customModels, modelEnabled, removeCustomModel, setModelEnabled } from '../lib/custom-models.js';
 import { providerUsage, stats } from '../lib/stats.js';
 import { testProviderModels } from '../lib/model-test.js';
 import { modelCapability } from '../providers/model-capabilities.js';
 import { catalogModels } from '../providers/index.js';
-import { codexAccountIdByToken, codexActiveAccounts, codexModelAccounts, codexModelPlans, saveCodexAccountCatalog } from '../lib/codex-account.js';
+import { codexAccountIdByToken, codexActiveAccounts, codexModelAccounts, codexModelPlans } from '../lib/codex-account.js';
+import { CATALOG_TIMEOUT_MS as FETCH_TIMEOUT_MS, catalogUrl, fetchCatalogForAccount } from '../lib/provider-catalog.js';
 import {
   addProvider,
   allModels,
@@ -14,8 +15,6 @@ import {
   removeProvider,
   updateProvider,
 } from '../providers/index.js';
-
-const FETCH_TIMEOUT_MS = 20000;
 
 function getAccountModelCount(providerId, model) {
   return providerId === 'codex' ? codexModelAccounts(model).length : 0;
@@ -90,6 +89,7 @@ export function providerSnapshot(provider) {
       endpointOverride: override,
       refreshSupported: Boolean(provider.refresh?.url),
       quotaSupported: Boolean(provider.quota?.url),
+      checkinSupported: Boolean(provider.checkin || process.env.CODEBUDDY_CN_CHECKIN_URL?.trim()),
       reasoning: provider.reasoning || null,
     },
     pool,
@@ -106,9 +106,11 @@ export function providerSnapshot(provider) {
       percent: budget.limit ? Math.min(100, Math.round((used / budget.limit) * 100)) : null,
       note: provider.quota?.parser === 'codex'
         ? 'Codex quota comes from the ChatGPT WHAM usage endpoint. Windows may include session, weekly, review, and spark limits.'
-        : provider.quota?.url
-          ? 'Per-account quota comes from the provider billing endpoint; this bar counts traffic the router relayed since it started.'
-          : `${provider.display.name} publishes no quota endpoint, so this counts traffic the router has relayed since it started.`,
+        : provider.quota?.parser === 'antigravity'
+          ? 'Antigravity quota comes from the Cloud Code quota summary: shared weekly and 5h pools per model family.'
+          : provider.quota?.url
+            ? 'Per-account quota comes from the provider billing endpoint; this bar counts traffic the router relayed since it started.'
+            : `${provider.display.name} publishes no quota endpoint, so this counts traffic the router has relayed since it started.`,
     },
     models: models.map((id) => {
       const hit = stats.perModel.get(id);
@@ -271,45 +273,11 @@ export function handleRemoveModel(req, res, rawId, rawModel) {
   return sendJson(res, 200, providerSnapshot(provider));
 }
 
-// Asks the upstream for its catalog. CodeBuddy CN does not document a /models
-// route, so a failure is reported as-is instead of being hidden.
-async function fetchCatalogForAccount(provider, row, url) {
-  const credential = await accessTokenFor(provider, row);
-  if (!credential.token) return { accountId: row.id, label: row.label, error: 'No usable account token.' };
-  const headers = { accept: 'application/json', ...provider.headers, authorization: `Bearer ${credential.token}` };
-  if (provider.id === 'codex') {
-    headers['OpenAI-Beta'] = 'codex-1';
-    headers.originator = provider.headers?.originator || 'codex_cli_rs';
-  }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const upstream = await fetch(url, { method: 'GET', headers, signal: controller.signal });
-    const text = await upstream.text();
-    if (!upstream.ok) return { accountId: row.id, label: row.label, status: upstream.status, error: `Provider answered ${upstream.status}.` };
-    let payload;
-    try { payload = JSON.parse(text); } catch { return { accountId: row.id, label: row.label, error: 'Provider returned invalid JSON.' }; }
-    const list = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : Array.isArray(payload?.items) ? payload.items : [];
-    const ids = list.map((item) => (typeof item === 'string' ? item : item?.id || item?.model || item?.slug)).filter((id) => typeof id === 'string' && id.trim());
-    if (!ids.length) return { accountId: row.id, label: row.label, error: 'Provider returned no models.' };
-    const plan = payload.plan_type || payload.plan || payload.summary?.plan || row.plan || 'unknown';
-    const saved = saveCodexAccountCatalog(row.id, plan, ids);
-    return { accountId: row.id, label: row.label, plan: saved.plan, models: saved.models };
-  } catch (err) {
-    return { accountId: row.id, label: row.label, error: err.name === 'AbortError' ? 'Provider request timed out.' : 'Provider could not be reached.' };
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 export async function handleFetchModels(req, res, rawId) {
   const provider = resolveProvider(res, rawId);
   if (!provider) return undefined;
   if (provider.modelDiscovery === false) return sendError(res, 400, `${provider.display.name} uses its bundled model catalog; upstream /models is not available.`);
-  const override = provider.baseUrlEnv ? process.env[provider.baseUrlEnv]?.trim() : '';
-  const base = provider.modelsPath ? (override || provider.baseUrl).replace(/\/+$/, '') : chatUrl(provider).replace(/\/chat\/completions\/?$/, '').replace(/\/responses\/?$/, '');
-  const modelUrl = `${base}${provider.modelsPath || '/models'}`;
-  const url = provider.clientVersion ? `${modelUrl}?client_version=${encodeURIComponent(provider.clientVersion)}` : modelUrl;
+  const url = catalogUrl(provider);
 
   if (provider.id === 'codex') {
     const accounts = codexActiveAccounts();
@@ -346,7 +314,9 @@ export async function handleFetchModels(req, res, rawId) {
     const list = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : Array.isArray(payload?.items) ? payload.items : [];
     const ids = list.map((item) => (typeof item === 'string' ? item : item?.id || item?.model || item?.slug)).filter((id) => typeof id === 'string' && id.trim());
     if (!ids.length) return sendJson(res, 502, { error: { message: `Provider returned no models from ${url}.`, type: 'upstream_error', url } });
-    const known = new Set(allModels(provider)); const added = [];
+    // Known means present in the catalog, disabled or not: re-fetching must not
+    // turn a disabled model into a duplicate custom entry.
+    const known = new Set(catalogModels(provider)); const added = [];
     for (const id of ids) { const clean = id.trim(); if (known.has(clean)) continue; const result = addCustomModel(provider.id, clean); if (result.model) { known.add(clean); added.push(clean); } }
     return sendJson(res, 200, { url, fetched: ids.length, added, ...providerSnapshot(provider) });
   } catch (err) { return sendJson(res, 502, { error: { message: err.name === 'AbortError' ? `Provider did not answer ${url} within ${FETCH_TIMEOUT_MS / 1000}s` : `Could not reach ${url}: ${err.message}`, type: 'upstream_error', url } });

@@ -1,3 +1,4 @@
+import { fetchAntigravityQuota } from './antigravity-quota.js';
 import { fetchCodebuddyQuota } from './codebuddy.js';
 import { parseCodexUsage } from './codex-usage.js';
 
@@ -44,6 +45,9 @@ export async function fetchProviderQuota(provider, accessToken, account = {}) {
     const body = await fetchJson(override || provider.quota.url, headers);
     if (body.error) return body;
     return parseCodexUsage(body);
+  }
+  if (provider.quota?.parser === 'antigravity') {
+    return fetchAntigravityQuota(provider, accessToken, account);
   }
   return fetchCodebuddyQuota(provider, accessToken);
 }

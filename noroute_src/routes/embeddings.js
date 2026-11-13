@@ -4,6 +4,7 @@
 // model + input; vectors and input text never enter request logs or usage logs.
 
 import { readJson, sendError, sendJson } from '../lib/http.js';
+import { nextLiveId, publishLive } from '../lib/live.js';
 import { resolveCredential, buildHeaders } from './chat.js';
 import { getProvider, providers } from '../providers/index.js';
 import {
@@ -73,8 +74,22 @@ export async function handleEmbeddings(req, res) {
   }
   if (!validInput(body?.input)) return sendError(res, 400, 'Field "input" must be a non-empty string or array of strings.');
 
+  const liveId = nextLiveId();
+  publishLive({
+    phase: 'start',
+    id: liveId,
+    at: Date.now(),
+    kind: 'embed',
+    model: typeof body?.model === 'string' ? body.model : '',
+    stream: false,
+    tools: false,
+  });
+
   const resolved = resolveEmbeddingModel(body.model);
-  if (resolved.error) return sendError(res, 400, resolved.error);
+  if (resolved.error) {
+    publishLive({ phase: 'error', id: liveId, at: Date.now(), model: body?.model || null, status: 400, stage: 'model' });
+    return sendError(res, 400, resolved.error);
+  }
   const { provider, model } = resolved;
   const payload = { model, input: body.input };
   const started = Date.now();
@@ -86,11 +101,28 @@ export async function handleEmbeddings(req, res) {
   try {
     for (let round = 0; round < accountAttemptLimit(provider.id); round += 1) {
       const credential = await resolveCredential(provider);
+      publishLive({
+        phase: 'route',
+        id: liveId,
+        at: Date.now(),
+        provider: provider.id,
+        model,
+        attempt: round + 1,
+      });
       if (!credential.token) {
         lastStatus = credential.pooled ? 429 : 401;
         lastError = credential.pooled
           ? `Every account for ${provider.id} is cooling down or out of tokens.`
           : `No account credential for ${provider.id}.`;
+        publishLive({
+          phase: 'error',
+          id: liveId,
+          at: Date.now(),
+          provider: provider.id,
+          model,
+          status: lastStatus,
+          stage: 'credential',
+        });
         break;
       }
 
@@ -103,7 +135,18 @@ export async function handleEmbeddings(req, res) {
           signal: controller.signal,
         });
       } catch (err) {
-        if (err.name === 'AbortError') return sendError(res, 502, 'Embedding request timed out.');
+        if (err.name === 'AbortError') {
+          publishLive({
+            phase: 'error',
+            id: liveId,
+            at: Date.now(),
+            provider: provider.id,
+            model,
+            status: 502,
+            stage: 'upstream',
+          });
+          return sendError(res, 502, 'Embedding request timed out.');
+        }
         markFailure(credential.row.id, { message: err.message, cooldownMs: DEFAULT_COOLDOWN_MS });
         lastStatus = 502;
         lastError = redact(err.message);
@@ -112,12 +155,37 @@ export async function handleEmbeddings(req, res) {
 
       if (response.ok) {
         const parsed = await response.json().catch(() => null);
-        if (!parsed || !Array.isArray(parsed.data)) return sendError(res, 502, 'Upstream returned an invalid embedding response.');
+        if (!parsed || !Array.isArray(parsed.data)) {
+          publishLive({
+            phase: 'error',
+            id: liveId,
+            at: Date.now(),
+            provider: provider.id,
+            model,
+            status: 502,
+            stage: 'upstream',
+          });
+          return sendError(res, 502, 'Upstream returned an invalid embedding response.');
+        }
         const elapsed = Date.now() - started;
         markSuccess(credential.row.id, { tokensIn: parsed.usage?.prompt_tokens || 0, tokensOut: 0 });
         recordRequest({ provider: provider.id, model, usage: parsed.usage, ms: elapsed });
         recordRequestLog({ provider: provider.id, model, account: credential.row.label, ms: elapsed, status: 200 });
         notifyWebhook('request', { provider: provider.id, model, account: credential.row.label, ms: elapsed, status: 200 });
+        publishLive({
+          phase: 'finish',
+          id: liveId,
+          at: Date.now(),
+          provider: provider.id,
+          model,
+          status: 200,
+          ms: elapsed,
+          tokensIn: parsed.usage?.prompt_tokens || 0,
+          tokensOut: 0,
+          tool: false,
+          stream: false,
+          kind: 'embed',
+        });
         return sendJson(res, 200, normalize(parsed, model));
       }
 
@@ -140,6 +208,20 @@ export async function handleEmbeddings(req, res) {
               recordRequest({ provider: provider.id, model, usage: parsed.usage, ms: elapsed });
               recordRequestLog({ provider: provider.id, model, account: credential.row.label, ms: elapsed, status: 200 });
               notifyWebhook('request', { provider: provider.id, model, account: credential.row.label, ms: elapsed, status: 200 });
+              publishLive({
+                phase: 'finish',
+                id: liveId,
+                at: Date.now(),
+                provider: provider.id,
+                model,
+                status: 200,
+                ms: elapsed,
+                tokensIn: parsed.usage?.prompt_tokens || 0,
+                tokensOut: 0,
+                tool: false,
+                stream: false,
+                kind: 'embed',
+              });
               return sendJson(res, 200, normalize(parsed, model));
             }
           }
@@ -153,6 +235,15 @@ export async function handleEmbeddings(req, res) {
     recordError(lastError, { upstream: true, model, provider: provider.id });
     recordRequestLog({ provider: provider.id, model, status: lastStatus, error: lastError });
     notifyWebhook('error', { provider: provider.id, model, status: lastStatus, message: lastError });
+    publishLive({
+      phase: 'error',
+      id: liveId,
+      at: Date.now(),
+      provider: provider.id,
+      model,
+      status: lastStatus || 502,
+      stage: 'upstream',
+    });
     return sendError(res, lastStatus || 502, lastError);
   } finally {
     clearTimeout(timer);

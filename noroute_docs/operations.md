@@ -61,11 +61,13 @@ curl http://<server-ip>:5555/api/status
 curl http://<server-ip>:5555/v1/models
 ```
 
-`/v1/models` needs the router API key only when `REQUIRE_API_KEY=true`. During chat, rate-limited, rejected, or failed accounts are parked temporarily and the router tries every remaining healthy account. It stops only after no healthy account remains or the request itself is invalid.
+`/v1/models` needs the router API key only when `REQUIRE_API_KEY=true`. It lists enabled models only: a model disabled from its provider page is omitted and cannot be routed until re-enabled. During chat, rate-limited, rejected, or failed accounts are parked temporarily and the router tries every remaining healthy account. It stops only after no healthy account remains or the request itself is invalid.
 
 ## Logs
 
 Request logs are enabled unless `ENABLE_REQUEST_LOGS=false`. Logs include method, path, status, and duration, not request bodies. Upstream/error messages may still include sensitive operational context; do not publish logs without review.
+
+A turn that stops early leaves a request log entry with status 502 and `Upstream stream ended before completion (provider/model)` or the upstream's own error message. Two stderr warnings separate the remaining cases without touching prompt or response text: `[chat] native tool-call marker left in content` (recovery could not parse an incomplete or unknown native call) and `[chat] empty completion` (the model genuinely returned no content and no tool call).
 
 ## Database backup
 
@@ -92,11 +94,22 @@ Norouter does not send a dummy chat prompt before every request. That would add 
 - Providers without a verified quota/health endpoint are not probed automatically.
 - The provider detail page also has **Warmup all** for a manual recovery pass. It probes only expired parked accounts; active healthy accounts are left untouched.
 - **Test all accounts** is separate: after confirmation, it sends one provider-native real request per enabled account. This can consume quota. `200` marks `active`; invalid credentials mark `error`; rate limits, exhausted quota, timeouts, and upstream failures mark `cooldown`. Paused accounts are skipped.
-- Provider tests use each provider's wire format: CodeBuddy uses OpenAI-compatible streaming, Codex uses Responses format. Automatic warmup never sends this real request.
+- Provider tests use each provider's wire format: CodeBuddy uses OpenAI-compatible streaming, Codex uses Responses format, and Antigravity uses the Cloud Code `v1internal` Gemini envelope. Automatic warmup never sends this real request.
+
+## Daily budgets and scheduled upkeep
+
+Settings → Daily budgets puts a token or cost cap on a managed API key or a whole provider. Limits live in the `meta.budgets` JSON snapshot; counters live in `budget_usage` under a local calendar day key, so every budget resets at the server machine's local midnight. Counters older than 90 days are pruned once per day. A cost cap is an estimate from the Usage page price table: unpriced models still count tokens but add zero cost, so a cost-only cap cannot see them.
+
+- A key that reaches its cap returns 429 `budget_error` / `budget_exhausted` before any upstream call. A provider that reaches its cap is skipped by failover chains; the request continues on another target and only fails if none is left.
+- When a scope crosses its limit, the webhook (if enabled) receives one `budget` event per scope per day with the limit, the used counters, and the reason (`tokens` and/or `cost`). No credential, prompt, or response text is included.
+- Counters are written only for completed requests with usage, and only for scopes that had a limit at request time. Turning a limit off stops its counter but keeps the day's row visible in the card.
+- Settings → Scheduled upkeep runs three background tasks while the server is up: token refresh (10 minutes), quota refresh (6 hours), and Codex model catalog (12 hours). The scheduler interval defaults to 15 minutes and accepts 5–1440; the first automatic tick happens one full interval after start, so a restart does not fire upstream traffic immediately.
+- Each tick only touches a bounded batch (20 token refreshes, 20 quota reads, 10 catalogs) in oldest-first order, so a large pool is caught up over several ticks instead of one long burst.
+- **Run all now** (or `POST /api/maintenance/run`) works even with the scheduler switched off, which is the way to verify credentials and catalog reads without waiting. A task that throws is reported in the card and webhook as an `error` event with `scope: "maintenance"`; the next tick retries.
 
 ## Account names
 
-New accounts without an explicit name use short provider labels such as `codebuddy-cn_1`, `codebuddy-cn_2`, and so on. The lowest unused number is reused, so deleting `_4` makes the next unnamed account `_4`. Custom names and UID-derived names do not consume the numbered sequence. Rename an account from its row's **More → Edit name** action.
+New accounts without an explicit name are numbered from the provider's short prefix: `cbcn_1`, `cbcn_2`, and so on for CodeBuddy CN (`cx_1` for Codex, `ag_1` for Antigravity). The lowest unused number is reused, so deleting `_4` makes the next unnamed account `_4`. Names you type are kept exactly as entered. On startup, legacy automatic names (`Account · <uid>` and `<provider-id>_N`) are converted once to the short form; custom names are not touched. Rename an account from its row's **More → Edit name** action.
 
 ## Credential rotation
 

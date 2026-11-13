@@ -4,6 +4,14 @@ document.querySelectorAll('.dtab[data-tab]').forEach((btn) => {
   btn.addEventListener('click', () => setDetailTab(btn.dataset.tab));
 });
 
+document.querySelectorAll('[data-dusage-range]').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    if (dUsageRange === btn.dataset.dusageRange) return;
+    dUsageRange = btn.dataset.dusageRange;
+    loadProviderUsage();
+  });
+});
+
 // Roving tabindex: only the selected tab is in the tab order, and the arrow
 // keys move between tabs and activate them, per the ARIA tabs pattern.
 $('dTabs')?.addEventListener('keydown', (event) => {
@@ -21,42 +29,51 @@ $('dTabs')?.addEventListener('keydown', (event) => {
   setDetailTab(tabs[next].dataset.tab);
 });
 
-$('openAddAccount')?.addEventListener('click', () => setAccountModal(true, 'add'));
+$('openAddAccount')?.addEventListener('click', () => setAccountModal(true));
 $('openBulk')?.addEventListener('click', () => setAccountModal(true, 'bulk'));
-$('chooseCodexApiKey')?.addEventListener('click', () => setAccountModal(true, 'add'));
-$('cancelCodexOAuth')?.addEventListener('click', async () => {
-  const note = $('codexOAuthNote');
-  if (note?.dataset.state) await fetch(`/api/providers/codex/oauth/cancel/${encodeURIComponent(note.dataset.state)}`, { method: 'POST' }).catch(() => {});
-  clearInterval(codexOAuthTimer);
-  codexOAuthTimer = null;
+$('chooseProviderToken')?.addEventListener('click', () => setAccountModal(true, 'form'));
+$('cancelProviderOAuth')?.addEventListener('click', async () => {
+  const note = $('providerOAuthNote');
+  const providerId = detail?.provider?.id;
+  if (providerId && note?.dataset.state) await fetch(`/api/providers/${encodeURIComponent(providerId)}/oauth/cancel/${encodeURIComponent(note.dataset.state)}`, { method: 'POST' }).catch(() => {});
+  clearInterval(oauthTimer);
+  oauthTimer = null;
   if (note) { note.textContent = 'OAuth cancelled.'; delete note.dataset.state; }
 });
-$('startCodexOAuth')?.addEventListener('click', async () => {
-  const note = $('codexOAuthNote');
+$('startProviderOAuth')?.addEventListener('click', async () => {
+  const note = $('providerOAuthNote');
+  const providerId = detail?.provider?.id;
+  if (!providerId) return;
   if (note) note.textContent = 'Starting secure local OAuth…';
+  // Claim the tab while the click is still active; browsers treat a window
+  // opened after the fetch below as a popup and block it.
+  const tab = window.open('about:blank', '_blank');
+  if (tab) tab.opener = null;
   try {
-    const response = await fetch('/api/providers/codex/oauth/start', { method: 'POST' });
+    const response = await fetch(`/api/providers/${encodeURIComponent(providerId)}/oauth/start`, { method: 'POST' });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error?.message || 'Could not start OAuth.');
-    window.open(body.authorizeUrl, '_blank', 'noopener');
+    if (tab) tab.location.href = body.authorizeUrl;
+    else window.open(body.authorizeUrl, '_blank', 'noopener');
     if (note) { note.textContent = 'Complete login in the new tab. Waiting for the local callback…'; note.dataset.state = body.state; }
-    clearInterval(codexOAuthTimer);
-    codexOAuthTimer = setInterval(async () => {
-      const statusResponse = await fetch(`/api/providers/codex/oauth/status/${encodeURIComponent(body.state)}`).catch(() => null);
+    clearInterval(oauthTimer);
+    oauthTimer = setInterval(async () => {
+      const statusResponse = await fetch(`/api/providers/${encodeURIComponent(providerId)}/oauth/status/${encodeURIComponent(body.state)}`).catch(() => null);
       const status = await statusResponse?.json().catch(() => ({}));
       if (status?.status === 'complete') {
-        clearInterval(codexOAuthTimer);
-        codexOAuthTimer = null;
-        if (note) note.textContent = 'Codex login complete. Refreshing accounts…';
+        clearInterval(oauthTimer);
+        oauthTimer = null;
+        if (note) note.textContent = oauthCopyFor(detail?.provider).done;
         await loadDetail();
         setAccountModal(false);
       } else if (status?.status === 'unknown') {
-        clearInterval(codexOAuthTimer);
-        codexOAuthTimer = null;
+        clearInterval(oauthTimer);
+        oauthTimer = null;
         if (note) note.textContent = 'OAuth expired or was cancelled. Start again if needed.';
       }
     }, 1500);
   } catch (err) {
+    if (tab) tab.close();
     if (note) note.textContent = err.message;
   }
 });
@@ -299,7 +316,7 @@ function openAccountActions(id, opener) {
   if (!account) return;
   accountActionsId = id;
   accountActionsOpener = opener;
-  $('accountActionsTitle').textContent = account.label || 'Account actions';
+  $('accountActionsTitle').textContent = accountDisplayLabel(account);
   $('accountActionsMessage').textContent = `${account.kind.replace(/_/g, ' ')} · ${account.status}`;
   $('accountActionsList').innerHTML = [
     '<button class="account-action-button" type="button" data-account-action="edit">Edit name</button>',
@@ -313,7 +330,98 @@ function openAccountActions(id, opener) {
   $('accountActionsList').querySelector('button')?.focus();
 }
 
+let accountSummaryId = null;
+let accountSummaryOpener = null;
+let accountSummaryRequestId = 0;
+
+function closeAccountSummary() {
+  const modal = $('accountSummaryModal');
+  if (!modal || modal.hidden) return;
+  modal.hidden = true;
+  accountSummaryId = null;
+  accountSummaryRequestId += 1;
+  requestAnimationFrame(() => accountSummaryOpener?.focus?.());
+  accountSummaryOpener = null;
+}
+
+function accountSummaryWindow(label, item) {
+  const tokens = item.tokensIn + item.tokensOut;
+  return `<div class="asum-window">
+    <span class="asum-window-label">${escapeHtml(label)}</span>
+    <span class="asum-window-value">${compact(item.requests)}<em>req</em></span>
+    <span class="asum-window-note">${compact(tokens)} tok</span>
+  </div>`;
+}
+
+function renderAccountSummary(summary) {
+  const body = $('accountSummaryBody');
+  if (!body) return;
+  const windows = summary.windows || {};
+  const zero = { requests: 0, tokensIn: 0, tokensOut: 0 };
+  const series = summary.series || [];
+  const peak = Math.max(1, ...series.map((day) => day.tokensIn + day.tokensOut));
+  const bars = series.map((day) => {
+    const tokens = day.tokensIn + day.tokensOut;
+    const height = tokens ? Math.max(5, Math.round((tokens / peak) * 100)) : 0;
+    const label = `${day.day} · ${fmtFull(day.requests)} req · ${fmtFull(tokens)} tok`;
+    return `<span class="asum-day${tokens ? '' : ' is-empty'}" style="--day-height:${height}%" title="${escapeHtml(label)}"></span>`;
+  }).join('');
+  const lifetime = windows.all || zero;
+
+  body.innerHTML = `
+    <div class="asum-windows">
+      ${accountSummaryWindow('Today', windows.day || zero)}
+      ${accountSummaryWindow('Last 7 days', windows.week || zero)}
+      ${accountSummaryWindow('Last 30 days', windows.month || zero)}
+      ${accountSummaryWindow('Lifetime', lifetime)}
+    </div>
+    <div class="asum-chart-head">
+      <span class="tile-label">Last 30 days</span>
+      <span class="chip chip-quiet">${escapeHtml(summary.timeZone || 'UTC')} days</span>
+    </div>
+    <div class="asum-days" role="img" aria-label="Daily token usage for the last 30 days">${bars}</div>
+    <div class="asum-foot">
+      <span><strong>${fmtFull(lifetime.requests)}</strong> lifetime requests</span>
+      <span><strong>${fmtFull(summary.errors || 0)}</strong> lifetime errors</span>
+    </div>
+    <p class="toolnote">Daily windows count successful requests on ${escapeHtml(summary.timeZone || 'UTC')} days; lifetime totals include failures.</p>
+  `;
+}
+
+async function openAccountSummary(id, opener) {
+  const modal = $('accountSummaryModal');
+  if (!modal || !currentDetailId) return;
+  const account = accounts.data?.items.find((item) => item.id === id);
+  accountSummaryId = id;
+  accountSummaryOpener = opener;
+  if ($('accountSummaryTitle')) $('accountSummaryTitle').textContent = account ? accountDisplayLabel(account) : 'Account summary';
+  if ($('accountSummaryMeta')) {
+    $('accountSummaryMeta').textContent = account
+      ? [account.kind.replace(/_/g, ' '), accountPlanLabel(account.plan), account.masked].filter(Boolean).join(' · ')
+      : '';
+  }
+  if ($('accountSummaryBody')) $('accountSummaryBody').innerHTML = '<p class="toolnote">Loading summary…</p>';
+  modal.hidden = false;
+  modal.querySelector('.iconbtn')?.focus();
+
+  const requestId = ++accountSummaryRequestId;
+  try {
+    const res = await detailApi(`/accounts/${encodeURIComponent(id)}/summary`, { cache: 'no-store' });
+    const body = await res.json().catch(() => ({}));
+    if (requestId !== accountSummaryRequestId || accountSummaryId !== id) return;
+    if (!res.ok) throw new Error(body.error?.message || `Request failed (${res.status})`);
+    renderAccountSummary(body);
+  } catch (err) {
+    if (requestId !== accountSummaryRequestId || accountSummaryId !== id) return;
+    if ($('accountSummaryBody')) {
+      $('accountSummaryBody').innerHTML = `<p class="toolnote bad">${escapeHtml(err.message || 'Could not load the summary.')}</p>`;
+    }
+  }
+}
+
 $('dAccounts')?.addEventListener('click', (event) => {
+  const summaryBtn = event.target.closest('[data-account-summary]');
+  if (summaryBtn) return openAccountSummary(summaryBtn.dataset.accountSummary, summaryBtn);
   const btn = event.target.closest('[data-act]');
   if (!btn) return;
   const { act, id } = btn.dataset;
@@ -325,6 +433,7 @@ $('dAccounts')?.addEventListener('click', (event) => {
 });
 
 document.querySelectorAll('[data-account-actions-close]').forEach((el) => el.addEventListener('click', closeAccountActions));
+document.querySelectorAll('[data-account-summary-close]').forEach((el) => el.addEventListener('click', closeAccountSummary));
 $('accountActionsList')?.addEventListener('submit', async (event) => {
   const form = event.target.closest('[data-account-name-form]');
   if (!form || !accountActionsId) return;
@@ -355,7 +464,7 @@ $('accountActionsList')?.addEventListener('click', (event) => {
   if (action === 'edit') {
     const account = accounts.data?.items.find((item) => item.id === id);
     if (!account) return;
-    $('accountActionsList').innerHTML = `<form class="account-name-form" data-account-name-form><label class="apfield"><span>Account name</span><input name="label" maxlength="80" required value="${escapeHtml(account.label)}"></label><div class="key-form-footer"><button class="btn btn-ghost" type="button" data-account-name-cancel>Cancel</button><button class="btn btn-primary" type="submit">Save</button></div></form>`;
+    $('accountActionsList').innerHTML = `<form class="account-name-form" data-account-name-form><label class="apfield"><span>Account name</span><input name="label" maxlength="80" required value="${escapeHtml(accountDisplayLabel(account))}"></label><div class="key-form-footer"><button class="btn btn-ghost" type="button" data-account-name-cancel>Cancel</button><button class="btn btn-primary" type="submit">Save</button></div></form>`;
     $('accountActionsList').querySelector('input')?.focus();
     return;
   }
@@ -365,7 +474,9 @@ $('accountActionsList')?.addEventListener('click', (event) => {
   if (action === 'delete') deleteOne(id).then(() => loadAccounts());
 });
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && !$('accountActionsModal').hidden) closeAccountActions();
+  if (event.key !== 'Escape') return;
+  if (!$('accountActionsModal').hidden) closeAccountActions();
+  else if (!$('accountSummaryModal').hidden) closeAccountSummary();
 });
 
 $('bulkActions')?.addEventListener('click', (event) => {

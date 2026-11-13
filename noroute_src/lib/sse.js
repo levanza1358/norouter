@@ -1,7 +1,7 @@
 // Minimal [OI]-style SSE reader plus an accumulator that collapses a stream
 // into a single ChatCompletion. Kept dependency-free on purpose.
 
-export async function* readSSEEvents(stream) {
+export async function* readSSEEvents(stream, state = null) {
   const decoder = new TextDecoder();
   let buffer = '';
 
@@ -18,7 +18,10 @@ export async function* readSSEEvents(stream) {
     let line;
     while ((line = takeLine()) !== null) {
       const event = parseLine(line);
-      if (event === 'done') return;
+      if (event === 'done') {
+        if (state) state.done = true;
+        return;
+      }
       if (event) yield event;
     }
   }
@@ -26,7 +29,10 @@ export async function* readSSEEvents(stream) {
   buffer += decoder.decode();
   for (const line of buffer.split('\n')) {
     const event = parseLine(line.replace(/\r$/, ''));
-    if (event === 'done') return;
+    if (event === 'done') {
+      if (state) state.done = true;
+      return;
+    }
     if (event) yield event;
   }
 }
@@ -61,6 +67,25 @@ export function stripEmptyToolCalls(chunk) {
   return changed;
 }
 
+// Upstage and some other OpenAI-compatible upstreams emit chain of thought as
+// `reasoning` instead of the canonical `reasoning_content`. Mirror the value
+// onto the canonical field and keep the original, so any client reads the text.
+// Works on both a stream `delta` and a non-stream `message`. Returns true when
+// the chunk was changed.
+export function mirrorReasoningAlias(chunk) {
+  if (!Array.isArray(chunk?.choices)) return false;
+  let changed = false;
+  for (const choice of chunk.choices) {
+    for (const target of [choice?.delta, choice?.message]) {
+      if (!target || typeof target.reasoning !== 'string' || !target.reasoning) continue;
+      if (typeof target.reasoning_content === 'string' && target.reasoning_content) continue;
+      target.reasoning_content = target.reasoning;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 export function createAccumulator() {
   const state = {
     id: '',
@@ -74,14 +99,22 @@ export function createAccumulator() {
     // Gateways can report failure inside the stream with a 200 status, so the
     // first error frame is kept to surface instead of an empty completion.
     error: null,
+    // A clean EOF is not a completion: only a finish_reason, an error frame, or
+    // a [DONE] sentinel proves the upstream meant to end the turn. Without this
+    // a connection cut mid-answer reads as a successful, empty reply.
+    done: false,
   };
 
   function applyDelta(delta) {
     if (!delta) return;
     if (typeof delta.content === 'string') state.content += delta.content;
-    if (typeof delta.reasoning_content === 'string') {
-      state.reasoning += delta.reasoning_content;
-    }
+    // The relay mirrors the `reasoning` alias before feeding, but the
+    // accumulator is also used directly on raw frames; read both fields and
+    // prefer the canonical one so a mirrored frame is not counted twice.
+    const reasoning = typeof delta.reasoning_content === 'string'
+      ? delta.reasoning_content
+      : typeof delta.reasoning === 'string' ? delta.reasoning : '';
+    state.reasoning += reasoning;
     if (Array.isArray(delta.tool_calls)) {
       for (const call of delta.tool_calls) {
         const index = call.index ?? state.toolCalls.length;
@@ -113,7 +146,18 @@ export function createAccumulator() {
       const choice = chunk.choices?.[0];
       if (!choice) return;
       applyDelta(choice.delta);
-      if (choice.finish_reason) state.finishReason = choice.finish_reason;
+      if (choice.finish_reason) {
+        state.finishReason = choice.finish_reason;
+        state.done = true;
+      }
+    },
+    markDone() {
+      state.done = true;
+    },
+    // True once the upstream has said, in any wire dialect, that the turn is
+    // over. A truncated relay leaves this false even though the stream ended.
+    isTerminal() {
+      return state.done || state.finishReason !== null || state.error !== null;
     },
     toCompletion(fallbackModel) {
       const message = { role: 'assistant', content: state.content || null };

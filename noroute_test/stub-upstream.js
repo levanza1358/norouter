@@ -78,6 +78,77 @@ function sse(res, model, text, { fail = false } = {}) {
   }, 25);
 }
 
+// Anthropic Messages fixtures. The body checks are deliberately strict: a
+// request that skipped the Anthropic translation still carries `messages` with
+// a system role, `max_tokens` missing, or OpenAI-only fields, and must fail.
+function anthropicReject(res, message) {
+  res.writeHead(400, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message } }));
+}
+
+function anthropicJson(res, model, text, { tool = null, thinking = '' } = {}) {
+  const content = [];
+  if (thinking) content.push({ type: 'thinking', thinking, signature: '' });
+  if (tool) content.push({ type: 'tool_use', id: 'toolu_stub', name: tool.name, input: tool.input });
+  else content.push({ type: 'text', text });
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({
+    id: `msg_stub_${Date.now()}`,
+    type: 'message',
+    role: 'assistant',
+    model,
+    content,
+    stop_reason: tool ? 'tool_use' : 'end_turn',
+    stop_sequence: null,
+    usage: { input_tokens: 9, output_tokens: 5 },
+  }));
+}
+
+function anthropicSse(res, model, text, { tool = null, thinking = '', truncate = false } = {}) {
+  res.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+  });
+  const send = (type, payload) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`);
+  const id = `msg_stub_${Date.now()}`;
+  send('message_start', {
+    message: { id, type: 'message', role: 'assistant', model, content: [], stop_reason: null, usage: { input_tokens: 9, output_tokens: 0 } },
+  });
+
+  let index = 0;
+  if (thinking) {
+    send('content_block_start', { index, content_block: { type: 'thinking', thinking: '' } });
+    for (const part of thinking.split(' ')) send('content_block_delta', { index, delta: { type: 'thinking_delta', thinking: `${part} ` } });
+    send('content_block_stop', { index });
+    index += 1;
+  }
+  if (tool) {
+    const json = JSON.stringify(tool.input);
+    const split = Math.ceil(json.length / 2);
+    send('content_block_start', { index, content_block: { type: 'tool_use', id: 'toolu_stub', name: tool.name, input: {} } });
+    send('content_block_delta', { index, delta: { type: 'input_json_delta', partial_json: json.slice(0, split) } });
+    send('content_block_delta', { index, delta: { type: 'input_json_delta', partial_json: json.slice(split) } });
+    send('content_block_stop', { index });
+  } else {
+    send('content_block_start', { index, content_block: { type: 'text', text: '' } });
+    for (const word of text.split(' ')) send('content_block_delta', { index, delta: { type: 'text_delta', text: `${word} ` } });
+    send('content_block_stop', { index });
+  }
+  // A connection cut before message_delta/message_stop: the client must see an
+  // error frame, never a finished message assembled from a partial answer.
+  if (truncate) return res.end();
+  send('message_delta', { delta: { stop_reason: tool ? 'tool_use' : 'end_turn' }, usage: { output_tokens: 7 } });
+  send('message_stop', {});
+  res.end();
+}
+
+function anthropicFixture(model) {
+  if (model === 'anthropic-tool') return { tool: { name: 'get_weather', input: { city: 'Jakarta', unit: 'celsius' } } };
+  if (model === 'anthropic-thinking') return { thinking: 'Let me think about it.' };
+  return null;
+}
+
 // Codex Responses stream fixture. Accepts `{input}` and rejects a Chat
 // Completions `{messages}` body, so a wrongly translated probe fails loudly
 // instead of silently returning nothing.
@@ -105,6 +176,10 @@ let issued = 0;
 // combo actually reached.
 export const calls = [];
 export const chatBodies = [];
+export const responsesBodies = [];
+export const anthropicBodies = [];
+export const antigravityBodies = [];
+export const antigravityQuotaCalls = [];
 export const quotaCalls = [];
 
 // Every request that reached the Responses route with the wrong body shape, so
@@ -186,12 +261,15 @@ const handler = async (req, res) => {
     return res.end(JSON.stringify(quotaPayload(token)));
   }
 
-  if (!/^Bearer \S+/.test(req.headers.authorization || '')) {
+  // Anthropic clients authenticate with x-api-key instead of a bearer token.
+  const bearer = /^Bearer \S+/.test(req.headers.authorization || '');
+  const apiKey = typeof req.headers['x-api-key'] === 'string' && req.headers['x-api-key'].trim();
+  if (!bearer && !apiKey) {
     res.writeHead(401, { 'content-type': 'application/json' });
     return res.end(JSON.stringify({ error: { message: 'stub: bad credential' } }));
   }
 
-  const token = req.headers.authorization.slice(7).trim();
+  const token = bearer ? req.headers.authorization.slice(7).trim() : String(req.headers['x-api-key']).trim();
 
   // ---- embeddings (CodeBuddy /v2/embeddings) ----
   if (req.url.endsWith('/embeddings')) {
@@ -242,6 +320,141 @@ const handler = async (req, res) => {
     return res.end(JSON.stringify({ error: { message: 'stub: rate limited' } }));
   }
 
+  // ---- Antigravity Cloud Code quota routes (Bearer required) ----
+  // The summary is the primary source; the model list only serves paid tiers
+  // whose summary carries no shared pools.
+  if (req.url.startsWith('/v1internal:loadCodeAssist')) {
+    antigravityQuotaCalls.push({ path: 'loadCodeAssist', token, body });
+    if (token === 'ag-quota-forbidden-token') {
+      res.writeHead(403, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ error: { message: 'stub: quota access forbidden' } }));
+    }
+    // Antigravity always reports `currentTier: free-tier`; the paid Google One
+    // plan is what `paidTier` carries. A really free account gets the starter
+    // quota in both fields.
+    const paidTier = token === 'ag-paid-quota-token'
+      ? { id: 'g1-pro-tier', name: 'Google AI Pro' }
+      : token === 'ag-plus-quota-token'
+        ? { id: 'g1-plus-tier', name: 'Google AI Plus' }
+        : token === 'ag-ultra-quota-token'
+          ? { id: 'g1-ultra-tier', name: 'Google AI Ultra' }
+          : { id: 'free-tier', name: 'Antigravity Starter Quota' };
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({
+      cloudaicompanionProject: 'stub-project',
+      currentTier: { id: 'free-tier', name: 'Antigravity' },
+      paidTier,
+      allowedTiers: [{ id: 'free-tier' }, { id: 'standard-tier' }],
+    }));
+  }
+
+  if (req.url.startsWith('/v1internal:retrieveUserQuotaSummary')) {
+    antigravityQuotaCalls.push({ path: 'quotaSummary', token, body });
+    if (token === 'ag-quota-forbidden-token') {
+      res.writeHead(403, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ error: { message: 'stub: quota access forbidden' } }));
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    if (token === 'ag-paid-quota-token' || token === 'ag-quota-blank-token') {
+      return res.end(JSON.stringify({ groups: [] }));
+    }
+    return res.end(JSON.stringify({
+      groups: [
+        {
+          displayName: 'Gemini Models',
+          buckets: [{
+            bucketId: 'gemini-weekly',
+            displayName: 'Weekly Limit Remaining',
+            window: 'weekly',
+            resetTime: '2026-11-15T16:06:23Z',
+            remainingFraction: 0.4,
+          }],
+        },
+        {
+          displayName: 'Claude and GPT models',
+          buckets: [
+            {
+              bucketId: '3p-weekly',
+              displayName: 'Weekly Limit Remaining',
+              window: 'weekly',
+              resetTime: '2026-11-16T00:57:45Z',
+              remainingFraction: 0,
+            },
+            {
+              bucketId: '3p-session',
+              displayName: 'Five hour limit remaining',
+              window: '5h',
+              resetTime: '2026-11-12T20:00:00Z',
+              remainingFraction: 0.9,
+              disabled: true,
+            },
+          ],
+        },
+      ],
+    }));
+  }
+
+  if (req.url.startsWith('/v1internal:fetchAvailableModels')) {
+    antigravityQuotaCalls.push({ path: 'availableModels', token, body });
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({
+      models: {
+        'gemini-3.8-flash-high': { displayName: 'Gemini 3.8 Flash (High)', quotaInfo: { remainingFraction: 0.2, resetTime: '2026-11-15T16:06:23Z' } },
+        'claude-sonnet-4-6': { displayName: 'Claude Sonnet 4.6 (Thinking)', quotaInfo: { remainingFraction: 0.75, resetTime: '2026-11-16T00:57:45Z' } },
+        'internal-model': { isInternal: true, quotaInfo: { remainingFraction: 1 } },
+      },
+    }));
+  }
+
+  // Antigravity Cloud Code route. The gateway expects the v1internal envelope,
+  // so a request that skipped lib/antigravity-format.js has no `contents` and
+  // is rejected instead of silently answered.
+  if (req.url.startsWith('/v1internal:')) {
+    const envelopeOk = typeof body.project === 'string' && body.project
+      && typeof body.model === 'string' && body.model
+      && body.userAgent === 'antigravity'
+      && typeof body.requestId === 'string' && body.requestId.startsWith('agent/')
+      && body.request && Array.isArray(body.request.contents) && body.request.contents.length
+      && !('requestType' in body.request)
+      && !('safetySettings' in body.request)
+      && !('stream_options' in body.request);
+    if (!envelopeOk) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ error: { code: 400, status: 'INVALID_ARGUMENT', message: 'stub: invalid Antigravity envelope' } }));
+    }
+    calls.push(body.model);
+    antigravityBodies.push(structuredClone(body));
+    const usageMetadata = { promptTokenCount: 11, candidatesTokenCount: 7, totalTokenCount: 18 };
+    const text = `I am the ${body.model} Antigravity model.`;
+    if (req.url.includes(':streamGenerateContent')) {
+      res.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+      });
+      const send = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+      if (body.model === 'gemini-3.5-flash-lite') {
+        // A candidate without finishReason followed by EOF must surface as an
+        // error, not as a completed Antigravity answer.
+        send({ response: { responseId: 'ag-stub-cut', modelVersion: body.model, candidates: [{ content: { parts: [{ text: 'half an ans' }] } }] } });
+        return res.end();
+      }
+      send({ response: { responseId: 'ag-stub-stream', modelVersion: body.model, candidates: [{ content: { parts: [{ text: 'I am the ' }] } }] } });
+      send({ response: { responseId: 'ag-stub-stream', modelVersion: body.model, candidates: [{ content: { parts: [{ text: `${body.model} Antigravity model.` }] }, finishReason: 'STOP' }], usageMetadata } });
+      res.write('data: [DONE]\n\n');
+      return res.end();
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({
+      response: {
+        responseId: 'ag-stub-response',
+        modelVersion: body.model,
+        candidates: [{ content: { parts: [{ text }] }, finishReason: 'STOP' }],
+        usageMetadata,
+      },
+    }));
+  }
+
   // Codex catalog endpoint fixture; uses a different response envelope.
   if (req.url.startsWith('/v2/codex/models')) {
     if (!new URL(req.url, 'http://stub').searchParams.get('client_version')) {
@@ -280,6 +493,7 @@ const handler = async (req, res) => {
       res.writeHead(400, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ error: { message: "stub: Responses body requires input and store=false", type: 'invalid_request_error' } }));
     }
+    responsesBodies.push(structuredClone(body));
     // A 400 whose body carries no OpenAI-shaped message, so the tester can be
     // proven to surface the raw upstream text instead of a generic fallback.
     if (body.model === 'gpt-weird-error') {
@@ -287,6 +501,99 @@ const handler = async (req, res) => {
       return res.end(JSON.stringify({ detail: [{ type: 'missing', loc: ['body', 'store'], msg: 'Field required' }] }));
     }
     return responsesSse(res, body.model, `I am the ${body.model} Codex model.`);
+  }
+
+  // Generic Anthropic Messages route for custom providers.
+  if (req.url.endsWith('/messages')) {
+    calls.push(body.model);
+    const blocksOk = Array.isArray(body.messages) && body.messages.length > 0
+      && body.messages.every((message) => ['user', 'assistant'].includes(message.role) && Array.isArray(message.content));
+    const toolsOk = body.tools === undefined
+      || (Array.isArray(body.tools) && body.tools.every((tool) => tool.name && tool.input_schema && typeof tool.input_schema === 'object'));
+    const cleanBody = !('reasoning_effort' in body) && !('stream_options' in body);
+    if (!blocksOk || !toolsOk || !cleanBody || !Number.isInteger(body.max_tokens) || body.max_tokens <= 0
+      || req.headers['anthropic-version'] !== '2023-06-01' || !req.headers['x-api-key']) {
+      return anthropicReject(res, 'stub: invalid Messages request');
+    }
+    anthropicBodies.push(structuredClone(body));
+    const fixture = anthropicFixture(body.model) || {};
+    const text = `I am the ${body.model} model.`;
+    if (body.stream !== true) return anthropicJson(res, body.model, text, fixture);
+    return anthropicSse(res, body.model, text, { ...fixture, truncate: body.model === 'anthropic-truncated' });
+  }
+
+  // Generic OpenAI Responses route for custom providers. Rejects a raw chat
+  // body so a missing translation cannot pass silently.
+  if (req.url.endsWith('/responses')) {
+    calls.push(body.model);
+    if (body.messages || !Array.isArray(body.input) || body.store !== false) {
+      probeShapes.push({ url: req.url, hasMessages: Boolean(body.messages), hasInput: Boolean(body.input) });
+      res.writeHead(400, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ error: { message: 'stub: Responses body requires input and store=false', type: 'invalid_request_error' } }));
+    }
+    responsesBodies.push(structuredClone(body));
+    const text = `I am the ${body.model} Responses model.`;
+    if (body.model === 'responses-truncated') {
+      // Deltas then EOF, with no response.completed: a cut relay, not a finish.
+      res.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+      });
+      res.write(`data: ${JSON.stringify({ type: 'response.output_text.delta', response_id: 'resp_stub', item_id: 'item-0', delta: 'half an ans' })}\n\n`);
+      return res.end();
+    }
+    if (body.model === 'responses-completed-no-newline') {
+      // The terminal frame arrives without its blank line; the relay must close
+      // it itself instead of merging it with the synthetic [DONE].
+      res.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+      });
+      res.write(`data: ${JSON.stringify({ type: 'response.output_text.delta', response_id: 'resp_stub', item_id: 'item-0', delta: text })}\n\n`);
+      res.write(`data: ${JSON.stringify({
+        type: 'response.completed',
+        response: { id: 'resp_stub', model: body.model },
+        usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 },
+      })}`);
+      return res.end();
+    }
+    if (body.model === 'responses-incomplete') {
+      // A deliberate upstream ending (token cap): terminal, but no finish frame.
+      res.writeHead(200, {
+        'content-type': 'text/event-stream; charset=utf-8',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+      });
+      res.write(`data: ${JSON.stringify({ type: 'response.output_text.delta', response_id: 'resp_stub', item_id: 'item-0', delta: text })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'response.incomplete', response: { id: 'resp_stub', model: body.model } })}\n\n`);
+      return res.end();
+    }
+    if (body.model === 'responses-mislabeled') {
+      // SSE body behind a JSON content-type; the router must detect the body
+      // instead of trusting the header.
+      res.writeHead(200, { 'content-type': 'application/json' });
+      const send = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+      send({ type: 'response.output_text.delta', response_id: 'resp_stub', item_id: 'item-0', delta: text });
+      send({
+        type: 'response.completed',
+        response: { id: 'resp_stub', model: body.model },
+        usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 },
+      });
+      return res.end();
+    }
+    if (body.stream !== true) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({
+        id: `resp_stub_${Date.now()}`,
+        object: 'response',
+        model: body.model,
+        output: [{ type: 'message', content: [{ type: 'output_text', text }] }],
+        usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 },
+      }));
+    }
+    return responsesSse(res, body.model, text);
   }
 
   if (!req.url.endsWith('/chat/completions')) {
@@ -350,6 +657,137 @@ const handler = async (req, res) => {
     send({ id, object: 'chat.completion.chunk', choices: [], usage: { prompt_tokens: 5, completion_tokens: 6, total_tokens: 11 } });
     res.write('data: [DONE]\n\n');
     return res.end();
+  }
+
+  // Some gateways stream tool argument fragments before the function name.
+  // Translators must buffer the early bytes instead of dropping them.
+  if (body.model === 'tool-late-name') {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+    });
+    const id = `chatcmpl-stub-late-${Date.now()}`;
+    const send = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    send({ id, object: 'chat.completion.chunk', choices: [{ index: 0, delta: { role: 'assistant', content: '' } }] });
+    send({ id, object: 'chat.completion.chunk', choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_late', type: 'function', function: { arguments: '{"city":' } }] } }] });
+    send({ id, object: 'chat.completion.chunk', choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '"Jakarta"' } }] } }] });
+    send({ id, object: 'chat.completion.chunk', choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { name: 'get_weather' } }] } }] });
+    send({ id, object: 'chat.completion.chunk', choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: ',"unit":"celsius"}' } }] } }] });
+    send({ id, object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] });
+    send({ id, object: 'chat.completion.chunk', choices: [], usage: { prompt_tokens: 7, completion_tokens: 8, total_tokens: 15 } });
+    res.write('data: [DONE]\n\n');
+    return res.end();
+  }
+
+  // Upstage-style upstreams stream chain of thought as `reasoning`, not
+  // `reasoning_content`; the proxy must mirror it for canonical-only clients.
+  if (body.model === 'reasoning-alias') {
+    if (body.stream !== true) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({
+        id: 'chatcmpl-stub-alias',
+        object: 'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model: body.model,
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', reasoning: 'Alias thought.', content: 'Alias answer.' },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+      }));
+    }
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+    });
+    const id = `chatcmpl-stub-alias-${Date.now()}`;
+    const send = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    send({ id, object: 'chat.completion.chunk', choices: [{ index: 0, delta: { role: 'assistant', content: '' } }] });
+    for (const part of ['Alias ', 'thought.']) {
+      send({ id, object: 'chat.completion.chunk', choices: [{ index: 0, delta: { reasoning: part } }] });
+    }
+    send({ id, object: 'chat.completion.chunk', choices: [{ index: 0, delta: { content: 'Alias answer.' } }] });
+    send({ id, object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+    send({ id, object: 'chat.completion.chunk', choices: [], usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 } });
+    res.write('data: [DONE]\n\n');
+    return res.end();
+  }
+
+  // Upstage Solar sometimes leaks its native tool-call tokens into `content`
+  // when its own parser misses the call; the proxy must recover the call.
+  if (body.model === 'native-leak') {
+    const leaked = '<|tool_callstart|>Read <|tool_orgstart|>file_path <|tool_argvalue|>F:\\Project\\app\\main.rs<|tool_argend|> <|tool_callend|>';
+    if (body.stream !== true) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({
+        id: 'chatcmpl-stub-leak',
+        object: 'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model: body.model,
+        choices: [{ index: 0, message: { role: 'assistant', content: leaked }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 3, completion_tokens: 9, total_tokens: 12 },
+      }));
+    }
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+    });
+    const id = `chatcmpl-stub-leak-${Date.now()}`;
+    const send = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    send({ id, object: 'chat.completion.chunk', choices: [{ index: 0, delta: { role: 'assistant', content: '' } }] });
+    for (const part of ['Thinking.\n', '<|tool_call', 'start|>Read <|tool_orgstart|>file_path <|tool_argvalue|>F:\\Pro', 'ject\\app\\main.rs<|tool_argend|> <|tool_callend|>']) {
+      send({ id, object: 'chat.completion.chunk', choices: [{ index: 0, delta: { content: part } }] });
+    }
+    send({ id, object: 'chat.completion.chunk', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+    send({ id, object: 'chat.completion.chunk', choices: [], usage: { prompt_tokens: 3, completion_tokens: 9, total_tokens: 12 } });
+    res.write('data: [DONE]\n\n');
+    return res.end();
+  }
+
+  // A connection cut mid-answer: content deltas, then EOF with no finish_reason
+  // and no [DONE]. The relay must report a truncated stream, not success.
+  if (body.model === 'truncated-openai') {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+    });
+    const id = `chatcmpl-stub-cut-${Date.now()}`;
+    res.write(`data: ${JSON.stringify({
+      id,
+      object: 'chat.completion.chunk',
+      created: Math.floor(Date.now() / 1000),
+      model: body.model,
+      choices: [{ index: 0, delta: { role: 'assistant', content: 'half an ans' } }],
+    })}\n\n`);
+    return res.end();
+  }
+
+  // The upstream finishes with a frame that lacks its trailing blank line and
+  // closes immediately. A valid finish frame must still reach the client.
+  if (body.model === 'truncated-final-frame') {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+    });
+    const id = `chatcmpl-stub-final-${Date.now()}`;
+    const send = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    send({ id, object: 'chat.completion.chunk', choices: [{ index: 0, delta: { role: 'assistant', content: '' } }] });
+    send({ id, object: 'chat.completion.chunk', choices: [{ index: 0, delta: { content: 'complete answer' } }] });
+    res.write(`data: ${JSON.stringify({ id, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}`);
+    return res.end();
+  }
+
+  // HTTP 200 with an error envelope instead of a completion; relaying it as a
+  // success would record a failed turn as a healthy request.
+  if (body.model === 'json-error-body') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ error: { message: 'stub: upstream refused the turn', type: 'server_error' } }));
   }
 
   const answer = body.messages?.[0]?.content === 'Hi, what your model AI ? and your training cut off ?'

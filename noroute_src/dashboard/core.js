@@ -1,23 +1,6 @@
 const $ = (id) => document.getElementById(id);
 
 const REFRESH_MS = 2000;
-let pointerFrame = 0;
-let pointerX = 50;
-let pointerY = 35;
-
-function paintPointerGlow() {
-  pointerFrame = 0;
-  document.documentElement.style.setProperty('--pointer-x', `${pointerX}%`);
-  document.documentElement.style.setProperty('--pointer-y', `${pointerY}%`);
-}
-
-if (window.matchMedia?.('(pointer: fine)').matches && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
-  window.addEventListener('pointermove', (event) => {
-    pointerX = (event.clientX / Math.max(window.innerWidth, 1)) * 100;
-    pointerY = (event.clientY / Math.max(window.innerHeight, 1)) * 100;
-    if (!pointerFrame) pointerFrame = requestAnimationFrame(paintPointerGlow);
-  }, { passive: true });
-}
 
 const THEME_KEY = 'norouter.theme';
 let motionEpoch = 0;
@@ -88,6 +71,7 @@ const REPLY_LANGUAGE_CATALOG = [
 
 const ROUTES = {
   '/': { title: 'Dashboard', sub: 'Monitor gateway health, traffic, and recent activity.', copy: true },
+  '/map': { title: 'Service map', sub: 'Live request path from client to upstream.', copy: false },
   '/providers': { title: 'Providers', sub: 'Every upstream this router can reach.', copy: false },
   '/usage': { title: 'Usage', sub: 'Tokens and requests, broken down per model.', copy: false },
   '/chat': { title: 'Chat', sub: 'Talk to your local model gateway.', copy: false },

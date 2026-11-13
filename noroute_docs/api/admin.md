@@ -12,7 +12,7 @@ Dashboard password, when enabled, gates dashboard HTML pages only. `/api/*`, ass
 |---|---|---|
 | GET | `/api/keys` | List key metadata including plaintext managed tokens for Show/Hide/Copy |
 | POST | `/api/keys` | Create key; response includes plaintext `secret` |
-| PATCH | `/api/keys/:id` | Update name, enabled, expiry, request/token limits |
+| PATCH | `/api/keys/:id` | Update name, enabled, expiry, request/token limits, default model |
 | DELETE | `/api/keys/:id` | Revoke a managed key and its usage history |
 | GET | `/api/keys/:id/usage?days=30` | Daily request/token history |
 | POST | `/api/keys/:id/rotate` | Replace the token; raw replacement `secret` returns once |
@@ -26,7 +26,7 @@ Token Saver defaults to `{ ponytail: { enabled: false }, rtk: { enabled: false }
 - **Caveman** injects a terse-output instruction; it stacks with Ponytail.
 - **Headroom** is intentionally not included: it requires an external proxy (`pip install`).
 
-Managed keys are stored as plaintext in SQLite so the dashboard can show, hide, copy, and edit them. Create accepts `name`, optional custom `secret`, optional future `expiresAt`, `requestLimit`, and `tokenLimit`; token limits accept integer counts or compact suffixes `K`, `M`, `B`, and `T` (for example `1M` = 1,000,000 tokens); the dashboard exposes these as a unit dropdown; `None` disables token-limit input, and request limits use a separate enable toggle. Omitted limits are unlimited. Request limits count admitted chat requests; token limits count reported prompt plus completion tokens. The dashboard page may require its optional page password, but `/api` routes remain unauthenticated; protect the all-interface bind with a firewall/reverse proxy or set `HOST=127.0.0.1`, and treat its database, WAL/SHM, and backups as secret material.
+Managed keys are stored as plaintext in SQLite so the dashboard can show, hide, copy, and edit them. Create accepts `name`, optional custom `secret`, optional future `expiresAt`, `requestLimit`, `tokenLimit`, and `defaultModel`; token limits accept integer counts or compact suffixes `K`, `M`, `B`, and `T` (for example `1M` = 1,000,000 tokens); the dashboard exposes these as a unit dropdown; `None` disables token-limit input, and request limits use a separate enable toggle. `defaultModel` may name a model or a combo; it is stored canonically and only fills a request that sends no `model` while the key authenticates the call (see [`openai.md`](openai.md#aliases-routing-rules-and-per-key-defaults)). Omitted limits are unlimited. Request limits count admitted chat requests; token limits count reported prompt plus completion tokens. The dashboard page may require its optional page password, but `/api` routes remain unauthenticated; protect the all-interface bind with a firewall/reverse proxy or set `HOST=127.0.0.1`, and treat its database, WAL/SHM, and backups as secret material.
 
 ## Autostart
 
@@ -53,9 +53,9 @@ The default port is `5555`. The browser reconnects to the new port after a succe
 | GET | `/api/settings/accounts/export` | Download the account pool as a `.json` attachment (raw tokens). |
 | POST | `/api/settings/accounts/restore` | Merge a backup into the pool; skips duplicates, never deletes. |
 
-The export is an operator backup file — it contains **plaintext** `access_token`, `refresh_token`, and `uid` values on purpose, because it is the credential source for a restore. Treat the downloaded file like the database itself: store it off the server, keep it secret, and delete copies you no longer need. It never contains dashboard passwords, managed API-key secrets, or `.env` values.
+The export is an operator backup file — it contains **plaintext** `access_token`, `refresh_token`, `uid`, and `plan` values on purpose, because it is the credential source for a restore. Treat the downloaded file like the database itself: store it off the server, keep it secret, and delete copies you no longer need. It never contains dashboard passwords, managed API-key secrets, or `.env` values.
 
-Restore accepts either a bare account array or an `{ "accounts": [...] }` wrapper, at most 5,000 rows. It merges by provider and fingerprint: existing accounts are untouched, duplicates are skipped, and unknown provider IDs are counted without being written. The response is `{ added, duplicates, invalid, unknownProviders, total }`. Accounts with `expires_at` in the past are imported without an expiry rather than forced into cooldown.
+Restore accepts either a bare account array or an `{ "accounts": [...] }` wrapper, at most 5,000 rows. It merges by provider identity (`uid`) first and fingerprint second: existing accounts are untouched, a restored row whose identity is already pooled is skipped even when its token was rotated, and unknown provider IDs are counted without being written. The response is `{ added, duplicates, invalid, unknownProviders, total }`. Accounts with `expires_at` in the past are imported without an expiry rather than forced into cooldown.
 
 ## Request log
 
@@ -73,13 +73,62 @@ The log is an in-memory ring buffer: it survives no restart and never touches SQ
 | GET | `/api/webhook` | Read `{ enabled, url, events }`. |
 | PATCH | `/api/webhook` | `{ "enabled": true, "url": "https://example.com/hook" }`; validates the URL is http(s). |
 
-When enabled, norouter POSTs a JSON notification to `url` on three events — `request` (a completed chat), `error` (a recorded error), and `cooldown` (an account parked). Payloads are metadata only: provider, model, account label, status, latency, and token counts — never credentials or message bodies. Delivery is fire-and-forget with a 5s timeout; failures are swallowed so a notification can never slow or break the request it describes.
+When enabled, norouter POSTs a JSON notification to `url` on three events — `request` (a completed chat), `error` (a recorded error), and `cooldown` (an account parked). A fourth event, `budget`, fires once per scope per local day when a daily limit is crossed. Payloads are metadata only: provider, model, account label, status, latency, and token counts — never credentials or message bodies. Delivery is fire-and-forget with a 5s timeout; failures are swallowed so a notification can never slow or break the request it describes.
+
+## Budgets
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/budgets` | Today's counters plus every key/provider limit |
+| PATCH | `/api/budgets` | Update `enabled`, `keys`, `providers`; returns the same payload |
+
+The payload is `{ enabled, day, keys, providers }`. `day` is the local calendar day (`YYYY-MM-DD`) the counters belong to, so a budget resets at the server machine's midnight. Each row carries `limit` (`{ tokens, cost }` or `null`), today's `used` counters, and `percent` / `costPercent` when that dimension has a limit. `cost` is an estimate in USD from the same price table as the Usage page; a model without a price still counts tokens but contributes zero cost. No key secret or account credential is included.
+
+PATCH accepts `{ enabled?, keys?, providers? }`:
+
+- `keys` and `providers` are objects keyed by key ID / provider ID.
+- A scope object **replaces** that scope's whole limit: `{ "tokens": 200000 }` alone drops a previously configured cost cap.
+- `null` deletes the scope; omitting a scope keeps it.
+- A limit needs at least one of `tokens` (positive integer) or `cost` (positive finite USD); anything else returns 400.
+
+Enforcement: a managed API key that has reached its limit is refused at `POST /v1/chat/completions` with 429 before any upstream call — `{ "error": { "message", "type": "budget_error", "code": "budget_exhausted", "scope", "day", "reasons", "limit", "used" } }`. A capped provider is not a client error: failover chains skip it and continue with the next target, so a request only fails when no other target can serve it. Counters are written for completed requests with usage, and only for scopes that had a limit at request time. Limits are edited on Settings → Daily budgets; see [`../dashboard.md`](../dashboard.md#daily-budgets).
+
+## Maintenance
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/maintenance` | Scheduler settings, running state, per-task state |
+| PATCH | `/api/maintenance` | `{ enabled?, intervalMinutes? }`; interval is an integer 5–1440 |
+| POST | `/api/maintenance/run` | `{ "tasks": ["tokens", "quota", "catalog"] }`; body may be empty or omit `tasks` to run only due tasks |
+
+The snapshot is `{ settings: { enabled, intervalMinutes }, running, lastTickAt, tasks }`. Each task carries `id`, `label`, `everyMinutes`, `lastRunAt`, `lastResult` (`{ ok, summary, ms }` or `null`), `nextDueAt`, and `due`. Tasks are token refresh (10 minutes), quota refresh (6 hours), and model catalog (12 hours). `POST /api/maintenance/run` works even while the scheduler is disabled and returns `{ results, snapshot }`; an unknown task ID returns 400. The timer only runs while the server process is up, and the first automatic tick happens after one full interval, so a restart never triggers upstream traffic immediately.
 
 ## Status/provider
 
 | Method | Path | Notes |
 |---|---|---|
 | GET | `/api/status` | In-memory status snapshot, last 40 history rows and last 60 events |
+
+## Live request stream
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/live` | Server-sent events for the `/map` service map: request lifecycle deltas, never bodies |
+
+The stream opens with `retry: 3000`, then a `hello` frame that lists in-flight requests as `{ provider, model, ms }`, then one frame per lifecycle phase:
+
+```json
+{"phase":"hello","now":1730000000000,"active":[{"provider":"cbcn","model":"glm-5.3","ms":812}]}
+{"phase":"start","id":"r-42","at":1730000000100,"kind":"chat","model":"cbcn/glm-5.3","stream":true,"tools":false}
+{"phase":"route","id":"r-42","at":1730000000120,"provider":"cbcn","model":"glm-5.3","attempt":1}
+{"phase":"first","id":"r-42","at":1730000000450,"provider":"cbcn","model":"glm-5.3","status":200}
+{"phase":"finish","id":"r-42","at":1730000001200,"provider":"cbcn","model":"glm-5.3","status":200,"ms":1100,"tokensIn":12,"tokensOut":48,"tool":false,"stream":true,"kind":"chat"}
+{"phase":"error","id":"r-43","at":1730000000000,"provider":"cbcn","model":"…","status":429,"stage":"upstream"}
+```
+
+`kind` is `chat`, `image`, or `embed`; `error.stage` is `model`, `credential`, `upstream`, or `client`. Frames deliberately carry no account label, credential, header, prompt or response text, or upstream error message. A `: ping` comment is written every 25 seconds so proxies keep the connection open. Publishing is a no-op while no client is subscribed, and the active-request snapshot is allowlisted to provider, model, and elapsed milliseconds before it leaves the process.
+
+Like every `/api` route, `/api/live` is unauthenticated and the default bind is `0.0.0.0`; keep it local or put auth and TLS in front.
 
 ## Combos
 
@@ -90,15 +139,18 @@ When enabled, norouter POSTs a JSON notification to `url` on three events — `r
 | GET | `/api/combos/:id` | One combo |
 | PATCH | `/api/combos/:id` | Update `name` and/or `models`; omitted fields are kept |
 | DELETE | `/api/combos/:id` | Delete; returns 200 |
+| GET | `/api/vision-routing` | Vision rule plus the enabled-model catalog |
+| PATCH | `/api/vision-routing` | Update `enabled`, `strategy`, `models`; omitted fields are kept |
 
 Validation is enforced at the HTTP boundary:
 
 - `name` is required, at most 60 characters, must start with a letter or digit, may use letters, digits, `.`, `_` and `-`, and may **not** contain `/` (that form belongs to `provider/model`). Names are unique — a duplicate returns 409.
 - `models` must be a non-empty array of non-empty strings. Every entry must resolve through the normal model resolver, so a combo can never be saved pointing at a model the router would reject. The array order is the fallback priority and is stored verbatim.
+- Vision `models` follow the same resolver rule (at most 20 entries, stored canonically as `prefix/model`, duplicates rejected), and `strategy` is `order` or `round-robin`. Enabling with an empty list returns 400; partial PATCHes keep whatever they omit.
 
 Errors use the shared `{ error: { message, type } }` shape: 400 for validation, 404 for an unknown id, 409 for a duplicate name.
 
-Combo routing behavior (fallback statuses, streaming safety, attribution) is documented in [`openai.md`](openai.md#combos).
+Combo routing behavior (fallback statuses, streaming safety, attribution) is documented in [`openai.md`](openai.md#combos). Vision routing is covered in [`openai.md`](openai.md#vision-routing) and [`dashboard.md`](../dashboard.md#vision-routing).
 | GET | `/api/usage?range=day\|week\|month\|all` | Persistent usage report from SQLite |
 
 The usage report returns a `cost` field on `totals` and on each model row, an estimate in USD computed from per-model list prices. Models without a price (combos and custom models) report `null`, and the dashboard shows `—` rather than inventing a number. Cost is a comparison/savings figure only — norouter never bills anyone; you pay providers directly.
@@ -134,6 +186,26 @@ Any other value returns 400. Cooling, disabled, and errored accounts are skipped
 ```
 
 IDs and aliases are lowercase letters, digits, and dashes (max 40); model IDs permit letters, digits, `.`, `_`, `:`, `/`, `+`, `-` (max 120). URLs must be credential-free `http`/`https` URLs. Static headers are limited to 30 safe header names and values; `Authorization`, cookies, API keys, tokens, secrets, and related credential headers are rejected. Store credentials only in the account pool. Changing an ID atomically moves account and custom-model rows, then reindexes the live registry; old IDs/aliases stop resolving.
+
+## Routing rules
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/routing-rules` | Read `{ routing, catalog, combos, keys }` |
+| PATCH | `/api/routing-rules` | Update `{ aliases, rules }`; omitted fields are kept |
+
+`routing` is `{ "aliases": { "<name>": "<model-or-combo>" }, "rules": [...] }`. `catalog` is the same enabled-model list the combo page uses, `combos` is the combo names, and `keys` is `{ id, name }` only — managed secrets are never returned here.
+
+A rule is `{ id, name, enabled, match, models }`. `match` must hold at least one of:
+
+- `header`: `{ "name": "x-route-tier", "value": "premium" }` — case-insensitive substring match on the request header.
+- `apiKeyId`: a managed key id; matches only requests authenticated by that key while `REQUIRE_API_KEY` is on.
+- `minContextTokens`: estimated `characters/4` plus 1,000 tokens per image.
+- `hasTools`: whether the request carries at least one tool.
+
+Rules are stored in order and the first enabled match wins; matching conditions are ANDed. Validation rejects an empty `match`, an unknown condition or rule field, an unknown API key id, duplicate models within a rule, duplicate rule names (case-insensitively), and any target that does not resolve. An enabled rule needs at least one model; a disabled draft may keep an empty list. Aliases (at most 50) may target a model or an existing combo but not another alias, rules (at most 20, 20 models each) may only target models, and neither may shadow a real model or combo name. Saving stores both lists canonically and assigns ids to new rules; omitted fields keep their current value.
+
+Request precedence and the routing trace are documented in [`openai.md`](openai.md#aliases-routing-rules-and-per-key-defaults).
 
 ## Models
 
@@ -200,7 +272,7 @@ Import accepts an object, array, or wrapper:
 ] }
 ```
 
-Supported aliases include `accessToken/access_token`, `refreshToken/refresh_token`, `apiKey/api_key`. Max 5,000 rows; request body max 8 MiB. Bulk import uses one transaction. Duplicate response is 409 for single duplicate and counts duplicate rows for bulk.
+Supported aliases include `accessToken/access_token`, `refreshToken/refresh_token`, `apiKey/api_key`. `uid` and `plan` are accepted on any entry; `plan` is normalized to `free`, `plus`, `pro`, `ultra`, `team`, `business`, `enterprise`, or `unknown` (an unrecognized value becomes `unknown`). Max 5,000 rows; request body max 8 MiB. Bulk import uses one transaction. Duplicate response is 409 for a single duplicate and counts duplicate rows for bulk. An entry is a duplicate when its token fingerprint is already stored, or when its `(provider, uid)` identity already exists: OAuth re-login rotates the token but not the identity. Two entries carrying the same identity in one paste collapse to one row.
 
 Daily check-in returns `{ "checkin": { "status": "checked-in"|"already"|"inactive", "message": "..." }, "account": { ... } }`. API-key accounts are rejected locally; refresh-token accounts refresh first. It does not increment proxy request or token counters. Account objects remain masked.
 
@@ -231,9 +303,26 @@ Preview response:
 
 Statuses: `new`, `duplicate`, `duplicate_input`, `invalid`. Preview does not write SQLite. Display rows are capped at 200; aggregate counts cover all input. Raw secrets and fingerprints are never returned.
 
+## Provider OAuth
+
+Browser login is provider-specific and only exists for the shipped providers that declare an OAuth block. States are short-lived and process-memory-only.
+
+| Method | Path | Notes |
+|---|---|---|
+| POST | `/api/providers/codex/oauth/start` | returns `{ authorizeUrl, state }`; opens the PKCE callback server on port 1455 |
+| GET | `/api/providers/codex/oauth/status/:state` | `{ status: "unknown"\|"pending"\|"complete"\|"error" }` |
+| POST | `/api/providers/codex/oauth/cancel/:state` | `{ cancelled: true }` |
+| POST | `/api/providers/antigravity/oauth/start` | returns `{ authorizeUrl, state }`; opens the fixed callback on port 1456 |
+| GET | `/api/providers/antigravity/oauth/status/:state` | `{ status: "unknown"\|"pending"\|"complete"\|"error" }` |
+| POST | `/api/providers/antigravity/oauth/cancel/:state` | `{ cancelled: true }` |
+
+Antigravity start fails closed with 409 when `ANTIGRAVITY_CLIENT_ID` or `ANTIGRAVITY_CLIENT_SECRET` is missing, or when port 1456 is in use; it never embeds a client secret. A completed login creates an account bound to the Cloud Code `project_id`, and the dashboard polls `status` until `complete`. Neither flow returns tokens in the status response.
+
+Both OAuth callbacks reuse the row for an identity that is already pooled instead of adding a second account: Codex reads `chatgpt_account_id` from the login JWT, Antigravity reads the Google email, and the callback refreshes that row's tokens, plan, and project binding in place.
+
 ## Account response safety
 
-Public account objects expose IDs, label, kind, uid, masked value, token-presence booleans, state, expiry/cooldown, counters, and timestamps. They do not expose access token, refresh token, API key, or fingerprint.
+Public account objects expose IDs, label, kind, uid, masked value, token-presence booleans, state, expiry/cooldown, counters, the normalized `plan` tier, and timestamps. They do not expose access token, refresh token, API key, or fingerprint.
 
 ## Status codes
 
@@ -243,7 +332,7 @@ Public account objects expose IDs, label, kind, uid, masked value, token-presenc
 - `401`: provider credential rejected or missing `/v1` auth.
 - `404`: unknown provider/account/model.
 - `409`: duplicate single account or custom provider/model conflict.
-- `429`: no usable pooled account or upstream rate limit after attempts.
+- `429`: no usable pooled account, upstream rate limit after attempts, or an exhausted per-key daily budget (`type: "budget_error"`).
 - `502`: upstream/provider failure.
 
 ## Scope warning

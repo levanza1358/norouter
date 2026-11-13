@@ -10,3 +10,7 @@ nul
 
 # Environment
 .env
+
+# Local agent state and scratch browser profiles
+.zcode/plans/
+.taste-skill/

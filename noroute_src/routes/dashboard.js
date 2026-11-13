@@ -5,6 +5,7 @@ import { ROOT } from '../config.js';
 
 const DIR = join(ROOT, 'noroute_src', 'dashboard');
 const FLAGS_DIR = join(DIR, 'flags');
+const FONTS_DIR = join(DIR, 'fonts');
 
 // Files are small and read per request so editing the design needs no restart.
 const ASSETS = {
@@ -52,6 +53,25 @@ export function handleAsset(pathname, req, res) {
     res.writeHead(200, {
       'content-type': SCRIPT_TYPE,
       'cache-control': 'no-store',
+      'content-length': body.length,
+    });
+    res.end(body);
+    return true;
+  }
+
+  const fontMatch = /^\/assets\/fonts\/([a-z0-9-]+\.woff2)$/.exec(pathname);
+  if (fontMatch) {
+    let body;
+    try {
+      body = readFileSync(join(FONTS_DIR, basename(fontMatch[1])));
+    } catch {
+      return false;
+    }
+    res.writeHead(200, {
+      'content-type': 'font/woff2',
+      // The bundle ships with the app, and the file name does not change when
+      // the font is updated, so revalidate rather than cache for a year.
+      'cache-control': 'no-cache',
       'content-length': body.length,
     });
     res.end(body);

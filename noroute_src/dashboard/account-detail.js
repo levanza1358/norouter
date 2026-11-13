@@ -54,8 +54,12 @@ function paintDetailMeta() {
     return;
   }
   const provider = detail.provider || {};
+  // The page title already carries the name; repeat the prefix only when it
+  // actually differs (cbcn vs CodeBuddy CN), not for name-equals-prefix vendors.
+  const prefix = provider.prefix || provider.id || '';
+  const showPrefix = prefix.toLowerCase() !== String(provider.name || '').toLowerCase();
   const meta = [
-    provider.prefix || provider.id,
+    showPrefix ? prefix : '',
     provider.format ? `${provider.format} compatible` : '',
     `${provider.models || 0} models`,
     `${detail.pool?.total || 0} accounts`,
@@ -95,24 +99,12 @@ function renderDetailPage() {
       : null;
   }
 
-  const menu = $('poolMenu');
-  const item = $('poolItemCheckin');
-  if (menu) {
-    const items = detail?.pool?.items || [];
-    const checkin = Boolean(detail.provider.config?.checkin || process.env.CODEBUDDY_CN_CHECKIN_URL?.trim());
-    menu.hidden = items.length === 0;
-    if (item) item.hidden = !checkin;
-  }
+  // The check-in endpoint may come from the server env, which the browser cannot
+  // read; the snapshot tells us whether the action exists at all.
+  const checkin = $('poolItemCheckin');
+  if (checkin) checkin.hidden = !detail.provider.checkinSupported;
   renderDetailAccounts();
   renderDetailModels();
-  if (detail?.pool) {
-    const items = detail.pool.items || [];
-    const checkin = Boolean(detail.provider.config?.checkin || process.env.CODEBUDDY_CN_CHECKIN_URL?.trim());
-    const menu = $('poolMenu');
-    const item = $('poolItemCheckin');
-    if (menu) menu.hidden = items.length === 0;
-    if (item) item.hidden = !checkin;
-  }
   setDetailTab(detailTab, { silent: true });
 }
 
@@ -174,18 +166,54 @@ let accountPreviewPayload = null;
 let accountPreviewEntries = null;
 const modelTests = new Map();
 let modelTestBusy = false;
-let codexOAuthTimer = null;
+let oauthTimer = null;
+
+// Copy for the OAuth-or-token chooser. Providers without an entry fall back to
+// their display name.
+const oauthCopy = {
+  codex: {
+    title: 'Login with ChatGPT',
+    hint: 'OAuth with PKCE. Recommended for Codex.',
+    tokenTitle: 'API key',
+    tokenHint: 'Use the official OpenAI API endpoint, separate from Codex OAuth.',
+    subtitle: 'Choose ChatGPT OAuth or the separate OpenAI API key route.',
+    done: 'Codex login complete. Refreshing accounts…',
+  },
+  antigravity: {
+    title: 'Login with Google',
+    hint: 'Offline Google OAuth. Finish in the tab that opens on port 1456.',
+    tokenTitle: 'Paste a token',
+    tokenHint: 'Import an existing Google access token instead of logging in.',
+    subtitle: 'Choose Google OAuth or import an existing token.',
+    done: 'Antigravity login complete. Refreshing accounts…',
+    risk: 'Antigravity\'s Cloud Code gateway is undocumented and flagged deprecated upstream (RISK_NOTICE). Google can change or block it without notice.',
+  },
+};
+
+function oauthCopyFor(provider) {
+  const copy = oauthCopy[provider?.id];
+  if (copy) return copy;
+  const name = provider?.name || 'the provider';
+  return {
+    title: `Log in with ${name}`,
+    hint: 'OAuth in your browser.',
+    tokenTitle: 'Paste a token',
+    tokenHint: 'Import an existing token instead of logging in.',
+    subtitle: `Choose ${name} OAuth or paste a token.`,
+    done: `${name} login complete. Refreshing accounts…`,
+  };
+}
 
 function detailApi(path, options) {
   return fetch(`/api/providers/${encodeURIComponent(currentDetailId)}${path}`, options);
 }
 
-function setAccountModal(open, mode = accountModalMode) {
+function setAccountModal(open, mode = null) {
   const modal = $('accountModal');
   if (!modal) return;
   if (!open) {
-    clearInterval(codexOAuthTimer);
-    codexOAuthTimer = null;
+    clearInterval(oauthTimer);
+    oauthTimer = null;
     modal.hidden = true;
     document.body.classList.remove('modal-open');
     accountModalMode = null;
@@ -199,13 +227,15 @@ function setAccountModal(open, mode = accountModalMode) {
     return;
   }
 
-  const nextMode = mode === 'bulk' ? 'bulk' : detail?.provider?.oauth ? 'codex-choice' : 'add';
+  const hasOAuth = Boolean(detail?.provider?.oauth);
+  const nextMode = mode === 'bulk' ? 'bulk' : mode === 'form' ? 'form' : hasOAuth ? 'oauth' : 'form';
   if (!accountModalMode) accountModalOpener = document.activeElement;
   accountModalMode = nextMode;
   modal.hidden = false;
   document.body.classList.add('modal-open');
+  const viewId = nextMode === 'bulk' ? 'bulkPanel' : nextMode === 'oauth' ? 'oauthAccountChoice' : 'addAccountPanel';
   document.querySelectorAll('.account-modal-view').forEach((view) => {
-    view.hidden = view.id !== (nextMode === 'bulk' ? 'bulkPanel' : nextMode === 'codex-choice' ? 'codexAccountChoice' : 'addAccountPanel');
+    view.hidden = view.id !== viewId;
   });
   accountPreviewPayload = null;
   accountPreviewEntries = null;
@@ -213,16 +243,36 @@ function setAccountModal(open, mode = accountModalMode) {
   $('bulkEditView')?.removeAttribute('hidden');
   const title = $('accountModalTitle');
   const subtitle = $('accountModalSubtitle');
+  const prefix = detail?.provider?.prefix || detail?.provider?.id || 'account';
   if (title) title.textContent = nextMode === 'bulk' ? 'Bulk add accounts' : 'Add account';
   if (subtitle) subtitle.textContent = nextMode === 'bulk'
-    ? 'Paste a JSON array, wrapper object, or one token per line.'
-    : nextMode === 'codex-choice'
-      ? 'Choose ChatGPT OAuth or the separate OpenAI API key route.'
-      : 'Store an operator-supplied provider credential in the local pool.';
+    ? `Paste a JSON array, wrapper object, or one token per line. Unnamed accounts become ${prefix}_1, ${prefix}_2…`
+    : nextMode === 'oauth'
+      ? oauthCopyFor(detail.provider).subtitle
+      : `Store an operator-supplied provider credential. Leave the label empty to get ${prefix}_1, ${prefix}_2…`;
+  if (nextMode === 'oauth') {
+    const copy = oauthCopyFor(detail.provider);
+    if ($('providerOAuthTitle')) $('providerOAuthTitle').textContent = copy.title;
+    if ($('providerOAuthHint')) $('providerOAuthHint').textContent = copy.hint;
+    if ($('providerTokenTitle')) $('providerTokenTitle').textContent = copy.tokenTitle;
+    if ($('providerTokenHint')) $('providerTokenHint').textContent = copy.tokenHint;
+    const risk = $('providerOAuthRisk');
+    if (risk) {
+      risk.textContent = copy.risk || '';
+      risk.hidden = !copy.risk;
+    }
+    const oauthNote = $('providerOAuthNote');
+    if (oauthNote) {
+      oauthNote.textContent = '';
+      delete oauthNote.dataset.state;
+    }
+  }
+  const labelInput = document.querySelector('#addAccountForm input[name="label"]');
+  if (labelInput) labelInput.placeholder = `${prefix}_1 or a custom name`;
   detailNote($(nextMode === 'bulk' ? 'bulkNote' : 'addAccountNote'), '');
   const focusTarget = nextMode === 'bulk'
     ? $('bulkInput')
-    : nextMode === 'codex-choice' ? $('startCodexOAuth') : document.querySelector('#addAccountForm input[name="label"]');
+    : nextMode === 'oauth' ? $('startProviderOAuth') : document.querySelector('#addAccountForm input[name="label"]');
   requestAnimationFrame(() => focusTarget?.focus());
 }
 
@@ -283,6 +333,13 @@ function resetAccountsState() {
   quotaPage.requestId += 1;
   modelTests.clear();
   modelTestBusy = false;
+  dUsageRange = 'day';
+  dUsageData = null;
+  dUsageRequestId += 1;
+  const usageChart = $('dUsageChart');
+  if (usageChart) usageChart.innerHTML = '';
+  const usageModels = $('dUsageModels');
+  if (usageModels) usageModels.innerHTML = '';
   const search = $('accountSearch');
   if (search) search.value = '';
   const size = $('accountPageSize');
@@ -310,6 +367,104 @@ function setDetailTab(tab, { silent = false } = {}) {
   });
   moveTabIndicator($('dTabs'));
   if (!silent && tab === 'quota') loadUpstreamQuota();
+  if (!silent && tab === 'usage') loadProviderUsage();
+}
+
+/* ---------------- provider usage tab ---------------- */
+
+let dUsageRange = 'day';
+let dUsageData = null;
+let dUsageRequestId = 0;
+
+function paintProviderUsageRange() {
+  document.querySelectorAll('[data-dusage-range]').forEach((btn) => {
+    const active = btn.dataset.dusageRange === dUsageRange;
+    btn.classList.toggle('is-active', active);
+    btn.setAttribute('aria-selected', String(active));
+    btn.tabIndex = active ? 0 : -1;
+  });
+  moveTabIndicator($('dUsageRangeTabs'));
+}
+
+async function loadProviderUsage() {
+  if (!currentDetailId) return;
+  const id = currentDetailId;
+  paintProviderUsageRange();
+  const requestId = ++dUsageRequestId;
+  const note = $('dUsageNote');
+  if (note) note.textContent = 'Loading usage…';
+
+  try {
+    const res = await detailApi(`/usage?range=${encodeURIComponent(dUsageRange)}`, { cache: 'no-store' });
+    const body = await res.json().catch(() => ({}));
+    if (requestId !== dUsageRequestId || currentDetailId !== id) return;
+    if (!res.ok) throw new Error(body.error?.message || `Request failed (${res.status})`);
+    dUsageData = body;
+    paintProviderUsage();
+  } catch (err) {
+    if (requestId !== dUsageRequestId || currentDetailId !== id) return;
+    const chart = $('dUsageChart');
+    if (note) note.textContent = err.message || 'Could not load provider usage.';
+    if (chart) chart.innerHTML = '<div class="spark-empty">Usage unavailable.</div>';
+    const body = $('dUsageModels');
+    if (body) body.innerHTML = '';
+  }
+}
+
+function paintProviderUsage() {
+  const data = dUsageData;
+  if (!data) return;
+  const totals = data.totals || {};
+  const meta = USAGE_RANGE_LABELS[data.range] || USAGE_RANGE_LABELS.day;
+  const set = (id, value) => { const el = $(id); if (el) el.textContent = value; };
+
+  set('dUsageRequests', compact(totals.requests));
+  set('dUsageRangeNote', meta.note);
+  set('dUsageTokIn', compact(totals.tokensIn));
+  set('dUsageTokInNote', `${fmtFull(totals.tokensIn)} tokens`);
+  set('dUsageTokOut', compact(totals.tokensOut));
+  set('dUsageTokOutNote', `${fmtFull(totals.tokensOut)} tokens`);
+  set('dUsageSuccess', totals.successRate == null ? '—' : `${totals.successRate}%`);
+  set('dUsageErrors', totals.errors ? `${fmtFull(totals.errors)} errors` : 'no errors');
+  set('dUsageCost', totals.cost ? fmtCost(totals.cost) : '—');
+
+  const note = $('dUsageNote');
+  if (note) note.textContent = `${meta.title} · ${fmtFull(totals.requests)} requests · ${data.timeZone}`;
+
+  const legend = $('dUsageLegend');
+  if (legend) {
+    legend.textContent = usageChartType === 'heatmap'
+      ? 'color intensity = tokens, red = failed'
+      : usageChartType === 'bars'
+        ? 'bar height = tokens, red = failed'
+        : 'line height = tokens, red = failed';
+  }
+
+  const host = $('dUsageChart');
+  if (host) {
+    host.classList.toggle('is-heat', usageChartType === 'heatmap');
+    host.dataset.chartType = usageChartType;
+    const rect = host.getBoundingClientRect();
+    host.innerHTML = usageChartMarkup(data.series || [], data.bucket, { width: rect.width, height: rect.height });
+  }
+
+  const series = data.series || [];
+  set('dUsageStart', series.length ? usageBucketLabel(data.bucket, series[0].bucket) : '—');
+  set('dUsageEnd', series.length ? usageBucketLabel(data.bucket, series[series.length - 1].bucket) : '—');
+
+  const body = $('dUsageModels');
+  if (body) {
+    body.innerHTML = data.models?.length
+      ? data.models.map((row) => `<tr>
+          <td>${escapeHtml(row.model)}</td>
+          <td class="r">${fmtFull(row.requests)}</td>
+          <td class="r">${fmtFull(row.tokensIn)}</td>
+          <td class="r">${fmtFull(row.tokensOut)}</td>
+          <td class="r">${row.cost ? fmtCost(row.cost) : '—'}</td>
+          <td class="r">${row.avgMs == null ? '—' : `${compact(row.avgMs)} ms`}</td>
+        </tr>`).join('')
+      : '<tr><td colspan="6" class="empty" style="border-bottom:0">No model usage in this range.</td></tr>';
+  }
 }
 
 function renderDetailAccounts() {
@@ -344,7 +499,7 @@ function paintStrategy({ force = false } = {}) {
   const info = STRATEGY_INFO[select.value] || STRATEGY_INFO['round-robin'];
   if (desc) {
     desc.textContent = info;
-    desc.hidden = true;
+    desc.hidden = false;
   }
   const title = document.querySelector('.strategy-title');
   if (title) title.title = info;
@@ -442,6 +597,12 @@ async function loadVisibleQuotas(requestId, items) {
   await Promise.all(workers);
 }
 
+function quotaTone(pct) {
+  if (pct >= 90) return ' is-bad';
+  if (pct >= 70) return ' is-warn';
+  return '';
+}
+
 function quotaCell(quota, accountId) {
   if (accounts.quotaLoading.has(accountId)) return '<span class="muted">Loading…</span>';
   if (accounts.quotaUnavailable.has(accountId)) return '<span class="muted">unavailable</span>';
@@ -449,14 +610,62 @@ function quotaCell(quota, accountId) {
   if (quota.quotas) {
     const session = quota.quotas.session;
     const used = Number(session?.used);
-    return `<span class="aqnum">${Number.isFinite(used) ? `${Math.round(used)}% used` : 'quota read'}<small>${escapeHtml(quota.plan || 'ChatGPT')}</small></span>`;
+    const pct = Number.isFinite(used) ? Math.min(100, Math.max(0, Math.round(used))) : 0;
+    return `<span class="aqbar${quotaTone(pct)}">
+      <span class="aqtrack"><span class="aqfill" style="width:${pct ? Math.max(3, pct) : 0}%"></span></span>
+      <span class="aqnum"><span>${Number.isFinite(used) ? `${pct}% used` : 'quota read'}</span><small>${escapeHtml(quota.plan || 'ChatGPT')}</small></span>
+    </span>`;
   }
   if (!quota.total) return '<span class="muted">no package</span>';
   const pct = Math.min(100, Math.round((quota.used / quota.total) * 100));
-  return `<span class="aqbar">
-    <span class="aqtrack"><span class="aqfill" style="width:${Math.max(2, pct)}%"></span></span>
-    <span class="aqnum">${compact(quota.used)}/${compact(quota.total)}</span>
+  return `<span class="aqbar${quotaTone(pct)}">
+    <span class="aqtrack"><span class="aqfill" style="width:${pct ? Math.max(3, pct) : 0}%"></span></span>
+    <span class="aqnum"><span>${pct}% used</span><small>${compact(quota.used)} / ${compact(quota.total)}</small></span>
   </span>`;
+}
+
+// Older pools stored `Account · <uid>` for accounts imported without a name.
+// Show a short fallback for those rows until the server renames them; names the
+// operator typed are returned untouched.
+function accountDisplayLabel(account) {
+  const label = String(account.label || '').trim();
+  const uid = account.uid ? String(account.uid) : '';
+  const auto = !label || label === uid || (uid && label === `Account · ${uid}`);
+  if (auto) return uid ? `Account ${uid.slice(0, 8)}` : 'Account';
+  return label;
+}
+
+// Upstream failures are sometimes JSON and sometimes an HTML error page. The
+// row has one line, so reduce them to the sentence a person can act on.
+function errorSummary(raw) {
+  let text = String(raw || '').trim();
+  const brace = text.indexOf('{');
+  if (brace >= 0) {
+    const head = text.slice(0, brace).replace(/[:\s]+$/, '');
+    let human = '';
+    try {
+      const parsed = JSON.parse(text.slice(brace));
+      human = parsed?.displayMsg?.en
+        || parsed?.displayMsg?.['zh']
+        || parsed?.error?.message
+        || parsed?.msg
+        || '';
+    } catch {
+      // Long provider payloads are truncated before they reach the row, so the
+      // brace often never closes. Pull the readable fields out of the fragment.
+      human = /"displayMsg"\s*:\s*\{[^}]*?"(?:en|zh)"\s*:\s*"([^"]+)"/.exec(text)?.[1]
+        || /"msg"\s*:\s*"([^"]+)"/.exec(text)?.[1]
+        || /"message"\s*:\s*"([^"]+)"/.exec(text)?.[1]
+        || '';
+    }
+    if (human) text = head ? `${head}: ${human}` : String(human);
+  }
+  if (/<[a-z!/]/i.test(text)) {
+    const head = text.split('<')[0].replace(/[:\s]+$/, '');
+    const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(text)?.[1];
+    text = [head, title].filter(Boolean).join(': ') || 'Provider returned an HTML error page.';
+  }
+  return text.replace(/\s+/g, ' ').trim();
 }
 
 function accountRowMarkup(account) {
@@ -470,27 +679,36 @@ function accountRowMarkup(account) {
   const kindLabel = account.kind.replace(/_/g, ' ');
   const quota = accounts.quota.get(account.id);
   const busy = accounts.busy.has(account.id);
+  const uid = account.uid ? String(account.uid) : '';
+  const displayLabel = accountDisplayLabel(account);
+  const plan = accountPlanLabel(account.plan);
+  const meta = `${account.masked} · ${kindLabel} · ${expiry}`;
+  const metaTitle = uid ? `${account.masked} · ${kindLabel} · uid ${uid} · ${expiry}` : meta;
+  const errorText = errorSummary(account.lastError);
   // Each row keeps one primary Check button and a "More" that opens the pool
   // menu. The pool menu is hidden until the pool is loaded (poolDetail) so the
   // check-in item is only offered to providers that can check in.
   return `<tr data-id="${escapeHtml(account.id)}" class="${selected ? 'is-selected' : ''}">
-    <td class="acheck"><input type="checkbox" data-select="${escapeHtml(account.id)}" ${selected ? 'checked' : ''} aria-label="Select ${escapeHtml(account.label)}"></td>
+    <td class="acheck"><label class="acheck-hit"><input type="checkbox" data-select="${escapeHtml(account.id)}" ${selected ? 'checked' : ''} aria-label="Select ${escapeHtml(displayLabel)}"></label></td>
     <td class="amain">
-      <span class="alabel">${escapeHtml(account.label)}</span>
-      <span class="asub">${escapeHtml(account.masked)} · ${escapeHtml(kindLabel)} · ${escapeHtml(account.uid ? `uid ${account.uid}` : expiry)}</span>
-      ${account.lastError
-        ? `<span class="aerr" title="${escapeHtml(account.lastError)}">Error</span>`
+      <span class="aname">
+        <button class="alabel alabel-btn" type="button" data-account-summary="${escapeHtml(account.id)}" title="${escapeHtml(displayLabel)}">${escapeHtml(displayLabel)}</button>
+        ${plan ? `<span class="plan-badge plan-${escapeHtml(account.plan)}" title="${escapeHtml(plan)} plan">${escapeHtml(plan)}</span>` : ''}
+      </span>
+      <span class="asub" title="${escapeHtml(metaTitle)}">${escapeHtml(meta)}</span>
+      ${errorText
+        ? `<span class="aerr" title="${escapeHtml(errorText)}">${escapeHtml(errorText)}</span>`
         : ''}
     </td>
-    <td>
+    <td class="astatus">
       <span class="status-pill ${tone}"><span class="dot"></span>${escapeHtml(label)}</span>
     </td>
-    <td>${quotaCell(quota, account.id)}</td>
+    <td class="aquota">${quotaCell(quota, account.id)}</td>
     <td class="r astats">${fmtFull(account.requests)}<span>req · ${account.requests ? compact(account.tokensIn + account.tokensOut) : '—'} tok</span></td>
-    <td class="r">${account.lastUsedAt ? relTime(new Date(account.lastUsedAt).toISOString()) : '—'}</td>
+    <td class="r alast">${account.lastUsedAt ? relTime(new Date(account.lastUsedAt).toISOString()) : '—'}</td>
     <td class="aactions">
-      <button class="btn btn-ghost btn-xs" type="button" data-act="test" data-id="${escapeHtml(account.id)}" ${busy ? 'disabled' : ''}>Check</button>
-      <button class="btn btn-ghost btn-xs" type="button" data-act="more" data-id="${escapeHtml(account.id)}" aria-haspopup="menu" aria-label="More actions for ${escapeHtml(account.label)}">More</button>
+      <button class="btn btn-ghost btn-xs aactions-check" type="button" data-act="test" data-id="${escapeHtml(account.id)}" ${busy ? 'disabled' : ''}>Check</button>
+      <button class="btn btn-ghost btn-xs aactions-icon" type="button" data-act="more" data-id="${escapeHtml(account.id)}" aria-haspopup="menu" aria-label="More actions for ${escapeHtml(displayLabel)}" title="More actions"><svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
     </td>
   </tr>`;
 }
@@ -548,9 +766,9 @@ function updateBulkBar() {
 // (answers "Pong") or warms up every enabled account one by one and reports
 // "N of M accounts" with a progress bar in the account head.
 const POOL_ACTIONS = {
-  warmup: { label: 'Warm up all', icon: '↻', note: 'Probing expired parked accounts…' },
-  test: { label: 'Test accounts all', icon: '◎', note: 'Sending one real request per account, waiting for each answer…' },
-  checkin: { label: 'Check in All', icon: '✓', note: 'Daily check-in for enabled accounts…' },
+  warmup: { id: 'poolItemWarmup', label: 'Warm up all', icon: '↻' },
+  test: { id: 'poolItemTest', label: 'Test accounts all', icon: '◎' },
+  checkin: { id: 'poolItemCheckin', label: 'Check in All', icon: '✓' },
 };
 
 let poolJob = null;
@@ -561,84 +779,118 @@ async function runPoolJob(kind) {
   if (!action) return;
   poolJob = kind;
   const busy = $('poolBusy');
+  const note = $('accountNote');
+  const head = $('poolHead');
+  const bar = $('poolBar');
+  const count = $('poolCount');
+  const fill = $('poolFill');
+  const paintProgress = (done, total) => {
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    if (count) count.textContent = `${fmtFull(done)} / ${fmtFull(total)}`;
+    if (fill) fill.style.width = `${pct}%`;
+    if (bar) bar.setAttribute('aria-valuenow', String(pct));
+  };
+
   if (busy) {
     busy.hidden = false;
     busy.textContent = `${action.icon} ${action.label}…`;
   }
-  const note = $('accountNote');
-  const total = detail?.pool?.total || 0;
-  const head = $('poolHead');
-  if (head) {
-    head.hidden = false;
-    head.innerHTML =
-      `<span class="pool-count" id="poolCount">0 of ${total}</span>` +
-      `<span class="pool-bar"><span class="pool-fill" id="poolFill"></span></span>`;
+  if (head) head.hidden = false;
+  paintProgress(0, detail?.pool?.total || 0);
+  if (kind === 'checkin') {
+    // The server check-in pass reports only at the end, so a 0% bar would
+    // look stalled. Show an indeterminate label instead.
+    if (count) count.textContent = 'Checking in…';
+    if (bar) bar.hidden = true;
   }
-  detailNote(note, action.note, '');
+  detailNote(note, '');
 
   try {
-    const res = await detailApi('/accounts', { method: 'GET' });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok || !body.items) throw new Error(body.error?.message || `Request failed (${res.status})`);
-    if (!body.items.length) {
-      detailNote(note, `No accounts for ${currentDetailId}.`, 'bad');
-      return;
-    }
-    const items = body.items.filter((item) => item.enabled);
-    const started = { n: 0 };
-
-    for (let i = 0; i < items.length; i += 1) {
-      const account = items[i];
-      started.n += 1;
-      renderAccounts();
-      try {
-        const pingRes = await detailApi(`/accounts/${encodeURIComponent(account.id)}/ping`, { method: 'POST' });
-        const pingBody = await pingRes.json().catch(() => ({}));
-        if (pingRes.ok && pingBody.ok !== false) {
-          detailNote(note, `<span class="ok">${account.label}: ${pingBody.answer || 'answered'}</span>`, 'ok');
-        } else {
-          detailNote(note, `<span class="bad">${account.label}: ${pingBody.error || 'no answer'}</span>`, 'bad');
-        }
-      } catch (err) {
-        detailNote(note, `<span class="bad">${account.label}: ${err.message}</span>`, 'bad');
-      }
-      const n = started.n;
-      if (head) {
-        const count = $('poolCount');
-        const fill = $('poolFill');
-        if (count) count.textContent = `${n} of ${items.length}`;
-        if (fill) fill.style.width = `${Math.round((n / items.length) * 100)}%`;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 30));
-    }
-
-    if (head) {
-      const count = $('poolCount');
-      const fill = $('poolFill');
-      if (count) count.textContent = `${items.length} of ${items.length}`;
-      if (fill) fill.style.width = '100%';
-    }
-
     if (kind === 'checkin') {
+      // Check-in is a server-side pass over the pool. Pinging every account
+      // first would spend a real model request per account for no reason.
       const checkinRes = await detailApi('/accounts/checkin', { method: 'POST' });
       const checkinBody = await checkinRes.json().catch(() => ({}));
       if (!checkinRes.ok) throw new Error(checkinBody.error?.message || `Request failed (${checkinRes.status})`);
-      detailNote(note, `${checkinBody.checkedIn || 0} checked in · ${checkinBody.failed || 0} failed.`, 'ok');
-    } else {
-      detailNote(note, `Done. ${started.n} account${started.n === 1 ? '' : 's'} tested.`, 'ok');
+      // "already" is a success: the account claimed today. Report it instead
+      // of showing "0 checked in · 0 failed" for a pool that is all claimed.
+      const parts = [];
+      if (checkinBody.checkedIn) parts.push(`${fmtFull(checkinBody.checkedIn)} checked in`);
+      if (checkinBody.already) parts.push(`${fmtFull(checkinBody.already)} already claimed today`);
+      if (checkinBody.skipped) parts.push(`${fmtFull(checkinBody.skipped)} skipped`);
+      if (checkinBody.failed) parts.push(`${fmtFull(checkinBody.failed)} failed`);
+      detailNote(note,
+        parts.length ? `${parts.join(' · ')}.` : 'No enabled OAuth accounts to check in.',
+        checkinBody.failed ? 'bad' : 'ok');
+      return;
     }
+
+    const res = await detailApi('/accounts', { method: 'GET' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || !body.items) throw new Error(body.error?.message || `Request failed (${res.status})`);
+    const items = body.items.filter((item) => item.enabled);
+    if (!items.length) {
+      detailNote(note, `No enabled accounts for ${currentDetailId}.`, 'bad');
+      return;
+    }
+    paintProgress(0, items.length);
+
+    // One probe per account, sequentially. Failures stay on the row (status
+    // pill + last error); the run itself reports a count so the note never
+    // becomes a wall of repeated upstream messages.
+    let answered = 0;
+    let failed = 0;
+    for (let i = 0; i < items.length; i += 1) {
+      const account = items[i];
+      try {
+        const pingRes = await detailApi(`/accounts/${encodeURIComponent(account.id)}/ping`, { method: 'POST' });
+        const pingBody = await pingRes.json().catch(() => ({}));
+        if (pingRes.ok && pingBody.ok !== false) answered += 1;
+        else failed += 1;
+      } catch {
+        failed += 1;
+      }
+      paintProgress(i + 1, items.length);
+      renderAccounts();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+
+    const tone = failed === 0 ? 'ok' : answered === 0 ? 'bad' : '';
+    detailNote(note, `${action.label}: ${fmtFull(answered)} answered${failed ? ` · ${fmtFull(failed)} failed` : ''}.`, tone);
   } catch (err) {
     detailNote(note, err.message, 'bad');
   } finally {
     poolJob = null;
-    const busy = $('poolBusy');
     if (busy) busy.hidden = true;
+    if (head) head.hidden = true;
+    if (bar) bar.hidden = false;
   }
 }
 
-for (const kind of Object.keys(POOL_ACTIONS)) {
-  $('pool' + kind).addEventListener('click', () => runPoolJob(kind));
+for (const [kind, action] of Object.entries(POOL_ACTIONS)) {
+  $(action.id)?.addEventListener('click', () => runPoolJob(kind));
 }
+
+// "More" opens a real menu and closes on selection, an outside click or Esc.
+// Keeping the state on the trigger means polling repaints cannot leave it open.
+const poolMenu = $('poolMenu');
+const poolMore = $('apoolMore');
+function setPoolMenu(open) {
+  if (!poolMenu || !poolMore) return;
+  poolMenu.hidden = !open;
+  poolMore.setAttribute('aria-expanded', String(open));
+}
+poolMore?.addEventListener('click', (event) => {
+  event.stopPropagation();
+  setPoolMenu(poolMenu.hidden);
+});
+poolMenu?.addEventListener('click', () => setPoolMenu(false));
+document.addEventListener('click', (event) => {
+  if (poolMenu && !poolMenu.hidden && !event.target.closest('#poolMenu, #apoolMore')) setPoolMenu(false);
+});
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') setPoolMenu(false);
+});
 
 async function testOne(id) {
   if (!id || accounts.busy.has(id)) return;
@@ -709,7 +961,7 @@ async function deleteOne(id, { ask = true, opener = document.activeElement } = {
   const item = accounts.data?.items.find((row) => row.id === id);
   if (ask) return openConfirmation({
     title: 'Remove account?',
-    message: `${item?.label || 'This account'} will be removed from the pool.`,
+    message: `${item ? accountDisplayLabel(item) : 'This account'} will be removed from the pool.`,
     confirmLabel: 'Remove account',
     danger: true,
     run: () => deleteOne(id, { ask: false }),
@@ -818,9 +1070,9 @@ function quotaPackagesMarkup(accountId, quota) {
 
 function codexQuotaWindowsMarkup(quota) {
   const rows = Object.entries(quota.quotas || {}).filter(([, window]) => window && typeof window === 'object');
-  if (!rows.length) return '<p class="hint">No Codex quota windows returned.</p>';
+  if (!rows.length) return '<p class="hint">No quota windows returned.</p>';
   return `<div class="codex-quota-windows">${rows.map(([name, window]) => {
-    const label = name.replace(/_/g, ' ');
+    const label = window.displayName || name.replace(/_/g, ' ');
     const used = Number(window.used);
     const total = Number(window.total) || 100;
     const pct = Number.isFinite(used) ? Math.min(100, Math.max(0, Math.round((used / total) * 100))) : 0;
@@ -850,29 +1102,38 @@ function quotaStatusLabel(status) {
 function renderCoolingQuotaAccount(account) {
   const retry = account.cooldownUntil > Date.now() ? `Retry ${relFuture(account.cooldownUntil)}` : 'Quota temporarily unavailable.';
   return `<section class="quota-account quota-account-inactive">
-    <div class="quota-account-head"><strong>${escapeHtml(account.label)}</strong><span class="status-pill quiet"><span class="dot"></span>Cooling</span></div>
+    <div class="quota-account-head"><strong>${escapeHtml(accountDisplayLabel(account))}</strong><span class="status-pill quiet"><span class="dot"></span>Cooling</span></div>
     <p class="hint">${escapeHtml(retry)}</p>
   </section>`;
 }
 
 function renderActiveQuotaAccount(account, result) {
   if (result?.error) return `<section class="quota-account">
-    <div class="quota-account-head"><strong>${escapeHtml(account.label)}</strong><span class="status-pill bad"><span class="dot"></span>Unavailable</span></div>
+    <div class="quota-account-head"><strong>${escapeHtml(accountDisplayLabel(account))}</strong><span class="status-pill bad"><span class="dot"></span>Unavailable</span></div>
     <p class="hint bad">${escapeHtml(result.error)}</p>
   </section>`;
   if (!result?.quota) return `<section class="quota-account">
-    <div class="quota-account-head"><strong>${escapeHtml(account.label)}</strong><span class="muted">Loading…</span></div>
+    <div class="quota-account-head"><strong>${escapeHtml(accountDisplayLabel(account))}</strong><span class="muted">Loading…</span></div>
   </section>`;
   const quota = result.quota;
-  if (quota.quotas) return `<section class="quota-account">
-    <div class="quota-account-head"><strong>${escapeHtml(account.label)}</strong><span class="muted">${escapeHtml(account.masked)}</span></div>
-    <div class="qtop"><div><div class="stat-big qvalue">${escapeHtml(quota.plan || 'ChatGPT')}</div><div class="qcap">${quota.limitReached ? 'limit reached' : 'available'}${quota.reviewLimitReached ? ' · review limited' : ''}${quota.sparkLimitReached ? ' · spark limited' : ''}</div></div></div>
+  if (quota.quotas) {
+    const windows = Object.values(quota.quotas).filter((window) => window && typeof window === 'object');
+    const spent = windows.filter((window) => Number(window.used) >= (Number(window.total) || 100));
+    // Antigravity reports shared pools instead of Codex's limit flags, so its
+    // headline follows how many of those pools are actually spent.
+    const capacity = account.provider === 'antigravity'
+      ? (windows.length && spent.length === windows.length ? 'all pools used' : spent.length ? 'some pools used' : 'available')
+      : quota.limitReached ? 'limit reached' : 'available';
+    return `<section class="quota-account">
+    <div class="quota-account-head"><strong>${escapeHtml(accountDisplayLabel(account))}</strong><span class="muted">${escapeHtml(account.masked)}</span></div>
+    <div class="qtop"><div><div class="stat-big qvalue">${escapeHtml(quota.plan || 'ChatGPT')}</div><div class="qcap">${capacity}${quota.reviewLimitReached ? ' · review limited' : ''}${quota.sparkLimitReached ? ' · spark limited' : ''}</div></div></div>
     ${codexQuotaWindowsMarkup(quota)}
   </section>`;
+  }
   const pct = quota.total ? Math.min(100, Math.round((quota.used / quota.total) * 100)) : 0;
   const packages = quotaPackagesMarkup(account.id, quota);
   return `<section class="quota-account">
-    <div class="quota-account-head"><strong>${escapeHtml(account.label)}</strong><span class="muted">${escapeHtml(account.masked)}</span></div>
+    <div class="quota-account-head"><strong>${escapeHtml(accountDisplayLabel(account))}</strong><span class="muted">${escapeHtml(account.masked)}</span></div>
     <div class="qtop"><div class="stat-big qvalue">${compact(quota.used)}</div><div class="qcap">of ${fmtFull(quota.total)}<br><span>${escapeHtml(quota.plan || 'CodeBuddy')}</span></div></div>
     <div class="qtrack"><div class="qfill" style="width:${Math.max(2, pct)}%"></div></div>
     ${packages ? `<div class="pkgs">${packages}</div>` : '<p class="hint">No credit package returned.</p>'}

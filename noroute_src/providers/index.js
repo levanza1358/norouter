@@ -1,5 +1,6 @@
 import codebuddyCn from './codebuddy-cn.js';
 import codex from './codex.js';
+import antigravity from './antigravity.js';
 import { invalidateProvider, normalizeStrategy } from '../lib/accounts.js';
 import { customModels, modelEnabled } from '../lib/custom-models.js';
 import { codexCatalog } from '../lib/codex-account.js';
@@ -13,7 +14,7 @@ import {
   toProvider,
 } from '../lib/custom-providers.js';
 
-const shippedProviders = [codebuddyCn, codex];
+const shippedProviders = [codebuddyCn, codex, antigravity];
 export const providers = [];
 const byPrefix = new Map();
 
@@ -69,9 +70,12 @@ export function getProvider(name) {
 }
 
 export function allModels(provider) {
-  if (provider.id === 'codex') return codexCatalog();
-  const extra = customModels(provider.id);
-  const models = extra.length ? [...provider.models, ...extra] : provider.models;
+  // Codex custom ids are local dashboard labels, so they stay out of the
+  // routable catalog; everything else adds its custom models. Disabled models
+  // are filtered here so /v1/models, combos and chat routing agree.
+  const models = provider.id === 'codex'
+    ? codexCatalog()
+    : [...new Set([...provider.models, ...customModels(provider.id)])];
   return models.filter((model) => modelEnabled(provider.id, model));
 }
 
@@ -127,20 +131,53 @@ export function removeProvider(id) {
   return true;
 }
 
-export function chatUrl(provider) {
+export function chatUrl(provider, { stream = false } = {}) {
   const override = provider.baseUrlEnv ? process.env[provider.baseUrlEnv]?.trim() : '';
   const base = override ? override.replace(/\/+$/, '') : provider.baseUrl;
-  if (override) return /\/chat\/completions$/.test(base) ? base : base + provider.chatPath;
-  return base + provider.chatPath;
+  // Formats that use a different route per stream mode (Antigravity) declare
+  // streamPath; everything else keeps one endpoint and buffers when needed.
+  const path = stream && provider.streamPath ? provider.streamPath : provider.chatPath;
+  if (override) return /\/chat\/completions$/.test(base) ? base : base + path;
+  return base + path;
+}
+
+// Public catalog id -> the id the upstream expects. Antigravity encodes the
+// reasoning tier in the model string (`...-medium(medium)`); other providers
+// route on the catalog id itself.
+export function upstreamModelFor(provider, model) {
+  return provider.upstreamModels?.[model] || model;
+}
+
+// Anthropic authenticates with x-api-key and an explicit API version instead
+// of a Bearer token. Anthropic-compatible gateways are inconsistent, so the
+// key is also sent as a Bearer token; the official API ignores that header.
+export function wireHeaders(provider, token, format = 'openai') {
+  const headers = {
+    'content-type': 'application/json',
+    accept: 'text/event-stream',
+    ...provider.headers,
+  };
+  if (format === 'anthropic') {
+    if (token) {
+      headers['x-api-key'] = token;
+      headers.authorization = `Bearer ${token}`;
+    }
+    if (!Object.keys(headers).some((name) => name.toLowerCase() === 'anthropic-version')) {
+      headers['anthropic-version'] = '2023-06-01';
+    }
+    return headers;
+  }
+  if (token) headers.authorization = `Bearer ${token}`;
+  return headers;
 }
 
 // A Codex account stored as an OpenAI API key talks to the public Chat
 // Completions endpoint; an OAuth account uses the ChatGPT Responses endpoint.
 // /v1 and the dashboard model tester both read this so they cannot drift and
 // send a Chat Completions body to the Responses route.
-export function wireFor(provider, account = null) {
+export function wireFor(provider, account = null, options = {}) {
   if (provider.id === 'codex' && account?.kind === 'api_key') {
     return { format: 'openai', url: 'https://api.openai.com/v1/chat/completions' };
   }
-  return { format: provider.format || 'openai', url: chatUrl(provider) };
+  return { format: provider.format || 'openai', url: chatUrl(provider, options) };
 }

@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 
 import { getDb } from './db.js';
+import { defaultModelValue } from './routing-rules.js';
 
 const KEY_PREFIX = 'nr_live_';
 const NAME_MAX = 80;
@@ -39,6 +40,7 @@ function publicKey(row, usage = {}) {
     enabled: Boolean(row.enabled), status: !row.enabled ? 'disabled' : expired ? 'expired' : limited ? 'limit' : 'enabled',
     createdAt: row.created_at, lastUsedAt: row.last_used_at, expiresAt: row.expires_at,
     requestLimit: row.request_limit, tokenLimit: row.token_limit, requests, tokens,
+    defaultModel: row.default_model || null,
   };
 }
 
@@ -62,17 +64,19 @@ export function createApiKey(input = {}) {
   if (input.expiresAt && (!Number.isFinite(expiresAt) || expiresAt <= Date.now())) return { error: 'expiresAt must be a future date.', status: 400 };
   const requestLimit = numberOrNull(input.requestLimit, 'requestLimit');
   const tokenLimit = tokenLimitOrNull(input.tokenLimit);
+  const defaultModel = defaultModelValue(input.defaultModel);
   if (requestLimit.error) return { error: requestLimit.error, status: 400 };
   if (tokenLimit.error) return { error: tokenLimit.error, status: 400 };
-  const row = { id: randomUUID(), name, secret, keyHash: hash(secret), keyPrefix: secret.slice(0, Math.min(secret.length, KEY_PREFIX.length + 4)), createdAt: Date.now(), expiresAt, requestLimit: requestLimit.value, tokenLimit: tokenLimit.value };
+  if (defaultModel.error) return { error: defaultModel.error, status: 400 };
+  const row = { id: randomUUID(), name, secret, keyHash: hash(secret), keyPrefix: secret.slice(0, Math.min(secret.length, KEY_PREFIX.length + 4)), createdAt: Date.now(), expiresAt, requestLimit: requestLimit.value, tokenLimit: tokenLimit.value, defaultModel: defaultModel.value };
   try {
-    getDb().prepare(`INSERT INTO api_keys (id, name, secret, key_hash, key_prefix, enabled, created_at, expires_at, request_limit, token_limit)
-      VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`).run(row.id, row.name, row.secret, row.keyHash, row.keyPrefix, row.createdAt, row.expiresAt, row.requestLimit, row.tokenLimit);
+    getDb().prepare(`INSERT INTO api_keys (id, name, secret, key_hash, key_prefix, enabled, created_at, expires_at, request_limit, token_limit, default_model)
+      VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`).run(row.id, row.name, row.secret, row.keyHash, row.keyPrefix, row.createdAt, row.expiresAt, row.requestLimit, row.tokenLimit, row.defaultModel);
   } catch (err) {
     if (err.code === 'SQLITE_CONSTRAINT_UNIQUE' || err.errcode === 2067) return { error: 'That API secret already exists.', status: 409 };
     throw err;
   }
-  return { key: publicKey({ id: row.id, name: row.name, secret: row.secret, key_hash: row.keyHash, key_prefix: row.keyPrefix, enabled: 1, created_at: row.createdAt, last_used_at: null, expires_at: row.expiresAt, request_limit: row.requestLimit, token_limit: row.tokenLimit }), secret };
+  return { key: publicKey({ id: row.id, name: row.name, secret: row.secret, key_hash: row.keyHash, key_prefix: row.keyPrefix, enabled: 1, created_at: row.createdAt, last_used_at: null, expires_at: row.expiresAt, request_limit: row.requestLimit, token_limit: row.tokenLimit, default_model: row.defaultModel }), secret };
 }
 
 export function updateApiKey(id, input = {}) {
@@ -82,8 +86,12 @@ export function updateApiKey(id, input = {}) {
   if (!name || name.length > NAME_MAX) return { error: `Key name must be 1-${NAME_MAX} characters.`, status: 400 };
   const requestLimit = numberOrNull(input.requestLimit === undefined ? current.request_limit : input.requestLimit, 'requestLimit');
   const tokenLimit = tokenLimitOrNull(input.tokenLimit === undefined ? current.token_limit : input.tokenLimit);
+  const defaultModel = input.defaultModel === undefined
+    ? { value: current.default_model }
+    : defaultModelValue(input.defaultModel);
   if (requestLimit.error) return { error: requestLimit.error, status: 400 };
   if (tokenLimit.error) return { error: tokenLimit.error, status: 400 };
+  if (defaultModel.error) return { error: defaultModel.error, status: 400 };
   const hasSecret = input.secret !== undefined;
   const secret = hasSecret ? String(input.secret).trim() : current.secret;
   if (hasSecret && (!secret || secret.length > SECRET_MAX || !/^[A-Za-z0-9._-]+$/.test(secret))) return { error: 'Secret contains invalid characters or is too long.', status: 400 };
@@ -92,11 +100,11 @@ export function updateApiKey(id, input = {}) {
   const enabled = input.enabled === undefined ? current.enabled : input.enabled ? 1 : 0;
   try {
     const statement = hasSecret
-      ? 'UPDATE api_keys SET name = ?, secret = ?, key_hash = ?, key_prefix = ?, enabled = ?, expires_at = ?, request_limit = ?, token_limit = ? WHERE id = ?'
-      : 'UPDATE api_keys SET name = ?, enabled = ?, expires_at = ?, request_limit = ?, token_limit = ? WHERE id = ?';
+      ? 'UPDATE api_keys SET name = ?, secret = ?, key_hash = ?, key_prefix = ?, enabled = ?, expires_at = ?, request_limit = ?, token_limit = ?, default_model = ? WHERE id = ?'
+      : 'UPDATE api_keys SET name = ?, enabled = ?, expires_at = ?, request_limit = ?, token_limit = ?, default_model = ? WHERE id = ?';
     const values = hasSecret
-      ? [name, secret, hash(secret), secret.slice(0, Math.min(secret.length, KEY_PREFIX.length + 4)), enabled, expiresAt, requestLimit.value, tokenLimit.value, id]
-      : [name, enabled, expiresAt, requestLimit.value, tokenLimit.value, id];
+      ? [name, secret, hash(secret), secret.slice(0, Math.min(secret.length, KEY_PREFIX.length + 4)), enabled, expiresAt, requestLimit.value, tokenLimit.value, defaultModel.value, id]
+      : [name, enabled, expiresAt, requestLimit.value, tokenLimit.value, defaultModel.value, id];
     getDb().prepare(statement).run(...values);
   } catch (err) {
     if (err.code === 'SQLITE_CONSTRAINT_UNIQUE' || err.errcode === 2067) return { error: 'That API secret already exists.', status: 409 };
@@ -134,7 +142,7 @@ export function authorizeManagedKey(secret, { consume = true } = {}) {
   const usage = getDb().prepare('SELECT COALESCE(SUM(requests), 0) AS requests, COALESCE(SUM(tokens_in), 0) AS tokens_in, COALESCE(SUM(tokens_out), 0) AS tokens_out FROM api_key_usage WHERE key_id = ?').get(row.id);
   if ((row.request_limit != null && usage.requests >= row.request_limit) || (row.token_limit != null && usage.tokens_in + usage.tokens_out >= row.token_limit)) return null;
   if (consume) getDb().prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?').run(Date.now(), row.id);
-  return { managedId: row.id };
+  return { managedId: row.id, defaultModel: row.default_model || null };
 }
 
 export function recordApiKeyRequest(id) { if (id) getDb().prepare(`INSERT INTO api_key_usage (key_id, day, requests) VALUES (?, ?, 1) ON CONFLICT(key_id, day) DO UPDATE SET requests = requests + 1`).run(id, dayOf()); }

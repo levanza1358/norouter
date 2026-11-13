@@ -12,7 +12,7 @@ process.env.NOROUTER_DB = TEST_DB_FILE;
 delete process.env.CODEBUDDY_CN_TOKEN;
 delete process.env.CODEBUDDY_CN_API_KEY;
 
-const { createStubServer, calls: stubCalls, chatBodies, probeShapes, quotaCalls } = await import('./stub-upstream.js');
+const { createStubServer, calls: stubCalls, chatBodies, responsesBodies, anthropicBodies, antigravityBodies, antigravityQuotaCalls, probeShapes, quotaCalls } = await import('./stub-upstream.js');
 
 const stub = createStubServer();
 await new Promise((resolve) => stub.listen(0, '127.0.0.1', resolve));
@@ -23,13 +23,24 @@ process.env.CODEBUDDY_CN_BASE_URL = `${stubBase}/v2`;
 process.env.CODEBUDDY_CN_REFRESH_URL = `${stubBase}/v2/plugin/auth/token/refresh`;
 process.env.CODEBUDDY_CN_QUOTA_URL = `${stubBase}/v2/billing/meter/get-user-resource`;
 process.env.CODEBUDDY_CN_CHECKIN_URL = `${stubBase}/v2/billing/meter/daily-checkin`;
+// The Antigravity envelope is translated locally; the base URL only has to
+// reach the stub. OAuth credentials stay unset on purpose: the start route must
+// fail closed instead of opening a browser flow in CI.
+process.env.ANTIGRAVITY_BASE_URL = stubBase;
+delete process.env.ANTIGRAVITY_CLIENT_ID;
+delete process.env.ANTIGRAVITY_CLIENT_SECRET;
 
 const { resolveModel } = await import('../noroute_src/lib/model.js');
 const { providers } = await import('../noroute_src/providers/index.js');
-const { createAccumulator, readSSEEvents } = await import('../noroute_src/lib/sse.js');
+const { createAccumulator, mirrorReasoningAlias, readSSEEvents } = await import('../noroute_src/lib/sse.js');
+const {
+  createNativeToolStream,
+  parseNativeToolCalls,
+  recoverNativeToolCalls,
+} = await import('../noroute_src/lib/native-tool-calls.js');
 const { parseCodebuddyQuota } = await import('../noroute_src/lib/codebuddy.js');
 const { applyReplyFilters, buildInstruction } = await import('../noroute_src/lib/reply-filters.js');
-const { toResponsesRequest } = await import('../noroute_src/lib/responses-format.js');
+const { createResponsesStreamState, fromResponsesStream, toResponsesRequest } = await import('../noroute_src/lib/responses-format.js');
 const {
   bulkCreateAccounts,
   createAccount,
@@ -38,8 +49,17 @@ const {
   listAccounts,
   pickAccount,
   markFailure,
+  normalizeAutoAccountLabels,
   previewAccounts,
 } = await import('../noroute_src/lib/accounts.js');
+const { ACCOUNT_PLANS, isKnownPlan, normalizePlan, planLabel } = await import('../noroute_src/lib/plan.js');
+const { antigravityTier } = await import('../noroute_src/lib/antigravity-quota.js');
+const {
+  backfillAccountIdentity,
+  ensureAccountIdentityIndex,
+  identityFromToken,
+  mergeDuplicateAccounts,
+} = await import('../noroute_src/lib/account-identity.js');
 // The database module resolves NOROUTER_DB at import time; assert it stayed
 // hermetic so the new usage table never touches the operator's real history.
   const { closeDb, DB_FILE, getDb } = await import('../noroute_src/lib/db.js');
@@ -70,6 +90,12 @@ function streamFrom(text) {
       controller.close();
     },
   });
+}
+
+// An unsigned JWT is enough for the identity tests: only the payload segment is
+// read, and the signature is never checked locally.
+function testJwt(payload) {
+  return `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.`;
 }
 
 await test('norouter CLI exposes start, dev, test and version', () => {
@@ -188,6 +214,30 @@ await test('reasoning_content is preserved when present', async () => {
   assert.equal(message.reasoning_content, 'think');
 });
 
+await test('reasoning alias is mirrored for canonical-only clients', () => {
+  const streamed = { choices: [{ index: 0, delta: { reasoning: 'think', content: 'answer' } }] };
+  assert.equal(mirrorReasoningAlias(streamed), true);
+  assert.equal(streamed.choices[0].delta.reasoning_content, 'think');
+  assert.equal(streamed.choices[0].delta.reasoning, 'think', 'the original alias stays readable');
+
+  const plain = { choices: [{ index: 0, message: { role: 'assistant', reasoning: 'done' } }] };
+  assert.equal(mirrorReasoningAlias(plain), true);
+  assert.equal(plain.choices[0].message.reasoning_content, 'done');
+
+  const canonical = { choices: [{ index: 0, delta: { reasoning_content: 'kept', reasoning: 'other' } }] };
+  assert.equal(mirrorReasoningAlias(canonical), false, 'a canonical value is never overwritten');
+  assert.equal(canonical.choices[0].delta.reasoning_content, 'kept');
+
+  const acc = createAccumulator();
+  acc.feed({ choices: [{ index: 0, delta: { reasoning: 'alias' } }] });
+  assert.equal(acc.toCompletion('x').choices[0].message.reasoning_content, 'alias');
+
+  // A relayed frame carries both fields; the accumulator must count it once.
+  const mirrored = createAccumulator();
+  mirrored.feed({ choices: [{ index: 0, delta: { reasoning: 'alias', reasoning_content: 'alias' } }] });
+  assert.equal(mirrored.toCompletion('x').choices[0].message.reasoning_content, 'alias');
+});
+
 await test('in-stream error frame is captured, not swallowed', async () => {
   const sse = 'data: {"error":{"message":"quota exhausted","type":"rate_limit"}}\n\n';
   const acc = createAccumulator();
@@ -198,7 +248,7 @@ await test('in-stream error frame is captured, not swallowed', async () => {
 const { server } = createServer({ port: 0, host: '127.0.0.1', logRequests: false });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
-const DASHBOARD_SCRIPTS = ['core.js','utils.js','custom-select.js','appearance.js','router.js','dashboard.js','providers.js','chat.js','usage.js','combos.js','settings.js','provider-add.js','account-detail.js','account-events.js','glue.js','actions.js','boot.js'];
+const DASHBOARD_SCRIPTS = ['core.js','utils.js','custom-select.js','appearance.js','router.js','dashboard.js','providers.js','chat.js','usage.js','combos.js','settings.js','provider-add.js','account-detail.js','account-events.js','service-map.js','glue.js','actions.js','boot.js'];
 const fetchDashboardSources = async () => {
   const texts = await Promise.all(DASHBOARD_SCRIPTS.map(async (file) => {
     const response = await fetch(`${base}/assets/${file}`);
@@ -379,6 +429,87 @@ await test('usage report exposes ranges with a stable shape', async () => {
   assert.ok(Array.isArray(status.models));
   assert.ok(Array.isArray(status.history));
   assert.equal(typeof status.requests, 'number');
+});
+
+await test('provider usage endpoint scopes the report to one provider', async () => {
+  const before = await (await fetch(`${base}/api/providers/codebuddy-cn/usage?range=day`)).json();
+  const { recordUsageError, recordUsageRequest } = await import('../noroute_src/lib/usage.js');
+  recordUsageRequest({ provider: 'codebuddy-cn', model: 'glm-5.3', usage: { prompt_tokens: 120, completion_tokens: 30 }, ms: 250 });
+  recordUsageRequest({ provider: 'codex', model: 'gpt-5.1', usage: { prompt_tokens: 900, completion_tokens: 90 }, ms: 400 });
+  recordUsageError({ provider: 'codebuddy-cn', model: 'glm-5.3' });
+
+  try {
+    const res = await fetch(`${base}/api/providers/codebuddy-cn/usage?range=day`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.provider, 'codebuddy-cn');
+    assert.equal(body.range, 'day');
+    assert.equal(body.totals.requests, before.totals.requests + 1, 'only the codebuddy request belongs to this report');
+    assert.equal(body.totals.tokensIn, before.totals.tokensIn + 120);
+    assert.equal(body.totals.tokensOut, before.totals.tokensOut + 30);
+    assert.equal(body.totals.errors, before.totals.errors + 1, 'errors stay inside the provider scope');
+    assert.ok(body.totals.successRate == null || body.totals.successRate >= 0);
+    assert.ok(body.models.some((row) => row.model === 'glm-5.3'));
+    assert.ok(!body.models.some((row) => row.model === 'gpt-5.1'), 'another provider must not leak into the model breakdown');
+    assert.ok(body.series.every((item) => typeof item.requests === 'number'));
+    assert.ok(body.active.every((item) => item.provider === 'codebuddy-cn'));
+    assert.ok(!JSON.stringify(body).includes('gpt-5.1'), 'another provider must not leak into the report');
+
+    const all = await (await fetch(`${base}/api/providers/codebuddy-cn/usage?range=all`)).json();
+    assert.equal(all.range, 'all');
+    assert.ok(all.totals.requests >= before.totals.requests + 1);
+
+    const unknown = await fetch(`${base}/api/providers/nope/usage`);
+    assert.equal(unknown.status, 404);
+    const invalid = await fetch(`${base}/api/providers/codebuddy-cn/usage?range=nope`);
+    assert.equal(invalid.status, 400);
+    assert.match((await invalid.json()).error.message, /Unknown range/);
+  } finally {
+    getDb().prepare("DELETE FROM usage_hourly WHERE model IN ('glm-5.3', 'gpt-5.1')").run();
+  }
+});
+
+await test('account summary endpoint returns rolling windows and never leaks the token', async () => {
+  createAccount('codebuddy-cn', { label: 'Summary account', access_token: 'summary-secret-token' });
+  const row = getDb().prepare(
+    "SELECT id FROM accounts WHERE provider = 'codebuddy-cn' AND label = 'Summary account' ORDER BY rowid DESC LIMIT 1",
+  ).get();
+  assert.ok(row?.id, 'seeded account must exist');
+
+  const day = (offset) => new Date(Date.now() - offset * 86400000).toISOString().slice(0, 10);
+  const insert = getDb().prepare(
+    'INSERT INTO account_usage (account_id, day, requests, tokens_in, tokens_out) VALUES (?, ?, ?, ?, ?)',
+  );
+  insert.run(row.id, day(0), 2, 100, 20);
+  insert.run(row.id, day(3), 1, 50, 10);
+  insert.run(row.id, day(40), 7, 700, 70);
+  // Lifetime comes from the account row, which also counts failed requests.
+  getDb().prepare('UPDATE accounts SET requests = 10, tokens_in = 850, tokens_out = 100, errors = 2 WHERE id = ?').run(row.id);
+
+  try {
+    const res = await fetch(`${base}/api/providers/codebuddy-cn/accounts/${row.id}/summary`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.provider, 'codebuddy-cn');
+    assert.equal(body.timeZone, 'UTC');
+    assert.equal(body.account.masked, 'summ••••oken');
+    assert.equal(body.windows.day.requests, 2);
+    assert.equal(body.windows.week.requests, 3, 'today plus three days ago');
+    assert.equal(body.windows.month.requests, 3, 'the 40-day-old row falls outside the month window');
+    assert.equal(body.windows.all.requests, 10);
+    assert.equal(body.errors, 2);
+    assert.equal(body.series.length, 30, 'the popup chart always draws 30 days');
+    assert.equal(body.series[29].day, day(0));
+    assert.equal(body.series[29].tokensIn, 100);
+    assert.ok(!JSON.stringify(body).includes('summary-secret-token'));
+
+    const wrongProvider = await fetch(`${base}/api/providers/codex/accounts/${row.id}/summary`);
+    assert.equal(wrongProvider.status, 404, 'an account must not be readable through another provider');
+    const unknown = await fetch(`${base}/api/providers/codebuddy-cn/accounts/nope/summary`);
+    assert.equal(unknown.status, 404);
+  } finally {
+    deleteAccount(row.id);
+  }
 });
 
 await test('Token Saver settings validate and persist', async () => {
@@ -680,18 +811,35 @@ await test('request log records and clears redacted metadata', async () => {
   recordRequestLog({
     provider: 'codebuddy-cn',
     model: 'glm-5.3',
-    account: 'codebuddy-cn_1',
+    account: 'cbcn_1',
     tokensIn: 12,
     tokensOut: 3,
     ms: 40,
     status: 200,
+    requested: 'cbcn/glm-5.3',
+    route: 'combo',
+    via: 'premium-coding',
+    attempted: ['cbcn/combo-always-429', 'cbcn/glm-5.3'],
+    image: true,
   });
   recordRequestLog({ provider: 'codebuddy-cn', model: 'x', status: 502, error: 'Bearer abc123 failed' });
+  recordRequestLog({ route: 'bogus-reason' });
   const logs = requestLogs();
-  assert.equal(logs.length, before + 2);
-  assert.equal(logs[logs.length - 1].status, 502);
-  assert.doesNotMatch(logs[logs.length - 1].error, /abc123/, 'tokens must be redacted');
-  assert.match(logs[logs.length - 1].error, /\[redacted\]/);
+  assert.equal(logs.length, before + 3);
+  assert.equal(logs[logs.length - 2].status, 502);
+  assert.doesNotMatch(logs[logs.length - 2].error, /abc123/, 'tokens must be redacted');
+  assert.match(logs[logs.length - 2].error, /\[redacted\]/);
+
+  // The routing trace keeps only names and the reason, and unknown reasons are
+  // dropped instead of being rendered as a route badge.
+  const traced = logs[logs.length - 3];
+  assert.equal(traced.requested, 'cbcn/glm-5.3');
+  assert.equal(traced.route, 'combo');
+  assert.equal(traced.via, 'premium-coding');
+  assert.deepEqual(traced.attempted, ['cbcn/combo-always-429', 'cbcn/glm-5.3']);
+  assert.equal(traced.image, true);
+  assert.equal(logs[logs.length - 1].route, null);
+  assert.deepEqual(logs[logs.length - 1].attempted, []);
 
   // The HTTP route reads and clears; run it against a real server instance.
   const clear = await fetch(`${base}/api/request-log`, { method: 'DELETE' });
@@ -773,7 +921,7 @@ await test('settings exposes accessible tabs and Token Saver controls', async ()
 await test('dashboard shell keeps navigation and control ownership consistent', async () => {
   const html = await (await fetch(`${base}/`)).text();
   const rail = [...html.matchAll(/<a class="rail-btn" href="([^"]+)"/g)].map((match) => match[1]);
-  assert.deepEqual(rail, ['/', '/chat', '/providers', '/usage', '/api-keys', '/combos', '/settings']);
+  assert.deepEqual(rail, ['/', '/map', '/chat', '/providers', '/usage', '/api-keys', '/combos', '/settings']);
   assert.equal((html.match(/id="requireKeyToggle"/g) || []).length, 1);
   assert.match(html, /id="pageTitle">Dashboard<\/h1>/);
 
@@ -820,7 +968,7 @@ await test('dashboard shell ships viewport meta and its assets', async () => {
   // Split modules load in dependency order; the last one must be the boot script.
   const scripts = [...html.matchAll(/src="\/assets\/([a-z0-9-]+\.js)"/g)].map((m) => m[1]);
   assert.deepEqual(scripts, DASHBOARD_SCRIPTS, 'dashboard must load every script in order');
-  assert.match(html, /<section class="page" data-page="\/" hidden>/, 'dashboard must not paint before the initial route');
+  assert.match(html, /<section class="page[^"]*" data-page="\/" hidden>/, 'dashboard must not paint before the initial route');
   assert.match(html, /<div class="splash" id="appSplash"[^>]*>/);
   assert.match(html, /dashboard-booting/);
   assert.match(html, /html\.dashboard-booting \{ overflow: hidden; \}/);
@@ -834,6 +982,20 @@ await test('dashboard shell ships viewport meta and its assets', async () => {
     assert.equal(js.status, 200, `${file} must be served`);
     assert.match(js.headers.get('content-type') || '', /javascript/, `${file} must be javascript`);
   }
+});
+
+await test('service map ships the full page without a dashboard card', async () => {
+  const page = await fetch(`${base}/map`);
+  const html = await page.text();
+  assert.equal(page.status, 200);
+  assert.match(html, /<section class="page[^"]*map-page[^"]*" data-page="\/map" hidden>/);
+  assert.doesNotMatch(html, /data-service-map="compact"/, 'the dashboard must not mount a compact map');
+  assert.match(html, /<div class="service-map" data-service-map="full">/);
+  assert.match(html, /href="\/map" data-route="\/map"/);
+
+  const js = await fetchDashboardSources();
+  assert.match(js, /new EventSource\('\/api\/live'\)/, 'the map must subscribe to the live stream');
+  assert.match(js, /prefers-reduced-motion/, 'the map must honor reduced motion');
 });
 
 await test('every dashboard select uses the custom dropdown', async () => {
@@ -895,7 +1057,9 @@ await test('API Keys page has clear control and action hierarchy', async () => {
 
 await test('dashboard cards use persisted SQLite usage data', async () => {
   const html = await (await fetch(`${base}/`)).text();
-  assert.match(html, /id="dashboardHistorySource"[^>]*>History<\/span>/);
+  // The chart card is the range tabpanel; its heading names the data it plots.
+  assert.match(html, /id="dashboardHistoryPanel"[^>]*>[\s\S]{0,160}<h2 class="card-title">Request volume<\/h2>/);
+  assert.match(html, /Persisted usage for the selected range/);
   assert.doesNotMatch(html, /Persisted usage from SQLite|Persisted requests from SQLite/);
   const js = await fetchDashboardSources();
   assert.match(js, /renderStatistics\(latest \|\| \{\}, report\)/);
@@ -905,19 +1069,17 @@ await test('dashboard cards use persisted SQLite usage data', async () => {
   assert.match(js, /totals\.tokensIn/);
 });
 
-await test('dashboard has branded logo and pointer background polish', async () => {
+await test('dashboard has branded logo and motion polish', async () => {
   const html = await (await fetch(`${base}/`)).text();
   assert.match(html, /class="rail-logo"><svg[^>]*aria-label="norouter"/);
   assert.match(html, /class="splash-mark"><svg[^>]*aria-label="norouter"/);
-  assert.match(html, /class="pointer-glow"/);
-  assert.match(html, /dashboard-lock-drift/);
-  assert.match(html, /lock-pointer-x/);
   const css = await (await fetch(`${base}/assets/styles.css`)).text();
-  assert.match(css, /\.pointer-glow\s*\{/);
   assert.match(css, /prefers-reduced-motion: reduce/);
+  // The pointer-following glow was decorative noise; the design keeps motion
+  // limited to state transitions that honour reduced-motion.
+  assert.doesNotMatch(html, /class="pointer-glow"/);
   const js = await fetchDashboardSources();
-  assert.match(js, /pointermove/);
-  assert.match(js, /requestAnimationFrame\(paintPointerGlow\)/);
+  assert.doesNotMatch(js, /paintPointerGlow/);
 });
 
 await test('dashboard keeps connection actions compact and useful', async () => {
@@ -928,7 +1090,11 @@ await test('dashboard keeps connection actions compact and useful', async () => 
   assert.match(html, /id="dashboardApiKey"/);
   assert.doesNotMatch(html, /<h2 class="card-title">Connect<\/h2>/);
   assert.doesNotMatch(html, /copyBase3/);
-  assert.doesNotMatch(html, /SQLite/);
+  // Storage branding stays out of the connect actions; the rail foot names the
+  // store once, so scope the check to the header block.
+  const connectBlock = html.slice(html.indexOf('id="topbarConnect"'), html.indexOf('</header>'));
+  assert.ok(connectBlock.length > 0, 'connect block must stay inside the header');
+  assert.doesNotMatch(connectBlock, /SQLite/);
   const js = await fetchDashboardSources();
   assert.match(js, /function renderDashboardConnect/);
   assert.match(js, /dashboardApiKeySecret/);
@@ -937,16 +1103,18 @@ await test('dashboard keeps connection actions compact and useful', async () => 
 
 await test('dashboard declares its data ranges and chart summary', async () => {
   const html = await (await fetch(`${base}/`)).text();
-  // Session counters must say what window they cover; the usage page uses
-  // day/week/month/all, so the dashboard cannot stay unlabelled.
-  assert.match(html, /id="statRangeChip"[^>]*>since start</);
+  // The range tabs own the window; each chip says which window it covers.
+  assert.match(html, /id="statRangeChip"[^>]*>today</);
   assert.match(html, /id="reqRangeChip"[^>]*>since start</);
   assert.match(html, /id="dashboardRangeTabs"[^>]*role="tablist"/);
   assert.equal((html.match(/data-dashboard-range=/g) || []).length, 4);
-  assert.match(html, /id="dashboardHistoryIn"/);
-  assert.match(html, /id="dashboardHistoryRequests"/);
-  assert.match(html, /id="dashboardHistoryStatsNote"[^>]*role="status"/);
-  assert.match(html, /id="dashboardHistoryRequestsNote"[^>]*role="status"/);
+  // The chart is the tabpanel the range tabs control, and the stat block keeps
+  // the same five persisted counters the API reports.
+  assert.match(html, /id="dashboardHistoryPanel"[^>]*role="tabpanel"/);
+  for (const id of ['statRequests', 'statIn', 'statOut', 'statLatency', 'statErrors']) {
+    assert.match(html, new RegExp(`id="${id}"`), `${id} must render`);
+  }
+  assert.match(html, /class="dash-note">Persisted usage for the selected range, plus live uptime\./);
   // The chart needs a text equivalent that does not depend on hovering a bar.
   assert.match(html, /id="sparkSummary"/);
   assert.match(html, /id="sparkWindow"/);
@@ -980,7 +1148,7 @@ await test('dashboard declares its data ranges and chart summary', async () => {
 });
 
 await test('all dashboard pages are served', async () => {
-  for (const path of ['/providers', '/usage', '/chat', '/settings', '/api-keys', '/dashboard', '/providers/codebuddy-cn']) {
+  for (const path of ['/map', '/providers', '/usage', '/chat', '/settings', '/api-keys', '/dashboard', '/providers/codebuddy-cn']) {
     const res = await fetch(base + path);
     assert.equal(res.status, 200, `${path} should be 200`);
     assert.match(await res.text(), /norouter/, `${path} should serve the shell`);
@@ -1188,6 +1356,56 @@ await test('Codex catalog fetches every account and unions plan access', async (
   }
 });
 
+await test('a streamed Responses tool call keeps its name and finish_reason', async () => {
+  const state = createResponsesStreamState();
+  const acc = createAccumulator();
+  const item = { id: 'fc_1', type: 'function_call', call_id: 'call_1', name: 'get_weather', arguments: '{"city":"Jakarta"}' };
+  const events = [
+    { type: 'response.output_item.added', output_index: 0, item: { ...item, arguments: '' } },
+    { type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: '{"city":' },
+    { type: 'response.function_call_arguments.delta', item_id: 'fc_1', delta: '"Jakarta"}' },
+    { type: 'response.function_call_arguments.done', item_id: 'fc_1', arguments: item.arguments },
+    { type: 'response.output_item.done', output_index: 0, item },
+    { type: 'response.completed', response: { id: 'resp_1', output: [item] } },
+  ];
+  for (const event of events) {
+    const mapped = fromResponsesStream(event, state);
+    if (mapped.frame) acc.feed(mapped.frame);
+  }
+  const completion = acc.toCompletion('gpt-6-luna');
+  const call = completion.choices[0].message.tool_calls[0];
+  assert.equal(call.id, 'call_1');
+  assert.equal(call.function.name, 'get_weather');
+  assert.equal(call.function.arguments, item.arguments);
+  assert.equal(completion.choices[0].finish_reason, 'tool_calls');
+});
+
+await test('parallel Responses tool calls keep separate indexes and full arguments', async () => {
+  const state = createResponsesStreamState();
+  const acc = createAccumulator();
+  const items = [
+    { id: 'fc_1', type: 'function_call', call_id: 'call_1', name: 'get_weather', arguments: '{"city":"Jakarta"}' },
+    { id: 'fc_2', type: 'function_call', call_id: 'call_2', name: 'get_time', arguments: '{"city":"Jakarta"}' },
+  ];
+  const indexes = [];
+  const events = items.flatMap((item, index) => [
+    { type: 'response.output_item.added', output_index: index, item: { ...item, arguments: '' } },
+    { type: 'response.output_item.done', output_index: index, item },
+  ]).concat({ type: 'response.completed', response: { id: 'resp_2', output: items } });
+  for (const event of events) {
+    const mapped = fromResponsesStream(event, state);
+    if (!mapped.frame) continue;
+    for (const call of mapped.frame.choices[0].delta.tool_calls || []) indexes.push(call.index);
+    acc.feed(mapped.frame);
+  }
+  const calls = acc.toCompletion('gpt-6-luna').choices[0].message.tool_calls;
+  assert.deepEqual(indexes, [0, 0, 1, 1]);
+  assert.deepEqual(calls.map((call) => [call.id, call.function.name, call.function.arguments]), [
+    ['call_1', 'get_weather', '{"city":"Jakarta"}'],
+    ['call_2', 'get_time', '{"city":"Jakarta"}'],
+  ]);
+});
+
 await test('Codex chat converts tool results to Responses items', async () => {
   process.env.CODEX_BASE_URL = `${stubBase}/v2`;
   probeShapes.length = 0;
@@ -1214,6 +1432,45 @@ await test('Codex chat converts tool results to Responses items', async () => {
     const body = await result.text();
     assert.equal(result.status, 200, body);
     assert.deepEqual(probeShapes, []);
+  } finally {
+    delete process.env.CODEX_BASE_URL;
+    const pool = await (await fetch(`${base}/api/providers/codex/accounts?pageSize=200`)).json();
+    for (const account of pool.items) await fetch(`${base}/api/providers/codex/accounts/${account.id}`, { method: 'DELETE' });
+  }
+});
+
+await test('Codex keeps reasoning_effort through the Responses conversion', async () => {
+  process.env.CODEX_BASE_URL = `${stubBase}/v2`;
+  responsesBodies.length = 0;
+  try {
+    const created = await fetch(`${base}/api/providers/codex/accounts`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 'Codex reasoning', access_token: 'codex-pro-token' }),
+    });
+    assert.equal(created.status, 201);
+    const account = (await created.json()).items.find((row) => row.label === 'Codex reasoning');
+    const { saveCodexAccountCatalog } = await import('../noroute_src/lib/codex-account.js');
+    saveCodexAccountCatalog(account.id, 'pro', ['gpt-stub-codex']);
+    const result = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'cx/gpt-stub-codex',
+        stream: true,
+        thinking: { type: 'enabled' },
+        enable_thinking: true,
+        reasoning_effort: 'high',
+        reasoning: { effort: 'high' },
+        messages: [{ role: 'user', content: 'think' }],
+      }),
+    });
+    assert.equal(result.status, 200, await result.text());
+    // Codex has no reasoning mapping, so mapReasoning must keep the canonical
+    // reasoning_effort for toResponsesRequest to convert into reasoning.effort.
+    const sent = responsesBodies.at(-1);
+    assert.deepEqual(sent.reasoning, { effort: 'high' });
+    assert.equal(sent.thinking, undefined);
+    assert.equal(sent.enable_thinking, undefined);
+    assert.equal(sent.messages, undefined);
   } finally {
     delete process.env.CODEX_BASE_URL;
     const pool = await (await fetch(`${base}/api/providers/codex/accounts?pageSize=200`)).json();
@@ -1428,6 +1685,52 @@ await test('models can be disabled and enabled without deleting them', async () 
   assert.equal(enabledBody.models.find((row) => row.id === model).enabled, true);
 });
 
+await test('a disabled Codex model leaves /v1/models and survives a catalog refresh', async () => {
+  process.env.CODEX_BASE_URL = `${stubBase}/v2`;
+  const { saveCodexAccountCatalog } = await import('../noroute_src/lib/codex-account.js');
+  const created = await fetch(`${base}/api/providers/codex/accounts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label: 'Codex disabled smoke', access_token: 'codex-disabled-token' }),
+  });
+  assert.equal(created.status, 201);
+  const account = (await created.json()).items.find((row) => row.label === 'Codex disabled smoke');
+  saveCodexAccountCatalog(account.id, 'pro', ['gpt-stub-codex', 'gpt-stub-fast']);
+  const setEnabled = (enabled) => fetch(`${base}/api/providers/codex/models/gpt-stub-codex`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  try {
+    const before = await (await fetch(`${base}/v1/models`)).json();
+    assert.ok(before.data.some((m) => m.id === 'cx/gpt-stub-codex'));
+
+    assert.equal((await setEnabled(false)).status, 200);
+    const after = await (await fetch(`${base}/v1/models`)).json();
+    assert.ok(!after.data.some((m) => m.id === 'cx/gpt-stub-codex'), 'disabled codex model must leave /v1/models');
+    assert.ok(after.data.some((m) => m.id === 'cx/gpt-stub-fast'), 'other codex models stay listed');
+    assert.ok(resolveModel('cx/gpt-stub-codex').error, 'disabled codex model must stop resolving');
+    assert.equal(resolveModel('cx/gpt-stub-fast').model, 'gpt-stub-fast');
+
+    // A catalog refresh updates account access; it must not re-enable a model
+    // the operator disabled.
+    const refreshed = await fetch(`${base}/api/providers/codex/models/fetch`, { method: 'POST' });
+    const refreshedBody = await refreshed.json();
+    assert.equal(refreshed.status, 200, JSON.stringify(refreshedBody));
+    const afterRefresh = await (await fetch(`${base}/v1/models`)).json();
+    assert.ok(!afterRefresh.data.some((m) => m.id === 'cx/gpt-stub-codex'));
+
+    assert.equal((await setEnabled(true)).status, 200);
+    const restored = await (await fetch(`${base}/v1/models`)).json();
+    assert.ok(restored.data.some((m) => m.id === 'cx/gpt-stub-codex'));
+  } finally {
+    await setEnabled(true);
+    delete process.env.CODEX_BASE_URL;
+    const pool = await (await fetch(`${base}/api/providers/codex/accounts?pageSize=200`)).json();
+    for (const row of pool.items) await fetch(`${base}/api/providers/codex/accounts/${row.id}`, { method: 'DELETE' });
+  }
+});
+
 await test('CodeBuddy model fetch is disabled because /models is unsupported', async () => {
   const res = await fetch(`${base}/api/providers/codebuddy-cn/models/fetch`, { method: 'POST' });
   const body = await res.json();
@@ -1458,6 +1761,15 @@ await test('custom provider can be created, used and deleted', async () => {
     assert.equal(created.pool.total, 0);
     assert.equal(created.models.length, 2);
 
+    // Empty catalogs are only valid from birth; a stray empty PATCH must not
+    // wipe a provider that already routes models.
+    const cleared = await fetch(`${base}/api/providers/${id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ models: [] }),
+    });
+    assert.equal(cleared.status, 400, 'clearing an existing catalog is rejected');
+
     assert.equal(resolveModel(`${id}/stub-model-a`).model, 'stub-model-a');
     const catalog = await (await fetch(`${base}/v1/models`)).json();
     assert.ok(catalog.data.some((m) => m.id === `${id}/stub-model-a`));
@@ -1476,6 +1788,24 @@ await test('custom provider can be created, used and deleted', async () => {
       /No credential for/,
       'open provider must not demand a credential',
     );
+
+    // Custom providers follow the same visibility rule as bundled ones.
+    const disabled = await fetch(`${base}/api/providers/${id}/models/stub-model-a`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    });
+    assert.equal(disabled.status, 200);
+    const hidden = await (await fetch(`${base}/v1/models`)).json();
+    assert.ok(!hidden.data.some((m) => m.id === `${id}/stub-model-a`), 'disabled model must leave /v1/models');
+    assert.ok(hidden.data.some((m) => m.id === `${id}/stub-model-b`), 'other models stay listed');
+    assert.ok(resolveModel(`${id}/stub-model-a`).error, 'disabled model must stop resolving');
+    const enabled = await fetch(`${base}/api/providers/${id}/models/stub-model-a`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    assert.equal(enabled.status, 200);
   } finally {
     const del = await fetch(`${base}/api/providers/${id}`, { method: 'DELETE' });
     assert.equal(del.status, 200);
@@ -1484,6 +1814,445 @@ await test('custom provider can be created, used and deleted', async () => {
   const gone = await fetch(`${base}/api/providers/${id}`);
   assert.equal(gone.status, 404);
 });
+
+await test('custom provider can be created without models, then get one from detail', async () => {
+  const stamp = String(Date.now());
+  const name = `Bare ${stamp}`;
+  const prefix = `bare-${stamp.slice(-8)}`;
+  const create = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    // Mirrors the dashboard create modal: name, prefix and endpoint only.
+    body: JSON.stringify({ name, prefix, baseUrl: `${stubBase}/v2`, chatPath: '/chat/completions' }),
+  });
+  const created = await create.json();
+  const id = created.created;
+  try {
+    assert.equal(create.status, 201, JSON.stringify(created));
+    assert.ok(id);
+    assert.equal(created.models.length, 0, 'models are optional at creation');
+
+    // The edit form sends the full config without a models key when the
+    // provider never had one, so saving other fields must stay possible.
+    const edited = await fetch(`${base}/api/providers/${id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: `${name} edited`, baseUrl: `${stubBase}/v2`, chatPath: '/chat/completions' }),
+    });
+    const editedBody = await edited.json();
+    assert.equal(edited.status, 200, JSON.stringify(editedBody));
+    assert.equal(editedBody.models.length, 0, 'a model-less provider stays editable');
+
+    const added = await fetch(`${base}/api/providers/${id}/models`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'stub-model-later' }),
+    });
+    const addedBody = await added.json();
+    assert.equal(added.status, 201, JSON.stringify(addedBody));
+    assert.ok(addedBody.models.some((model) => model.id === 'stub-model-later'));
+
+    const catalog = await (await fetch(`${base}/v1/models`)).json();
+    assert.ok(catalog.data.some((model) => model.id === `${created.provider.prefix}/stub-model-later`));
+  } finally {
+    await fetch(`${base}/api/providers/${id}`, { method: 'DELETE' });
+  }
+});
+
+await test('custom provider formats default to the conventional chat path', async () => {
+  const stamp = Date.now();
+  const expected = { openai: '/chat/completions', responses: '/responses', anthropic: '/messages' };
+  for (const [format, chatPath] of Object.entries(expected)) {
+    const id = `preset-${format}-${stamp}`;
+    const create = await fetch(`${base}/api/providers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: `Preset ${format}`,
+        id,
+        prefix: `pre-${format}-${String(stamp).slice(-6)}`,
+        baseUrl: `${stubBase}/v2`,
+        format,
+      }),
+    });
+    const created = await create.json();
+    try {
+      assert.equal(create.status, 201, JSON.stringify(created));
+      assert.equal(created.provider.format, format);
+      assert.equal(created.provider.config.chatPath, chatPath, 'format alone picks its conventional endpoint');
+    } finally {
+      await fetch(`${base}/api/providers/${id}`, { method: 'DELETE' });
+    }
+  }
+
+  // An explicit path wins over the preset; gateways commonly mount the API
+  // under a version prefix.
+  const customId = `preset-custom-${stamp}`;
+  const custom = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: `Preset custom ${stamp}`,
+      id: customId,
+      baseUrl: `${stubBase}/v2`,
+      format: 'anthropic',
+      chatPath: '/v1/messages',
+    }),
+  });
+  const customBody = await custom.json();
+  try {
+    assert.equal(custom.status, 201, JSON.stringify(customBody));
+    assert.equal(customBody.provider.config.chatPath, '/v1/messages');
+  } finally {
+    await fetch(`${base}/api/providers/${customId}`, { method: 'DELETE' });
+  }
+
+  const bad = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: `Bad format ${stamp}`,
+      id: `bad-format-${stamp}`,
+      baseUrl: `${stubBase}/v2`,
+      format: 'grpc',
+    }),
+  });
+  const badBody = await bad.json();
+  assert.equal(bad.status, 400);
+  assert.match(badBody.error.message, /Format must be one of/);
+});
+
+// Reads the client-visible stream as raw text so the framing itself is checked:
+// translated frames must be separated by real newlines and end in a real
+// [DONE] sentinel, not a literal backslash-n.
+async function collectChatStream(response) {
+  const text = await response.text();
+  assert.ok(
+    text.endsWith('data: [DONE]\n\n'),
+    `stream must end with a real [DONE] frame: ${JSON.stringify(text.slice(-40))}`,
+  );
+  assert.ok(!text.includes('\\n'), 'SSE frames must not contain literal backslash-n');
+  const frames = [];
+  for (const block of text.split('\n\n')) {
+    const line = block.trim();
+    if (!line.startsWith('data:')) continue;
+    const payload = line.slice(5).trim();
+    if (!payload || payload === '[DONE]') continue;
+    frames.push(JSON.parse(payload));
+  }
+  return frames;
+}
+
+await test('anthropic custom provider translates requests, responses and streams', async () => {
+  const id = `anthropic-${Date.now()}`;
+  const create = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: `Anthropic ${id}`,
+      id,
+      baseUrl: `${stubBase}/v2`,
+      format: 'anthropic',
+      models: 'anthropic-plain, anthropic-tool, anthropic-thinking',
+      requiresAccount: true,
+    }),
+  });
+  const created = await create.json();
+  assert.equal(create.status, 201, JSON.stringify(created));
+  assert.equal(created.provider.format, 'anthropic');
+  assert.equal(created.provider.config.chatPath, '/messages');
+  const account = await fetch(`${base}/api/providers/${id}/accounts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label: 'Anthropic account', access_token: 'anthropic-token' }),
+  });
+  assert.equal(account.status, 201, await account.text());
+  try {
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: `${id}/anthropic-plain`,
+        max_tokens: 300,
+        temperature: 0.2,
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'get_weather',
+            description: 'Weather lookup',
+            parameters: { type: 'object', properties: { city: { type: 'string' } } },
+          },
+        }],
+        tool_choice: { type: 'function', function: { name: 'get_weather' } },
+        messages: [
+          { role: 'system', content: 'Be terse.' },
+          { role: 'user', content: 'Weather in Jakarta?' },
+          { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Jakarta"}' } }] },
+          { role: 'tool', tool_call_id: 'call_1', content: '{"temp":30}' },
+        ],
+      }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.equal(body.choices[0].message.content, 'I am the anthropic-plain model.');
+    assert.equal(body.choices[0].finish_reason, 'stop');
+    assert.deepEqual(body.usage, { prompt_tokens: 9, completion_tokens: 5, total_tokens: 14 });
+
+    const upstream = anthropicBodies.at(-1);
+    assert.ok(upstream.system.includes('Be terse.'), 'system messages move to the top-level system field');
+    assert.equal(upstream.max_tokens, 300);
+    assert.equal(upstream.temperature, 0.2);
+    assert.equal(upstream.stream, false);
+    assert.equal(upstream.reasoning_effort, undefined, 'OpenAI-only reasoning fields are not forwarded');
+    assert.equal(upstream.stream_options, undefined);
+    assert.ok(
+      upstream.messages.every((message) => ['user', 'assistant'].includes(message.role)),
+      'no system role may survive in messages',
+    );
+    const assistant = upstream.messages.find((message) => message.role === 'assistant');
+    assert.equal(assistant.content[0].type, 'tool_use');
+    assert.equal(assistant.content[0].id, 'call_1');
+    assert.deepEqual(assistant.content[0].input, { city: 'Jakarta' });
+    const toolTurn = upstream.messages.at(-1);
+    assert.equal(toolTurn.role, 'user');
+    assert.equal(toolTurn.content[0].type, 'tool_result');
+    assert.equal(toolTurn.content[0].tool_use_id, 'call_1');
+    assert.equal(toolTurn.content[0].content, '{"temp":30}');
+    assert.equal(upstream.tools[0].name, 'get_weather');
+    assert.equal(upstream.tools[0].input_schema.type, 'object');
+    assert.deepEqual(upstream.tool_choice, { type: 'tool', name: 'get_weather' });
+
+    // A tool-only answer becomes an OpenAI tool_calls message, not text.
+    const toolRes = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: `${id}/anthropic-tool`,
+        max_tokens: 64,
+        messages: [{ role: 'user', content: 'Weather?' }],
+      }),
+    });
+    const toolBody = await toolRes.json();
+    assert.equal(toolRes.status, 200, JSON.stringify(toolBody));
+    assert.equal(toolBody.choices[0].message.content, null);
+    assert.equal(toolBody.choices[0].finish_reason, 'tool_calls');
+    assert.equal(toolBody.choices[0].message.tool_calls[0].function.name, 'get_weather');
+    assert.deepEqual(
+      JSON.parse(toolBody.choices[0].message.tool_calls[0].function.arguments),
+      { city: 'Jakarta', unit: 'celsius' },
+    );
+
+    const streamRes = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: `${id}/anthropic-plain`,
+        stream: true,
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    assert.equal(streamRes.status, 200);
+    assert.match(streamRes.headers.get('content-type') || '', /text\/event-stream/);
+    const frames = await collectChatStream(streamRes);
+    assert.ok(frames.length > 1);
+    assert.ok(
+      frames.every((frame) => frame.object === 'chat.completion.chunk'),
+      'Anthropic events must never leak to the client',
+    );
+    const streamed = frames.map((frame) => frame.choices?.[0]?.delta?.content || '').join('');
+    assert.equal(streamed.trim(), 'I am the anthropic-plain model.');
+    const finish = frames.at(-1);
+    assert.equal(finish.choices[0].finish_reason, 'stop');
+    assert.deepEqual(finish.usage, { prompt_tokens: 9, completion_tokens: 7, total_tokens: 16 });
+
+    // Partial JSON argument fragments must merge into one valid call.
+    const toolStream = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: `${id}/anthropic-tool`,
+        stream: true,
+        messages: [{ role: 'user', content: 'Weather?' }],
+      }),
+    });
+    const toolFrames = await collectChatStream(toolStream);
+    let toolName = '';
+    let args = '';
+    for (const frame of toolFrames) {
+      const call = frame.choices?.[0]?.delta?.tool_calls?.[0];
+      if (!call) continue;
+      if (call.function?.name) toolName = call.function.name;
+      if (call.function?.arguments) args += call.function.arguments;
+    }
+    assert.equal(toolName, 'get_weather');
+    assert.deepEqual(JSON.parse(args), { city: 'Jakarta', unit: 'celsius' });
+    assert.equal(toolFrames.at(-1).choices[0].finish_reason, 'tool_calls');
+
+    // thinking_delta is surfaced as reasoning_content, like other providers.
+    const thinkStream = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: `${id}/anthropic-thinking`,
+        stream: true,
+        messages: [{ role: 'user', content: 'think' }],
+      }),
+    });
+    const thinkFrames = await collectChatStream(thinkStream);
+    const reasoning = thinkFrames.map((frame) => frame.choices?.[0]?.delta?.reasoning_content || '').join('');
+    assert.equal(reasoning.trim(), 'Let me think about it.');
+    assert.equal(thinkFrames.at(-1).choices[0].finish_reason, 'stop');
+  } finally {
+    await fetch(`${base}/api/providers/${id}`, { method: 'DELETE' });
+  }
+});
+
+await test('responses custom provider translates chat input and stream output', async () => {
+  const id = `responses-${Date.now()}`;
+  const create = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: `Responses ${id}`,
+      id,
+      baseUrl: `${stubBase}/v2`,
+      format: 'responses',
+      models: 'responses-plain',
+      requiresAccount: true,
+    }),
+  });
+  const created = await create.json();
+  assert.equal(create.status, 201, JSON.stringify(created));
+  assert.equal(created.provider.format, 'responses');
+  assert.equal(created.provider.config.chatPath, '/responses');
+  const account = await fetch(`${base}/api/providers/${id}/accounts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label: 'Responses account', access_token: 'responses-token' }),
+  });
+  assert.equal(account.status, 201, await account.text());
+  try {
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: `${id}/responses-plain`,
+        max_tokens: 128,
+        tools: [{
+          type: 'function',
+          function: { name: 'get_weather', parameters: { type: 'object', properties: { city: { type: 'string' } } } },
+        }],
+        tool_choice: 'auto',
+        messages: [
+          { role: 'user', content: 'Weather in Jakarta?' },
+          { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Jakarta"}' } }] },
+          { role: 'tool', tool_call_id: 'call_1', content: '{"temp":30}' },
+        ],
+      }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.equal(body.choices[0].message.content, 'I am the responses-plain Responses model.');
+    assert.equal(body.choices[0].finish_reason, 'stop');
+    assert.deepEqual(body.usage, { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18 });
+
+    const upstream = responsesBodies.at(-1);
+    assert.equal(upstream.store, false);
+    assert.equal(upstream.messages, undefined, 'a chat body must never reach /responses');
+    assert.ok(Array.isArray(upstream.input));
+    const call = upstream.input.find((item) => item.type === 'function_call');
+    assert.equal(call.call_id, 'call_1');
+    assert.equal(call.name, 'get_weather');
+    assert.equal(call.arguments, '{"city":"Jakarta"}');
+    const output = upstream.input.find((item) => item.type === 'function_call_output');
+    assert.equal(output.call_id, 'call_1');
+    assert.equal(output.output, '{"temp":30}');
+    assert.equal(upstream.tools[0].name, 'get_weather');
+    assert.equal(upstream.tool_choice, 'auto');
+
+    const streamRes = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: `${id}/responses-plain`,
+        stream: true,
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    assert.equal(streamRes.status, 200);
+    const frames = await collectChatStream(streamRes);
+    assert.ok(frames.length > 1);
+    assert.ok(
+      frames.every((frame) => frame.object === 'chat.completion.chunk'),
+      'Responses events must never leak to the client',
+    );
+    const streamed = frames.map((frame) => frame.choices?.[0]?.delta?.content || '').join('');
+    assert.equal(streamed.trim(), 'I am the responses-plain Responses model.');
+    assert.equal(frames.at(-1).choices[0].finish_reason, 'stop');
+  } finally {
+    await fetch(`${base}/api/providers/${id}`, { method: 'DELETE' });
+  }
+});
+
+await test('non-stream responses provider buffers SSE into one completion', async () => {
+  const id = `responses-buffered-${Date.now()}`;
+  const create = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: `Responses buffered ${id}`,
+      id,
+      baseUrl: `${stubBase}/v2`,
+      format: 'responses',
+      forceStream: true,
+      models: 'responses-forced,responses-mislabeled',
+      requiresAccount: true,
+    }),
+  });
+  const created = await create.json();
+  assert.equal(create.status, 201, JSON.stringify(created));
+  const account = await fetch(`${base}/api/providers/${id}/accounts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label: 'Buffered account', access_token: 'buffered-token' }),
+  });
+  assert.equal(account.status, 201, await account.text());
+  try {
+    const forced = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: `${id}/responses-forced`,
+        stream: false,
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    const forcedBody = await forced.json();
+    assert.equal(forced.status, 200, JSON.stringify(forcedBody));
+    assert.equal(forcedBody.choices[0].message.content.trim(), 'I am the responses-forced Responses model.');
+    assert.equal(forcedBody.choices[0].finish_reason, 'stop');
+    assert.equal(forcedBody.object, 'chat.completion');
+
+    // The upstream ignored the Content-Type header convention; the body is
+    // still an event stream and must not leak to the client as error text.
+    const mislabeled = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: `${id}/responses-mislabeled`,
+        stream: false,
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    const mislabeledBody = await mislabeled.json();
+    assert.equal(mislabeled.status, 200, JSON.stringify(mislabeledBody));
+    assert.equal(mislabeledBody.choices[0].message.content, 'I am the responses-mislabeled Responses model.');
+    assert.equal(mislabeledBody.choices[0].finish_reason, 'stop');
+  } finally {
+    await fetch(`${base}/api/providers/${id}`, { method: 'DELETE' });
+  }
+});
+
 
 await test('reasoning levels map to provider params and history reasoning is stripped', async () => {
   const create = await fetch(`${base}/api/providers/codebuddy-cn/accounts`, {
@@ -1567,6 +2336,122 @@ await test('reasoning levels map to provider params and history reasoning is str
     const nestedBody = await nested.json();
     assert.equal(nestedBody.echoed.reasoning_effort, 'low');
 
+    // ZCode sends every reasoning dialect at once. Only the provider's mapped
+    // parameter may reach upstream; the alias fields must all be stripped.
+    const zcode = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'cbcn/echo-reasoning',
+        thinking: { type: 'enabled' },
+        enable_thinking: true,
+        reasoning_effort: 'high',
+        reasoning: { effort: 'high' },
+        messages: [{ role: 'user', content: 'zcode shape' }],
+      }),
+    });
+    const zcodeBody = await zcode.json();
+    assert.equal(zcode.status, 200, JSON.stringify(zcodeBody));
+    assert.equal(zcodeBody.echoed.reasoning_effort, 'high');
+    assert.equal(zcodeBody.echoed.reasoning_summary, 'auto');
+    const zcodeUpstream = chatBodies.at(-1);
+    assert.equal(zcodeUpstream.reasoning_effort, 'high');
+    assert.equal(zcodeUpstream.reasoning_summary, 'auto');
+    assert.equal(zcodeUpstream.thinking, undefined);
+    assert.equal(zcodeUpstream.reasoning, undefined);
+    assert.equal(zcodeUpstream.enable_thinking, undefined);
+
+    // A provider without reasoning config has nothing to map, so the canonical
+    // reasoning_effort is forwarded untouched while the aliases stay stripped.
+    const plainId = `zcode-plain-${Date.now()}`;
+    const plainCreate = await fetch(`${base}/api/providers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: `Plain ${plainId}`,
+        id: plainId,
+        baseUrl: `${stubBase}/v2`,
+        models: 'echo-reasoning',
+        requiresAccount: true,
+      }),
+    });
+    assert.equal(plainCreate.status, 201, await plainCreate.text());
+    const plainAccount = await fetch(`${base}/api/providers/${plainId}/accounts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 'Plain account', access_token: 'plain-token' }),
+    });
+    assert.equal(plainAccount.status, 201);
+    try {
+      const plain = await fetch(`${base}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: `${plainId}/echo-reasoning`,
+          thinking: { type: 'enabled' },
+          enable_thinking: true,
+          reasoning_effort: 'high',
+          reasoning: { effort: 'high' },
+          messages: [{ role: 'user', content: 'zcode shape' }],
+        }),
+      });
+      const plainBody = await plain.json();
+      assert.equal(plain.status, 200, JSON.stringify(plainBody));
+      assert.equal(plainBody.echoed.reasoning_effort, 'high');
+      assert.equal(plainBody.echoed.reasoning_summary, null);
+      const plainUpstream = chatBodies.at(-1);
+      assert.equal(plainUpstream.reasoning_effort, 'high');
+      assert.equal(plainUpstream.thinking, undefined);
+      assert.equal(plainUpstream.reasoning, undefined);
+      assert.equal(plainUpstream.enable_thinking, undefined);
+
+      // A saved config must reach the runtime provider, otherwise the field
+      // would persist in SQLite but never change what is forwarded.
+      const patch = await fetch(`${base}/api/providers/${plainId}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          reasoning: {
+            enabled: true,
+            levels: ['low', 'medium', 'high'],
+            mapping: { reasoning_effort: '$level' },
+            defaultLevel: 'medium',
+          },
+        }),
+      });
+      assert.equal(patch.status, 200, await patch.text());
+      const mapped = await fetch(`${base}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: `${plainId}/echo-reasoning`,
+          thinking: { type: 'enabled' },
+          enable_thinking: true,
+          reasoning_effort: 'high',
+          reasoning: { effort: 'high' },
+          messages: [{ role: 'user', content: 'zcode shape' }],
+        }),
+      });
+      const mappedBody = await mapped.json();
+      assert.equal(mapped.status, 200, JSON.stringify(mappedBody));
+      assert.equal(mappedBody.echoed.reasoning_effort, 'high');
+      const flagsOnly = await fetch(`${base}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: `${plainId}/echo-reasoning`,
+          thinking: { type: 'enabled' },
+          enable_thinking: true,
+          messages: [{ role: 'user', content: 'flags only' }],
+        }),
+      });
+      const flagsOnlyBody = await flagsOnly.json();
+      assert.equal(flagsOnly.status, 200, JSON.stringify(flagsOnlyBody));
+      assert.equal(flagsOnlyBody.echoed.reasoning_effort, 'medium');
+    } finally {
+      await fetch(`${base}/api/providers/${plainId}`, { method: 'DELETE' });
+    }
+
     const off = await fetch(`${base}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1642,6 +2527,222 @@ await test('stream relay drops empty tool_calls arrays for any provider', async 
     assert.equal(reasoning, 'Think in one block.');
     assert.equal(content, 'Done.');
     assert.equal(toolCall?.function?.name, 'stub_tool', 'non-empty tool calls must still be relayed');
+  } finally {
+    const del = await fetch(`${base}/api/providers/${id}`, { method: 'DELETE' });
+    assert.equal(del.status, 200);
+  }
+});
+
+await test('/api/live streams request phases without account or prompt data', async () => {
+  const id = `live-${Date.now()}`;
+  const create = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: `Live ${id}`,
+      id,
+      baseUrl: `${stubBase}/v2`,
+      models: 'live-model',
+      requiresAccount: true,
+    }),
+  });
+  assert.equal(create.status, 201, await create.clone().text());
+  const account = await fetch(`${base}/api/providers/${id}/accounts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label: 'Live account', access_token: 'live-secret-token' }),
+  });
+  assert.equal(account.status, 201);
+
+  const controller = new AbortController();
+  const live = await fetch(`${base}/api/live`, { signal: controller.signal });
+  assert.equal(live.status, 200);
+  assert.match(live.headers.get('content-type') || '', /text\/event-stream/);
+
+  const events = [];
+  let settle;
+  const arrived = new Promise((resolve, reject) => { settle = { resolve, reject }; });
+  const reader = (async () => {
+    for await (const event of readSSEEvents(live.body)) {
+      events.push(event.data);
+      if (event.data?.phase === 'finish' || event.data?.phase === 'error') {
+        settle.resolve();
+        return;
+      }
+    }
+    settle.resolve();
+  })().catch((err) => {
+    if (!controller.signal.aborted) settle.reject(err);
+  });
+
+  let deadline;
+  try {
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: `${id}/live-model`,
+        stream: true,
+        messages: [{ role: 'user', content: 'live probe prompt' }],
+      }),
+    });
+    assert.equal(res.status, 200);
+    await res.text();
+
+    const timeout = new Promise((_, reject) => {
+      deadline = setTimeout(() => reject(new Error('live stream did not finish')), 10_000);
+      deadline.unref?.();
+    });
+    await Promise.race([arrived, timeout]);
+
+    assert.equal(events[0]?.phase, 'hello', 'the stream opens with a hello frame');
+    assert.ok(Array.isArray(events[0].active), 'hello carries the in-flight allowlist');
+    const phases = events.map((event) => event.phase);
+    for (const phase of ['start', 'route', 'first', 'finish']) {
+      assert.ok(phases.includes(phase), `missing ${phase} phase: ${phases.join(',')}`);
+    }
+
+    const start = events.find((event) => event.phase === 'start');
+    assert.equal(start.kind, 'chat');
+    assert.equal(start.stream, true);
+    const route = events.find((event) => event.phase === 'route');
+    assert.equal(route.provider, id);
+    assert.equal(route.attempt, 1);
+    const finish = events.find((event) => event.phase === 'finish');
+    assert.equal(finish.provider, id);
+    assert.equal(finish.status, 200);
+    assert.equal(typeof finish.tokensIn, 'number');
+    assert.equal(typeof finish.tokensOut, 'number');
+    assert.ok(finish.ms >= 0);
+
+    const raw = JSON.stringify(events);
+    assert.doesNotMatch(raw, /"account"/, 'events must not carry account labels');
+    assert.doesNotMatch(raw, /live-secret-token|Live account|live probe prompt/, 'events must not leak credentials or prompt text');
+  } finally {
+    clearTimeout(deadline);
+    controller.abort();
+    await reader;
+    const del = await fetch(`${base}/api/providers/${id}`, { method: 'DELETE' });
+    assert.equal(del.status, 200);
+  }
+});
+
+await test('/api/live reports a model error without upstream message text', async () => {
+  const controller = new AbortController();
+  const live = await fetch(`${base}/api/live`, { signal: controller.signal });
+  assert.equal(live.status, 200);
+
+  const events = [];
+  let settle;
+  const arrived = new Promise((resolve, reject) => { settle = { resolve, reject }; });
+  const reader = (async () => {
+    for await (const event of readSSEEvents(live.body)) {
+      events.push(event.data);
+      if (event.data?.phase === 'error') {
+        settle.resolve();
+        return;
+      }
+    }
+    settle.resolve();
+  })().catch((err) => {
+    if (!controller.signal.aborted) settle.reject(err);
+  });
+
+  let deadline;
+  try {
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: `missing-${Date.now()}`,
+        messages: [{ role: 'user', content: 'secret probe prompt' }],
+      }),
+    });
+    assert.equal(res.status, 400);
+    await res.text();
+
+    const timeout = new Promise((_, reject) => {
+      deadline = setTimeout(() => reject(new Error('live error frame did not arrive')), 10_000);
+      deadline.unref?.();
+    });
+    await Promise.race([arrived, timeout]);
+
+    const start = events.find((event) => event.phase === 'start');
+    assert.equal(start.kind, 'chat');
+    const error = events.find((event) => event.phase === 'error');
+    assert.equal(error.stage, 'model');
+    assert.equal(error.status, 400);
+    assert.equal(error.provider, undefined, 'a local model error has no provider yet');
+    assert.doesNotMatch(JSON.stringify(events), /secret probe prompt|Unknown model|non-empty/);
+  } finally {
+    clearTimeout(deadline);
+    controller.abort();
+    await reader;
+  }
+});
+
+await test('reasoning alias reaches stream and non-stream clients as reasoning_content', async () => {
+  const id = `alias-${Date.now()}`;
+  const model = 'reasoning-alias';
+  // Upstage-style upstreams stream `delta.reasoning`; a custom provider proves
+  // the normalization is not keyed to a built-in provider.
+  const create = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: `Alias ${id}`,
+      id,
+      baseUrl: `${stubBase}/v2`,
+      models: model,
+      requiresAccount: true,
+    }),
+  });
+  assert.equal(create.status, 201, await create.clone().text());
+  const account = await fetch(`${base}/api/providers/${id}/accounts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label: 'Alias account', access_token: 'alias-token' }),
+  });
+  assert.equal(account.status, 201);
+  try {
+    const streamed = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: `${id}/${model}`,
+        stream: true,
+        messages: [{ role: 'user', content: 'think' }],
+      }),
+    });
+    assert.equal(streamed.status, 200);
+    let reasoning = '';
+    let alias = '';
+    let content = '';
+    for await (const event of readSSEEvents(streamed.body)) {
+      const delta = event.data?.choices?.[0]?.delta;
+      if (!delta) continue;
+      if (typeof delta.reasoning_content === 'string') reasoning += delta.reasoning_content;
+      if (typeof delta.reasoning === 'string') alias += delta.reasoning;
+      if (typeof delta.content === 'string') content += delta.content;
+    }
+    assert.equal(reasoning, 'Alias thought.', 'canonical reasoning_content must be relayed');
+    assert.equal(alias, 'Alias thought.', 'the original alias must stay readable');
+    assert.equal(content, 'Alias answer.');
+
+    const plain = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: `${id}/${model}`,
+        stream: false,
+        messages: [{ role: 'user', content: 'think' }],
+      }),
+    });
+    const body = await plain.json();
+    assert.equal(plain.status, 200, JSON.stringify(body));
+    assert.equal(body.choices[0].message.reasoning_content, 'Alias thought.');
+    assert.equal(body.choices[0].message.reasoning, 'Alias thought.');
+    assert.equal(body.choices[0].message.content, 'Alias answer.');
   } finally {
     const del = await fetch(`${base}/api/providers/${id}`, { method: 'DELETE' });
     assert.equal(del.status, 200);
@@ -1770,10 +2871,16 @@ await test('provider account labels reuse the smallest gap and can be renamed', 
   const one = await create('label-gap-one');
   const two = await create('label-gap-two');
   const three = await create('label-gap-three');
-  assert.deepEqual([one.label, two.label, three.label], ['codebuddy-cn_1', 'codebuddy-cn_2', 'codebuddy-cn_3']);
+  assert.deepEqual([one.label, two.label, three.label], ['cbcn_1', 'cbcn_2', 'cbcn_3']);
   await fetch(`${base}/api/providers/${provider}/accounts/${two.id}`, { method: 'DELETE' });
   const four = await create('label-gap-four');
-  assert.equal(four.label, 'codebuddy-cn_2');
+  assert.equal(four.label, 'cbcn_2');
+
+  const preview = await (await fetch(`${base}/api/providers/${provider}/accounts/preview`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ accounts: [{ access_token: 'label-preview-a' }, { access_token: 'label-preview-b' }] }),
+  })).json();
+  assert.deepEqual(preview.items.map((item) => item.label), ['cbcn_4', 'cbcn_5']);
 
   const renamed = await fetch(`${base}/api/providers/${provider}/accounts/${four.id}`, {
     method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ label: 'Production backup' }),
@@ -1784,6 +2891,37 @@ await test('provider account labels reuse the smallest gap and can be renamed', 
   assert.ok(!JSON.stringify(renamedBody).includes('label-gap-four'));
 
   for (const row of [one, three, four]) await fetch(`${base}/api/providers/${provider}/accounts/${row.id}`, { method: 'DELETE' });
+});
+
+await test('legacy automatic labels are normalized without touching custom names', () => {
+  const provider = 'label-normalize-test';
+  createAccount(provider, { access_token: 'normalize-a-123456', uid: 'uid-a', label: 'Account · uid-a' });
+  createAccount(provider, { access_token: 'normalize-b-123456', uid: 'uid-b', label: 'Account · uid-b' });
+  createAccount(provider, { access_token: 'normalize-c-123456', uid: 'uid-c', label: 'Production backup' });
+  createAccount(provider, { access_token: 'normalize-d-123456', label: 'label-normalize-test_4' });
+  createAccount(provider, { access_token: 'normalize-e-123456', label: 'ln_9' });
+
+  // OAuth logins used to be saved as "ChatGPT OAuth"; with a provider that
+  // declares OAuth those should follow the prefix like every other import.
+  const oauthProvider = 'label-normalize-oauth';
+  createAccount(oauthProvider, { access_token: 'normalize-f-123456', label: 'ChatGPT OAuth' });
+  createAccount(oauthProvider, { access_token: 'normalize-g-123456', label: 'ChatGPT OAuth' });
+  assert.equal(normalizeAutoAccountLabels([{ id: oauthProvider, prefix: 'oa', oauth: {} }]), 2);
+  assert.deepEqual(
+    listAccounts(oauthProvider, { pageSize: 100 }).items.map((row) => row.label),
+    ['oa_1', 'oa_2'],
+  );
+  for (const row of listAccounts(oauthProvider, { pageSize: 100 }).items) deleteAccount(row.id);
+
+  assert.equal(normalizeAutoAccountLabels([{ id: provider, prefix: 'ln' }]), 3);
+  const expected = ['ln_1', 'ln_2', 'Production backup', 'ln_3', 'ln_9'];
+  assert.deepEqual(listAccounts(provider, { pageSize: 100 }).items.map((row) => row.label), expected);
+
+  // A second pass is a no-op: already-short names must not be renumbered.
+  assert.equal(normalizeAutoAccountLabels([{ id: provider, prefix: 'ln' }]), 0);
+  assert.deepEqual(listAccounts(provider, { pageSize: 100 }).items.map((row) => row.label), expected);
+
+  for (const row of listAccounts(provider, { pageSize: 100 }).items) deleteAccount(row.id);
 });
 
 await test('account pool paginates, searches and masks tokens', () => {
@@ -1998,8 +3136,8 @@ await test('chat routing follows the provider account strategy', async () => {
   await send();
   await send();
   let rows = await pool();
-  assert.equal(rows.find((row) => row.label === 'codebuddy-cn_1').requests, 2, 'sequential must keep the first account');
-  assert.equal(rows.find((row) => row.label === 'codebuddy-cn_2').requests, 0);
+  assert.equal(rows.find((row) => row.label === 'cbcn_1').requests, 2, 'sequential must keep the first account');
+  assert.equal(rows.find((row) => row.label === 'cbcn_2').requests, 0);
 
   await setStrategy('round-robin');
   // The round-robin cursor starts at the first account, so two requests touch
@@ -2007,8 +3145,8 @@ await test('chat routing follows the provider account strategy', async () => {
   await send();
   await send();
   rows = await pool();
-  assert.equal(rows.find((row) => row.label === 'codebuddy-cn_1').requests, 3);
-  assert.equal(rows.find((row) => row.label === 'codebuddy-cn_2').requests, 1, 'round-robin must move to the next account');
+  assert.equal(rows.find((row) => row.label === 'cbcn_1').requests, 3);
+  assert.equal(rows.find((row) => row.label === 'cbcn_2').requests, 1, 'round-robin must move to the next account');
 
   await setStrategy('round-robin');
   for (const row of await pool()) {
@@ -2471,8 +3609,8 @@ await test('a rate-limited account cools down and the next account serves', asyn
   const pool = await (await fetch(
     `${base}/api/providers/codebuddy-cn/accounts?pageSize=200`,
   )).json();
-  const limited = pool.items.find((row) => row.label === 'codebuddy-cn_1');
-  const good = pool.items.find((row) => row.label === 'codebuddy-cn_2');
+  const limited = pool.items.find((row) => row.label === 'cbcn_1');
+  const good = pool.items.find((row) => row.label === 'cbcn_2');
 
   assert.equal(good.requests, 1, 'the second account must serve the retried request');
   assert.ok(good.tokensIn > 0);
@@ -2502,7 +3640,7 @@ await test('account failover tries every account before stopping', async () => {
   const body = await chat.json();
   assert.equal(chat.status, 200, JSON.stringify(body));
   const pool = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
-  assert.equal(pool.items.find((row) => row.label === 'codebuddy-cn_3').requests, 1);
+  assert.equal(pool.items.find((row) => row.label === 'cbcn_3').requests, 1);
   assert.equal(pool.items.filter((row) => row.status === 'cooldown').length, 2);
 });
 
@@ -3083,6 +4221,13 @@ await test('combo falls back to the next model and records the serving model', a
     assert.match(body.choices[0].message.content, /stub reply for glm-5\.3/);
     assert.deepEqual(stubCalls, ['combo-always-429', 'glm-5.3'], 'first model must be tried then skipped');
 
+    const comboLog = (await (await fetch(`${base}/api/request-log`)).json()).requests.at(-1);
+    assert.equal(comboLog.requested, 'fallback-combo');
+    assert.equal(comboLog.route, 'combo');
+    assert.equal(comboLog.via, 'fallback-combo');
+    assert.equal(comboLog.model, 'glm-5.3');
+    assert.deepEqual(comboLog.attempted, ['cbcn/combo-always-429', 'cbcn/glm-5.3'], 'trace must name the walked chain');
+
     const after = await (await fetch(`${base}/api/usage?range=day`)).json();
     const delta = after.totals.requests - before.totals.requests;
     assert.equal(delta, 1, 'one combo request counts once');
@@ -3173,6 +4318,295 @@ await test('a combo whose models all vanished resolves to a clear 400, not 500',
   await fetch(`${base}/api/combos/${encodeURIComponent(body.combo.id)}`, { method: 'DELETE' });
 });
 
+await test('vision routing validates, stores canonical targets and persists', async () => {
+  const initial = await (await fetch(`${base}/api/vision-routing`)).json();
+  assert.equal(initial.vision.enabled, false);
+  assert.equal(initial.vision.strategy, 'order');
+  assert.deepEqual(initial.vision.models, []);
+  assert.ok(Array.isArray(initial.catalog) && initial.catalog.length > 0);
+
+  const patch = (payload) => fetch(`${base}/api/vision-routing`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  const unknown = await patch({ audio: true });
+  assert.equal(unknown.status, 400);
+  assert.match((await unknown.json()).error.message, /Unknown/);
+
+  const badStrategy = await patch({ strategy: 'random' });
+  assert.equal(badStrategy.status, 400);
+  assert.match((await badStrategy.json()).error.message, /strategy/);
+
+  const unknownModel = await patch({ models: ['cbcn/not-a-model'] });
+  assert.equal(unknownModel.status, 400);
+  assert.match((await unknownModel.json()).error.message, /Invalid vision model/);
+
+  const empty = await patch({ enabled: true, models: [] });
+  assert.equal(empty.status, 400);
+  assert.match((await empty.json()).error.message, /at least one/);
+
+  const duplicate = await patch({ models: ['cbcn/glm-5.3', 'cbcn/glm-5.3'] });
+  assert.equal(duplicate.status, 400);
+  assert.match((await duplicate.json()).error.message, /twice/);
+
+  try {
+    const saved = await patch({
+      enabled: true,
+      strategy: 'round-robin',
+      models: ['deepseek-v4.1-flash', 'cbcn/glm-5.3'],
+    });
+    const body = await saved.json();
+    assert.equal(saved.status, 200, JSON.stringify(body));
+    assert.equal(body.vision.enabled, true);
+    assert.equal(body.vision.strategy, 'round-robin');
+    assert.deepEqual(body.vision.models, ['cbcn/deepseek-v4.1-flash', 'cbcn/glm-5.3'], 'bare names must be stored prefixed');
+
+    const reread = await (await fetch(`${base}/api/vision-routing`)).json();
+    assert.equal(reread.vision.enabled, true);
+    assert.deepEqual(reread.vision.models, ['cbcn/deepseek-v4.1-flash', 'cbcn/glm-5.3']);
+  } finally {
+    await patch({ enabled: false, strategy: 'order', models: [] });
+  }
+});
+
+await test('enabled vision routing forces image requests onto its chain', async () => {
+  // The combo tests above park the whole pool on purpose to prove fallback, so a
+  // stale cooldown would hide the routing. Replace the pool with one fresh account.
+  for (;;) {
+    const page = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+    if (!page.items.length) break;
+    for (const row of page.items) {
+      await fetch(`${base}/api/providers/codebuddy-cn/accounts/${row.id}`, { method: 'DELETE' });
+    }
+  }
+  const seeded = await fetch(`${base}/api/providers/codebuddy-cn/accounts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label: 'Vision', access_token: 'vision-token' }),
+  });
+  assert.equal(seeded.status, 201);
+
+  const patch = (payload) => fetch(`${base}/api/vision-routing`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const post = (model, content) => fetch(`${base}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model, messages: [{ role: 'user', content }] }),
+  });
+  const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } };
+
+  const combo = await fetch(`${base}/api/combos`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'vision-bypass', models: ['cbcn/glm-5.3'] }),
+  });
+  const comboBody = await combo.json();
+  assert.equal(combo.status, 201, JSON.stringify(comboBody));
+
+  try {
+    const saved = await patch({ enabled: true, strategy: 'order', models: ['cbcn/deepseek-v4.1-flash'] });
+    assert.equal(saved.status, 200, JSON.stringify(await saved.clone().json()));
+
+    stubCalls.length = 0;
+    const forced = await post('cbcn/glm-5.3', [{ type: 'text', text: 'what is this?' }, image]);
+    const forcedBody = await forced.json();
+    assert.equal(forced.status, 200, JSON.stringify(forcedBody));
+    assert.match(forcedBody.choices[0].message.content, /deepseek-v4\.1-flash/);
+    assert.deepEqual(stubCalls, ['deepseek-v4.1-flash'], 'image request must ignore the requested model');
+
+    const forcedLog = (await (await fetch(`${base}/api/request-log`)).json()).requests.at(-1);
+    assert.equal(forcedLog.requested, 'cbcn/glm-5.3', 'trace must keep the model the client asked for');
+    assert.equal(forcedLog.route, 'vision');
+    assert.equal(forcedLog.model, 'deepseek-v4.1-flash');
+    assert.equal(forcedLog.image, true);
+    assert.deepEqual(forcedLog.attempted, ['cbcn/deepseek-v4.1-flash']);
+
+    // A combo name is bypassed exactly like a plain provider model.
+    stubCalls.length = 0;
+    const viaCombo = await post('vision-bypass', [{ type: 'input_image', image_url: 'https://example.invalid/pic.png' }, { type: 'input_text', text: 'describe' }]);
+    const viaComboBody = await viaCombo.json();
+    assert.equal(viaCombo.status, 200, JSON.stringify(viaComboBody));
+    assert.deepEqual(stubCalls, ['deepseek-v4.1-flash'], 'combo request with an image must follow vision routing');
+
+    // Text-only requests are untouched while the rule is on.
+    stubCalls.length = 0;
+    const plain = await post('cbcn/glm-5.3', 'halo');
+    const plainBody = await plain.json();
+    assert.equal(plain.status, 200, JSON.stringify(plainBody));
+    assert.deepEqual(stubCalls, ['glm-5.3'], 'text-only request must keep its model');
+
+    const plainLog = (await (await fetch(`${base}/api/request-log`)).json()).requests.at(-1);
+    assert.equal(plainLog.route, 'direct');
+    assert.equal(plainLog.image, false);
+    assert.equal(plainLog.requested, 'cbcn/glm-5.3');
+  } finally {
+    await patch({ enabled: false, strategy: 'order', models: [] });
+    await fetch(`${base}/api/combos/${encodeURIComponent(comboBody.combo.id)}`, { method: 'DELETE' });
+  }
+});
+
+await test('vision routing only follows images in the current turn', async () => {
+  const patch = (payload) => fetch(`${base}/api/vision-routing`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } };
+  const post = (messages) => fetch(`${base}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'cbcn/glm-5.3', messages }),
+  });
+  try {
+    const saved = await patch({ enabled: true, strategy: 'order', models: ['cbcn/deepseek-v4.1-flash'] });
+    assert.equal(saved.status, 200, JSON.stringify(await saved.clone().json()));
+
+    // Every turn resends the conversation. An image that was already read in an
+    // earlier turn must not keep pulling later text-only turns onto the chain.
+    stubCalls.length = 0;
+    const later = await post([
+      { role: 'user', content: [{ type: 'text', text: 'what is this?' }, image] },
+      { role: 'assistant', content: 'A red square.' },
+      { role: 'user', content: 'now audit the code' },
+    ]);
+    const laterBody = await later.json();
+    assert.equal(later.status, 200, JSON.stringify(laterBody));
+    assert.deepEqual(stubCalls, ['glm-5.3'], 'an earlier image must not reroute a later text-only turn');
+
+    // The requested model gets a payload it can accept: the historical image is
+    // replaced with text, while the latest user message is untouched.
+    const forwarded = chatBodies.at(-1);
+    const replayed = forwarded.messages.find((message) => message.role === 'user');
+    assert.equal(replayed.content[1].type, 'text');
+    assert.match(replayed.content[1].text, /image omitted/);
+    assert.equal(forwarded.messages.at(-1).content, 'now audit the code');
+
+    // A screenshot returned by a tool during the current turn is still current
+    // input, so it keeps the vision chain.
+    stubCalls.length = 0;
+    const tool = await post([
+      { role: 'user', content: 'take a screenshot' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'screenshot', arguments: '{}' } }],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'call_1',
+        content: [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }],
+      },
+    ]);
+    const toolBody = await tool.json();
+    assert.equal(tool.status, 200, JSON.stringify(toolBody));
+    assert.deepEqual(stubCalls, ['deepseek-v4.1-flash'], 'an image in the current turn must use the vision chain');
+
+    // A tool-loop continuation replays the image it was given but adds no new
+    // one. The vision chain already read it, so the requested model continues
+    // the turn and receives the same placeholder a later text-only turn gets.
+    stubCalls.length = 0;
+    const continuation = await post([
+      { role: 'user', content: [{ type: 'text', text: 'read this screenshot' }, image] },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: 'call_2', type: 'function', function: { name: 'screenshot', arguments: '{}' } }],
+      },
+      { role: 'tool', tool_call_id: 'call_2', content: 'captured' },
+    ]);
+    const continuationBody = await continuation.json();
+    assert.equal(continuation.status, 200, JSON.stringify(continuationBody));
+    assert.deepEqual(stubCalls, ['glm-5.3'], 'a tool-loop continuation must keep the requested model');
+    const continued = chatBodies.at(-1);
+    const continuedUser = continued.messages.find((message) => message.role === 'user');
+    assert.equal(continuedUser.content[1].type, 'text');
+    assert.match(continuedUser.content[1].text, /image omitted/);
+    assert.equal(continued.messages.at(-1).content, 'captured');
+  } finally {
+    await patch({ enabled: false, strategy: 'order', models: [] });
+  }
+});
+
+await test('disabled vision routing leaves image requests on their model', async () => {
+  stubCalls.length = 0;
+  const res = await fetch(`${base}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'cbcn/glm-5.3',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'x' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }] }],
+    }),
+  });
+  const body = await res.json();
+  assert.equal(res.status, 200, JSON.stringify(body));
+  assert.deepEqual(stubCalls, ['glm-5.3'], 'disabled rule must not reroute image requests');
+});
+
+await test('vision round robin starts at the next target per image request', async () => {
+  const patch = (payload) => fetch(`${base}/api/vision-routing`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } };
+  try {
+    const saved = await patch({ enabled: true, strategy: 'round-robin', models: ['cbcn/glm-5.3', 'cbcn/deepseek-v4.1-flash'] });
+    assert.equal(saved.status, 200, JSON.stringify(await saved.clone().json()));
+
+    stubCalls.length = 0;
+    for (let i = 0; i < 3; i += 1) {
+      const res = await fetch(`${base}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'cbcn/glm-5.3', messages: [{ role: 'user', content: [{ type: 'text', text: 'x' }, image] }] }),
+      });
+      assert.equal(res.status, 200, `request ${i + 1} failed`);
+    }
+    assert.deepEqual(stubCalls, ['glm-5.3', 'deepseek-v4.1-flash', 'glm-5.3'], 'round robin must rotate the first target');
+  } finally {
+    await patch({ enabled: false, strategy: 'order', models: [] });
+  }
+});
+
+await test('vision routing skips saved targets that no longer resolve', async () => {
+  const model = `vision-vanish-${Date.now()}`;
+  await fetch(`${base}/api/providers/codebuddy-cn/models`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model }),
+  });
+  const patch = (payload) => fetch(`${base}/api/vision-routing`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  try {
+    const saved = await patch({ enabled: true, strategy: 'order', models: [`cbcn/${model}`] });
+    assert.equal(saved.status, 200, JSON.stringify(await saved.clone().json()));
+    await fetch(`${base}/api/providers/codebuddy-cn/models/${encodeURIComponent(model)}`, { method: 'DELETE' });
+
+    stubCalls.length = 0;
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'cbcn/glm-5.3',
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'x' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }] }],
+      }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.deepEqual(stubCalls, ['glm-5.3'], 'a stale vision config must not break the request');
+  } finally {
+    await patch({ enabled: false, strategy: 'order', models: [] });
+  }
+});
+
 await test('account backup exports raw tokens and restores by merge', async () => {
   for (;;) {
     const page = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
@@ -3231,6 +4665,2146 @@ await test('account backup exports raw tokens and restores by merge', async () =
   assert.equal(bad.status, 400);
 });
 
+await test('Antigravity registers its model catalog and tier map', () => {
+  const resolved = resolveModel('ag/gemini-3.8-flash');
+  assert.equal(resolved.error, undefined, resolved.error);
+  assert.equal(resolved.provider.id, 'antigravity');
+  assert.equal(resolved.provider.format, 'antigravity');
+  assert.equal(resolved.provider.chatPath, '/v1internal:generateContent');
+  assert.match(resolved.provider.streamPath, /v1internal:streamGenerateContent/);
+  assert.equal(resolved.provider.requiresAccount, true);
+  // The bare id is an alias; the gateway expects the tier id itself.
+  assert.equal(resolved.provider.upstreamModels['gemini-3.8-flash'], 'gemini-3.8-flash-medium');
+  assert.ok(resolved.provider.models.includes('gemini-3.8-flash-high'), 'the explicit tier ids stay public');
+  assert.ok(resolved.provider.models.includes('gemini-3.1-flash-lite'), 'the catalog mirrors the gateway list');
+  assert.ok(resolveModel('ag/not-a-model').error, 'unknown Antigravity models must not resolve');
+});
+
+// Every test below shares one Antigravity pool; clearing it up front keeps a
+// failed assertion from leaking a credential into the next test.
+async function clearAntigravityAccounts() {
+  const pool = await (await fetch(`${base}/api/providers/antigravity/accounts?pageSize=200`)).json();
+  for (const account of pool.items) {
+    await fetch(`${base}/api/providers/antigravity/accounts/${account.id}`, { method: 'DELETE' });
+  }
+}
+
+await test('Antigravity wraps chat in the Cloud Code envelope', async () => {
+  antigravityBodies.length = 0;
+  try {
+    const created = await fetch(`${base}/api/providers/antigravity/accounts`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 'Antigravity wire', access_token: 'ag-access-token', projectId: 'stub-project' }),
+    });
+    const account = await created.json();
+    assert.equal(created.status, 201, JSON.stringify(account));
+    const row = account.items.find((item) => item.label === 'Antigravity wire');
+    const stored = getDb().prepare('SELECT project_id FROM accounts WHERE id = ?').get(row.id);
+    assert.equal(stored.project_id, 'stub-project', 'the account must persist its project id');
+
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'ag/gemini-3.8-flash',
+        messages: [
+          { role: 'system', content: 'Be brief.' },
+          { role: 'user', content: 'Hello envelope' },
+        ],
+        temperature: 0.2,
+      }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.equal(body.choices[0].message.content, 'I am the gemini-3.8-flash-medium Antigravity model.');
+
+    const envelope = antigravityBodies.at(-1);
+    assert.equal(envelope.project, 'stub-project');
+    assert.equal(envelope.model, 'gemini-3.8-flash-medium');
+    assert.equal(envelope.userAgent, 'antigravity');
+    assert.match(envelope.requestId, /^agent\/[0-9a-f-]{36}\/\d+\/[0-9a-f-]{36}\/\d+$/);
+    // The gateway types request.session_id as TYPE_STRING; a JSON number is rejected.
+    assert.equal(typeof envelope.request.sessionId, 'string');
+    assert.match(envelope.request.sessionId, /^\d+$/);
+    assert.match(envelope.request.systemInstruction.parts[0].text, /^Be brief\./);
+    assert.equal(envelope.request.contents[0].role, 'user');
+    assert.equal(envelope.request.contents[0].parts[0].text, 'Hello envelope');
+    assert.equal(envelope.request.generationConfig.temperature, 0.2);
+    // The agent path must stay free of these three; the stub rejects them.
+    assert.equal('requestType' in envelope.request, false);
+    assert.equal('safetySettings' in envelope.request, false);
+    assert.equal('stream_options' in envelope.request, false);
+  } finally {
+    await clearAntigravityAccounts();
+  }
+});
+
+await test('Antigravity streams translated chat chunks', async () => {
+  antigravityBodies.length = 0;
+  try {
+    const created = await fetch(`${base}/api/providers/antigravity/accounts`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 'Antigravity stream', access_token: 'ag-stream-token' }),
+    });
+    assert.equal(created.status, 201);
+
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'ag/gemini-3.8-flash-high',
+        messages: [{ role: 'user', content: 'Hello stream' }],
+        stream: true,
+      }),
+    });
+    assert.equal(res.status, 200);
+    const text = await res.text();
+    assert.match(text, /"object":"chat\.completion\.chunk"/);
+    assert.match(text, /"role":"assistant"/);
+    assert.match(text, /"content":"I am the "/);
+    assert.match(text, /"content":"gemini-3\.8-flash-high Antigravity model\."/);
+    assert.match(text, /"finish_reason":"stop"/);
+    assert.match(text, /"prompt_tokens":11/);
+    assert.match(text, /"completion_tokens":7/);
+    assert.match(text, /"total_tokens":18/);
+    assert.match(text, /data: \[DONE\]/);
+
+    const envelope = antigravityBodies.at(-1);
+    assert.equal(envelope.model, 'gemini-3.8-flash-high');
+    assert.ok(envelope.project, 'a missing project id must be generated, not sent empty');
+    assert.equal(envelope.request.contents[0].parts[0].text, 'Hello stream');
+  } finally {
+    await clearAntigravityAccounts();
+  }
+});
+
+await test('Antigravity model test probes through the same envelope', async () => {
+  antigravityBodies.length = 0;
+  try {
+    const created = await fetch(`${base}/api/providers/antigravity/accounts`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 'Antigravity probe', access_token: 'ag-probe-token', projectId: 'probe-project' }),
+    });
+    assert.equal(created.status, 201);
+
+    const res = await fetch(`${base}/api/providers/antigravity/models/test`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gemini-3.8-flash-low' }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.equal(body.results[0].ok, true, JSON.stringify(body.results[0]));
+    assert.match(body.results[0].answer, /gemini-3\.8-flash-low Antigravity model/);
+
+    const envelope = antigravityBodies.at(-1);
+    assert.equal(envelope.project, 'probe-project');
+    assert.equal(envelope.model, 'gemini-3.8-flash-low');
+    // The probe must not invent sampling params the caller did not send.
+    assert.equal(envelope.request.generationConfig.temperature, undefined);
+  } finally {
+    await clearAntigravityAccounts();
+  }
+});
+
+await test('Antigravity quota reads the shared Cloud Code pools', async () => {
+  antigravityQuotaCalls.length = 0;
+  try {
+    const detail = await (await fetch(`${base}/api/providers/antigravity`)).json();
+    assert.equal(detail.provider.quotaSupported, true, 'the Quota tab must be enabled');
+    assert.match(detail.quota.note, /Cloud Code quota summary/);
+
+    const created = await fetch(`${base}/api/providers/antigravity/accounts`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 'Antigravity quota', access_token: 'ag-quota-token', projectId: 'stub-project' }),
+    });
+    assert.equal(created.status, 201);
+    const row = (await created.json()).items.find((item) => item.label === 'Antigravity quota');
+
+    const res = await fetch(`${base}/api/providers/antigravity/accounts/${row.id}/quota`, { method: 'POST' });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.equal(body.quota.plan, 'Free tier');
+    assert.equal(body.quota.planKey, 'free');
+
+    const windows = body.quota.quotas;
+    assert.equal(windows.gemini_weekly.displayName, 'Gemini (Weekly)');
+    assert.equal(windows.gemini_weekly.used, 60);
+    assert.equal(windows.gemini_weekly.total, 100);
+    assert.equal(windows.gemini_weekly.resetAt, Date.parse('2026-11-15T16:06:23Z'));
+    assert.equal(windows.claude_gpt_weekly.displayName, 'Claude & GPT (Weekly)');
+    assert.equal(windows.claude_gpt_weekly.used, 100);
+    // A session pool disabled by upstream is still listed, as fully used.
+    assert.equal(windows.claude_gpt_session.used, 100);
+    assert.equal(JSON.stringify(body).includes('ag-quota-token'), false, 'the token must never be echoed');
+
+    const paths = antigravityQuotaCalls.map((call) => call.path);
+    assert.ok(paths.includes('loadCodeAssist'), 'the tier lookup must run');
+    assert.ok(paths.includes('quotaSummary'), 'the summary is the primary source');
+    assert.equal(paths.includes('availableModels'), false, 'free tier must not read per-model quota');
+    const summary = antigravityQuotaCalls.find((call) => call.path === 'quotaSummary');
+    assert.equal(summary.body.project, 'stub-project');
+    assert.equal(summary.body.metadata, undefined, 'the summary takes a project, not client metadata');
+
+    // A truly free account reports its starter tier in both fields, so the
+    // stored plan must stay free.
+    const pool = await (await fetch(`${base}/api/providers/antigravity/accounts?pageSize=200`)).json();
+    assert.equal(pool.items.find((item) => item.id === row.id).plan, 'free');
+  } finally {
+    await clearAntigravityAccounts();
+  }
+});
+
+await test('Antigravity quota falls back to per-model rows on paid tiers', async () => {
+  antigravityQuotaCalls.length = 0;
+  try {
+    const created = await fetch(`${base}/api/providers/antigravity/accounts`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 'Antigravity paid quota', access_token: 'ag-paid-quota-token' }),
+    });
+    assert.equal(created.status, 201);
+    const row = (await created.json()).items.find((item) => item.label === 'Antigravity paid quota');
+
+    const res = await fetch(`${base}/api/providers/antigravity/accounts/${row.id}/quota`, { method: 'POST' });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    // Antigravity keeps `currentTier` at free-tier even on a paid login, so the
+    // Google One plan in `paidTier` is what the badge must show.
+    assert.equal(body.quota.plan, 'Pro tier');
+    assert.equal(body.quota.planKey, 'pro');
+    const windows = body.quota.quotas;
+    assert.equal(windows['model_gemini-3.8-flash-high'].used, 80);
+    assert.equal(windows['model_claude-sonnet-4-6'].used, 25);
+    assert.equal(Object.keys(windows).some((key) => key.includes('internal')), false, 'internal models are not a quota window');
+    assert.ok(antigravityQuotaCalls.some((call) => call.path === 'availableModels'));
+
+    // Reading quota is also what teaches the pool the account's tier.
+    const pool = await (await fetch(`${base}/api/providers/antigravity/accounts?pageSize=200`)).json();
+    assert.equal(pool.items.find((item) => item.id === row.id).plan, 'pro');
+  } finally {
+    await clearAntigravityAccounts();
+  }
+});
+
+await test('Antigravity labels Google AI Plus and Ultra accounts from paidTier', async () => {
+  antigravityQuotaCalls.length = 0;
+  try {
+    const cases = [
+      { label: 'Antigravity plus quota', token: 'ag-plus-quota-token', plan: 'Plus tier', key: 'plus' },
+      { label: 'Antigravity ultra quota', token: 'ag-ultra-quota-token', plan: 'Ultra tier', key: 'ultra' },
+    ];
+    for (const expected of cases) {
+      const created = await fetch(`${base}/api/providers/antigravity/accounts`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ label: expected.label, access_token: expected.token }),
+      });
+      assert.equal(created.status, 201);
+      const row = (await created.json()).items.find((item) => item.label === expected.label);
+
+      const res = await fetch(`${base}/api/providers/antigravity/accounts/${row.id}/quota`, { method: 'POST' });
+      const body = await res.json();
+      assert.equal(res.status, 200, JSON.stringify(body));
+      assert.equal(body.quota.plan, expected.plan);
+      assert.equal(body.quota.planKey, expected.key);
+      assert.ok(body.quota.quotas.gemini_weekly, 'the shared pools still drive the tab');
+
+      const pool = await (await fetch(`${base}/api/providers/antigravity/accounts?pageSize=200`)).json();
+      assert.equal(pool.items.find((item) => item.id === row.id).plan, expected.key);
+    }
+  } finally {
+    await clearAntigravityAccounts();
+  }
+});
+
+await test('Antigravity tier prefers the Google One plan, with currentTier as fallback', () => {
+  // Real Antigravity logins: currentTier stays free-tier, paidTier has the plan.
+  assert.equal(antigravityTier({ currentTier: { id: 'free-tier' }, paidTier: { id: 'g1-pro-tier' } }).id, 'g1-pro-tier');
+  // A genuinely free account names its starter tier in paidTier, so nothing changes.
+  assert.equal(antigravityTier({ currentTier: { id: 'free-tier' }, paidTier: { id: 'free-tier' } }).id, 'free-tier');
+  // Code Assist-style logins keep their paid tier in currentTier.
+  assert.equal(antigravityTier({ currentTier: { id: 'standard-tier' }, paidTier: { id: 'free-tier' } }).id, 'standard-tier');
+  assert.equal(antigravityTier({}), null);
+});
+
+await test('Antigravity quota denial does not hide a working account', async () => {
+  try {
+    const created = await fetch(`${base}/api/providers/antigravity/accounts`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 'Antigravity forbidden quota', access_token: 'ag-quota-forbidden-token' }),
+    });
+    assert.equal(created.status, 201);
+    const row = (await created.json()).items.find((item) => item.label === 'Antigravity forbidden quota');
+
+    const res = await fetch(`${base}/api/providers/antigravity/accounts/${row.id}/quota`, { method: 'POST' });
+    const body = await res.json();
+    assert.equal(res.status, 403, JSON.stringify(body));
+    assert.match(body.error.message, /chat may still work/);
+    const pool = await (await fetch(`${base}/api/providers/antigravity/accounts?pageSize=200`)).json();
+    const stored = pool.items.find((item) => item.id === row.id);
+    assert.equal(stored.status, 'active', 'a quota 403 must not park the account');
+  } finally {
+    await clearAntigravityAccounts();
+  }
+});
+
+await test('Antigravity OAuth routes fail closed without client credentials', async () => {
+  const status = await fetch(`${base}/api/providers/antigravity/oauth/status/not-a-state`);
+  assert.equal(status.status, 200);
+  assert.deepEqual(await status.json(), { status: 'unknown' });
+
+  const cancel = await fetch(`${base}/api/providers/antigravity/oauth/cancel/not-a-state`, { method: 'POST' });
+  assert.equal(cancel.status, 200);
+  assert.deepEqual(await cancel.json(), { cancelled: true });
+
+  // No client id/secret in the environment: fail before opening a browser tab
+  // or binding port 1456, with a message naming both variables. Clearing them
+  // here matters because importing the server loads .env.
+  const savedId = process.env.ANTIGRAVITY_CLIENT_ID;
+  const savedSecret = process.env.ANTIGRAVITY_CLIENT_SECRET;
+  delete process.env.ANTIGRAVITY_CLIENT_ID;
+  delete process.env.ANTIGRAVITY_CLIENT_SECRET;
+  try {
+    const start = await fetch(`${base}/api/providers/antigravity/oauth/start`, { method: 'POST' });
+    const body = await start.json();
+    assert.equal(start.status, 409, JSON.stringify(body));
+    assert.match(body.error.message, /ANTIGRAVITY_CLIENT_ID/);
+    assert.match(body.error.message, /ANTIGRAVITY_CLIENT_SECRET/);
+  } finally {
+    if (savedId !== undefined) process.env.ANTIGRAVITY_CLIENT_ID = savedId;
+    if (savedSecret !== undefined) process.env.ANTIGRAVITY_CLIENT_SECRET = savedSecret;
+  }
+});
+
+
+await test('plan vocabulary unifies provider tier names', () => {
+  assert.deepEqual(ACCOUNT_PLANS, ['free', 'plus', 'pro', 'ultra', 'team', 'business', 'enterprise', 'unknown']);
+  assert.equal(normalizePlan('free-tier'), 'free');
+  assert.equal(normalizePlan('legacy-tier'), 'free');
+  assert.equal(normalizePlan('g1-plus-tier'), 'plus');
+  assert.equal(normalizePlan('g1-pro-tier'), 'pro');
+  assert.equal(normalizePlan('g1-ultra-tier'), 'ultra');
+  assert.equal(normalizePlan('standard-tier'), 'pro');
+  assert.equal(normalizePlan('chatgpt-ultra'), 'ultra');
+  assert.equal(normalizePlan('PRO'), 'pro');
+  assert.equal(normalizePlan(''), 'unknown');
+  assert.equal(normalizePlan(undefined), 'unknown');
+  assert.equal(normalizePlan('something-else'), 'unknown');
+  assert.equal(planLabel('standard-tier'), 'Pro');
+  assert.equal(isKnownPlan('g1-plus-tier'), true);
+  assert.equal(isKnownPlan('something-else'), false);
+});
+
+await test('a Codex JWT names its account and plan', () => {
+  const jwt = testJwt({
+    email: 'someone@example.com',
+    'https://api.openai.com/auth': { chatgpt_account_id: 'acct-jwt', chatgpt_plan_type: 'plus' },
+  });
+  assert.deepEqual(identityFromToken(jwt), {
+    uid: 'acct-jwt',
+    plan: 'plus',
+    email: 'someone@example.com',
+  });
+  assert.equal(identityFromToken(testJwt({ sub: 'sub-only' })), null, 'no auth claim means no identity');
+  assert.equal(
+    identityFromToken(testJwt({ sub: 'sub-only', 'https://api.openai.com/auth': {} })).uid,
+    'sub-only',
+  );
+  assert.equal(identityFromToken('not-a-jwt'), null);
+});
+
+await test('a re-login updates its account instead of adding a twin', () => {
+  const first = createAccount('identity-test', {
+    access_token: 'relogin-old-access',
+    refresh_token: 'relogin-old-refresh',
+    uid: 'relogin-uid',
+    plan: 'free',
+    label: 'Re-login account',
+  });
+  assert.equal(first.added, 1);
+
+  const second = createAccount('identity-test', {
+    access_token: 'relogin-new-access',
+    refresh_token: 'relogin-new-refresh',
+    uid: 'relogin-uid',
+    plan: 'plus',
+  }, { updateExisting: true, expiresIn: 3600 });
+
+  assert.equal(second.updated, 1, 'a rotated refresh token must update the existing row');
+  assert.equal(second.id, first.id);
+  const rows = getDb().prepare(
+    "SELECT * FROM accounts WHERE provider = 'identity-test' AND uid = 'relogin-uid'",
+  ).all();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].refresh_token, 'relogin-new-refresh');
+  assert.equal(rows[0].plan, 'plus');
+  assert.equal(rows[0].label, 'Re-login account', 'the account keeps its operator-facing label');
+  assert.ok(rows[0].expires_at > Date.now());
+});
+
+await test('an import preview spots a duplicate identity across rotated tokens', () => {
+  const duplicate = previewAccounts('identity-test', [
+    { access_token: 'another-rotated-token', uid: 'relogin-uid' },
+  ]);
+  assert.equal(duplicate.items[0].status, 'duplicate');
+
+  const paste = previewAccounts('identity-test', [
+    { access_token: 'paste-a-token', uid: 'paste-uid' },
+    { access_token: 'paste-b-token', uid: 'paste-uid' },
+  ]);
+  assert.equal(paste.items[0].status, 'new');
+  assert.equal(paste.items[1].status, 'duplicate_input', 'two tokens for one login in one paste are one account');
+
+  const bulk = bulkCreateAccounts('identity-test', [
+    { access_token: 'bulk-a-token', uid: 'bulk-uid' },
+    { access_token: 'bulk-b-token', uid: 'bulk-uid' },
+  ]);
+  assert.equal(bulk.added, 1);
+  assert.equal(bulk.duplicates, 1);
+  const count = getDb().prepare(
+    "SELECT COUNT(*) AS n FROM accounts WHERE provider = 'identity-test' AND uid = 'bulk-uid'",
+  ).get().n;
+  assert.equal(count, 1);
+});
+
+await test('startup backfill recovers Codex identity and plan from stored JWTs', () => {
+  const token = testJwt({
+    'https://api.openai.com/auth': { chatgpt_account_id: 'backfill-account', chatgpt_plan_type: 'pro' },
+  });
+  const created = createAccount('codex', { access_token: token, label: 'Backfill identity' });
+  assert.equal(created.added, 1);
+
+  const updated = backfillAccountIdentity();
+  assert.ok(updated >= 1);
+  const row = getDb().prepare('SELECT uid, plan FROM accounts WHERE id = ?').get(created.id);
+  assert.equal(row.uid, 'backfill-account');
+  assert.equal(row.plan, 'pro');
+});
+
+await test('merging duplicate identities keeps usage, counters and models', () => {
+  const db = getDb();
+  const older = createAccount('merge-test', {
+    access_token: 'merge-old-access',
+    refresh_token: 'merge-old-refresh',
+    uid: 'merge-uid',
+    label: 'Merge older',
+  });
+  const newer = createAccount('merge-test', {
+    access_token: 'merge-new-access',
+    uid: 'merge-uid',
+    plan: 'plus',
+    projectId: 'merge-project',
+    label: 'Merge newer',
+  });
+  assert.equal(older.added, 1);
+  assert.equal(newer.added, 1);
+
+  db.prepare(`
+    UPDATE accounts
+       SET requests = 3, tokens_in = 30, tokens_out = 300, last_used_at = 1000
+     WHERE id = ?
+  `).run(older.id);
+  db.prepare(`
+    UPDATE accounts
+       SET requests = 5, errors = 1, tokens_in = 50, tokens_out = 500,
+           last_used_at = 2000, last_error = 'rotated'
+     WHERE id = ?
+  `).run(newer.id);
+  const insertUsage = db.prepare(`
+    INSERT INTO account_usage (account_id, day, requests, tokens_in, tokens_out)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  insertUsage.run(older.id, '2026-01-01', 3, 30, 300);
+  insertUsage.run(newer.id, '2026-01-01', 5, 50, 500);
+  insertUsage.run(newer.id, '2026-01-02', 4, 40, 400);
+  const insertModel = db.prepare(`
+    INSERT INTO codex_account_models (account_id, model, plan, updated_at)
+    VALUES (?, ?, ?, ?)
+  `);
+  insertModel.run(older.id, 'gpt-merge-old', 'unknown', Date.now());
+  insertModel.run(newer.id, 'gpt-merge-new', 'plus', Date.now());
+
+  const merged = mergeDuplicateAccounts();
+  assert.ok(merged >= 1);
+
+  const rows = db.prepare("SELECT * FROM accounts WHERE provider = 'merge-test'").all();
+  assert.equal(rows.length, 1);
+  const survivor = rows[0];
+  // The row that can still refresh is the one kept.
+  assert.equal(survivor.id, older.id);
+  assert.equal(survivor.plan, 'plus');
+  assert.equal(survivor.project_id, 'merge-project');
+  assert.equal(survivor.requests, 8);
+  assert.equal(survivor.errors, 1);
+  assert.equal(survivor.tokens_in, 80);
+  assert.equal(survivor.tokens_out, 800);
+  assert.equal(survivor.last_used_at, 2000);
+
+  const usage = db.prepare(
+    'SELECT day, requests FROM account_usage WHERE account_id = ? ORDER BY day',
+  ).all(survivor.id);
+  assert.deepEqual(usage.map((row) => [row.day, row.requests]), [['2026-01-01', 8], ['2026-01-02', 4]]);
+  const models = db.prepare(
+    'SELECT model FROM codex_account_models WHERE account_id = ? ORDER BY model',
+  ).all(survivor.id).map((row) => row.model);
+  assert.deepEqual(models, ['gpt-merge-new', 'gpt-merge-old']);
+});
+
+await test('the identity index enforces one row per provider login', () => {
+  assert.equal(ensureAccountIdentityIndex(), true);
+  const duplicate = createAccount('merge-test', {
+    access_token: 'merge-third-access',
+    uid: 'merge-uid',
+    label: 'Merge third',
+  });
+  assert.equal(duplicate.status, 409);
+  assert.match(duplicate.error, /already in the pool/);
+  const count = getDb().prepare(
+    "SELECT COUNT(*) AS n FROM accounts WHERE provider = 'merge-test' AND uid = 'merge-uid'",
+  ).get().n;
+  assert.equal(count, 1);
+});
+
+// The exact string seen in the ZCode transcript: Upstage's parser missed the
+// call and the model's native tokens landed in `content` as prose.
+const LEAKED_READ =
+  '<|tool_callstart|>Read <|tool_orgstart|>file_path <|tool_argvalue|>F:\\Project\\windowsisland\\src-tauri\\src\\main.rs<|tool_argend|> <|tool_callend|>';
+const READ_TOOL = {
+  type: 'function',
+  function: { name: 'Read', parameters: { type: 'object', properties: { file_path: { type: 'string' } } } },
+};
+
+await test('native tool tokens in content are recovered as a tool call', () => {
+  const parsed = parseNativeToolCalls(LEAKED_READ, [READ_TOOL]);
+  assert.ok(parsed);
+  assert.equal(parsed.calls.length, 1);
+  assert.equal(parsed.calls[0].function.name, 'Read');
+  assert.deepEqual(JSON.parse(parsed.calls[0].function.arguments), {
+    file_path: 'F:\\Project\\windowsisland\\src-tauri\\src\\main.rs',
+  });
+  assert.equal(parsed.text.trim(), '');
+});
+
+await test('multiple native calls and schema coercion survive', () => {
+  const text =
+    'Running two commands.\n' +
+    '<|tool_callstart|>Bash <|tool_orgstart|>command <|tool_argvalue|>pwd<|tool_argend|>' +
+    '<|tool_orgstart|>timeout <|tool_argvalue|>30<|tool_argend|><|tool_callend|>' +
+    ' then <|tool_callstart|>Bash <|tool_orgstart|>command <|tool_argvalue|>ls<|tool_argend|><|tool_callend|>';
+  const tools = [{
+    type: 'function',
+    function: { name: 'Bash', parameters: { type: 'object', properties: { command: { type: 'string' }, timeout: { type: 'integer' } } } },
+  }];
+  const parsed = parseNativeToolCalls(text, tools);
+  assert.ok(parsed);
+  assert.equal(parsed.calls.length, 2);
+  assert.deepEqual(JSON.parse(parsed.calls[0].function.arguments), { command: 'pwd', timeout: 30 });
+  assert.deepEqual(JSON.parse(parsed.calls[1].function.arguments), { command: 'ls' });
+  assert.equal(parsed.text.trim(), 'Running two commands.\n then');
+});
+
+await test('an undeclared native tool name stays plain text', () => {
+  assert.equal(parseNativeToolCalls(LEAKED_READ, [{ type: 'function', function: { name: 'Bash' } }]), null);
+  assert.equal(parseNativeToolCalls(LEAKED_READ.slice(0, -3), [READ_TOOL]), null, 'a truncated block is not a call');
+  assert.equal(parseNativeToolCalls('just prose', [READ_TOOL]), null);
+});
+
+await test('non-stream payloads move the recovered call onto message.tool_calls', () => {
+  const payload = {
+    choices: [{
+      index: 0,
+      message: { role: 'assistant', content: LEAKED_READ },
+      finish_reason: 'stop',
+    }],
+  };
+  assert.equal(recoverNativeToolCalls(payload, [READ_TOOL]), true);
+  assert.equal(payload.choices[0].message.content, null);
+  assert.equal(payload.choices[0].message.tool_calls[0].function.name, 'Read');
+  assert.equal(payload.choices[0].finish_reason, 'tool_calls');
+
+  const plain = { choices: [{ message: { role: 'assistant', content: 'hi' }, finish_reason: 'stop' }] };
+  assert.equal(recoverNativeToolCalls(plain, [READ_TOOL]), false);
+  assert.equal(plain.choices[0].message.content, 'hi');
+});
+
+await test('streaming recovers native calls split across chunks', () => {
+  const stream = createNativeToolStream([READ_TOOL]);
+  const acc = createAccumulator();
+  const pieces = [
+    '<|tool_call',
+    'start|>Read <|tool_orgstart|>file_path <|tool_argvalue|>F:\\Pro',
+    'ject\\a.rs<|tool_argend|> <|tool_callend|>',
+  ];
+  for (const piece of pieces) {
+    const chunk = { choices: [{ index: 0, delta: { content: piece } }] };
+    stream.apply(chunk);
+    acc.feed(chunk);
+  }
+  const finish = { choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] };
+  stream.apply(finish);
+  acc.feed(finish);
+
+  const completion = acc.toCompletion('x');
+  assert.equal(completion.choices[0].finish_reason, 'tool_calls');
+  assert.equal(completion.choices[0].message.content, null);
+  assert.equal(completion.choices[0].message.tool_calls.length, 1);
+  assert.equal(completion.choices[0].message.tool_calls[0].function.name, 'Read');
+  assert.deepEqual(JSON.parse(completion.choices[0].message.tool_calls[0].function.arguments), {
+    file_path: 'F:\\Project\\a.rs',
+  });
+});
+
+await test('streaming leaves ordinary content and unknown blocks untouched', () => {
+  const stream = createNativeToolStream([READ_TOOL]);
+  const plain = { choices: [{ index: 0, delta: { content: 'hello <|not a token|> world' } }] };
+  assert.equal(stream.apply(plain), false);
+  assert.equal(plain.choices[0].delta.content, 'hello <|not a token|> world');
+
+  const unknown = { choices: [{ index: 0, delta: { content: LEAKED_READ.replace('Read', 'Nope') } }] };
+  assert.equal(stream.apply(unknown), false);
+  assert.equal(unknown.choices[0].delta.content, LEAKED_READ.replace('Read', 'Nope'), 'restored verbatim');
+  assert.deepEqual(stream.finish(), []);
+});
+
+await test('a leaked native tool call is recovered end to end', async () => {
+  const id = `native-leak-${Date.now()}`;
+  const create = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: `Native leak ${id}`,
+      id,
+      baseUrl: `${stubBase}/v2`,
+      models: 'native-leak',
+    }),
+  });
+  assert.equal(create.status, 201);
+  // The stub rejects unauthenticated upstreams, so give the test provider one
+  // pooled account instead of relying on an open endpoint.
+  const account = await fetch(`${base}/api/providers/${id}/accounts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ accessToken: 'stub-native-token', label: 'stub' }),
+  });
+  assert.equal(account.status, 201);
+  const tools = [READ_TOOL];
+  try {
+    const request = (stream) => fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: `${id}/native-leak`,
+        messages: [{ role: 'user', content: 'open main.rs' }],
+        tools,
+        stream,
+      }),
+    });
+
+    const nonStream = await request(false);
+    assert.equal(nonStream.status, 200);
+    const payload = await nonStream.json();
+    assert.equal(payload.choices[0].finish_reason, 'tool_calls');
+    assert.equal(payload.choices[0].message.content, null);
+    assert.equal(payload.choices[0].message.tool_calls[0].function.name, 'Read');
+    assert.deepEqual(JSON.parse(payload.choices[0].message.tool_calls[0].function.arguments), {
+      file_path: 'F:\\Project\\app\\main.rs',
+    });
+
+    const streamed = await request(true);
+    assert.equal(streamed.status, 200);
+    const text = await streamed.text();
+    assert.doesNotMatch(text, /<\|tool_/, 'no native tokens reach the client');
+    const acc = createAccumulator();
+    for (const line of text.split('\n')) {
+      if (!line.startsWith('data:')) continue;
+      const data = line.slice(5).trim();
+      if (!data || data === '[DONE]') continue;
+      acc.feed(JSON.parse(data));
+    }
+    const completion = acc.toCompletion('x');
+    assert.equal(completion.choices[0].finish_reason, 'tool_calls');
+    assert.match(completion.choices[0].message.content, /Thinking\./);
+    assert.equal(completion.choices[0].message.tool_calls[0].function.name, 'Read');
+    assert.deepEqual(JSON.parse(completion.choices[0].message.tool_calls[0].function.arguments), {
+      file_path: 'F:\\Project\\app\\main.rs',
+    });
+  } finally {
+    const del = await fetch(`${base}/api/providers/${id}`, { method: 'DELETE' });
+    assert.equal(del.status, 200);
+  }
+});
+
+// The relay is shared by every wire, so each wire gets a provider that points
+// at a stub fixture which cuts the stream. A cut turn must surface as an error
+// frame (or a 502 when nothing was sent yet), never as a fake success.
+async function createWireProvider({ id, format = 'openai', forceStream = false, models }) {
+  const created = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: `Stream wire ${id}`,
+      id,
+      baseUrl: `${stubBase}/v2`,
+      models,
+      format,
+      forceStream,
+    }),
+  });
+  const body = await created.text();
+  assert.equal(created.status, 201, body);
+  // The stub rejects unauthenticated upstreams, so the provider needs one
+  // pooled account even though it is otherwise open.
+  const account = await fetch(`${base}/api/providers/${id}/accounts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ accessToken: `stub-${id}-token`, label: 'stub' }),
+  });
+  assert.equal(account.status, 201, await account.text());
+}
+
+async function dropWireProvider(id) {
+  const res = await fetch(`${base}/api/providers/${id}`, { method: 'DELETE' });
+  assert.equal(res.status, 200);
+}
+
+async function wireTotals(id) {
+  const res = await fetch(`${base}/api/providers/${id}/usage?range=day`);
+  assert.equal(res.status, 200);
+  return (await res.json()).totals;
+}
+
+function wireChat(model, { stream = true } = {}) {
+  return fetch(`${base}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model, stream, messages: [{ role: 'user', content: 'halo' }] }),
+  });
+}
+
+await test('a stream cut before a finish signal is reported as truncated', async () => {
+  const id = `wire-openai-${Date.now()}`;
+  await createWireProvider({ id, models: 'truncated-openai,truncated-final-frame,json-error-body,glm-5.3-flash' });
+  try {
+    const before = await wireTotals(id);
+    const res = await wireChat(`${id}/truncated-openai`);
+    const text = await res.text();
+    assert.equal(res.status, 200);
+    assert.match(text, /"code":"stream_truncated"/);
+    assert.match(text, /stream ended before completion/i);
+    assert.match(text, /half an ans/, 'bytes received before the cut still reach the client');
+    assert.doesNotMatch(text, /\[DONE\]/, 'a truncated turn must not look finished');
+    const after = await wireTotals(id);
+    assert.equal(after.errors, before.errors + 1);
+    assert.equal(after.requests, before.requests, 'a truncated turn is not a served request');
+  } finally {
+    await dropWireProvider(id);
+  }
+});
+
+await test('a final frame without its newline still completes the stream', async () => {
+  const id = `wire-final-${Date.now()}`;
+  await createWireProvider({ id, models: 'truncated-final-frame' });
+  try {
+    const before = await wireTotals(id);
+    const res = await wireChat(`${id}/truncated-final-frame`);
+    const text = await res.text();
+    assert.equal(res.status, 200);
+    assert.match(text, /complete answer/);
+    assert.match(text, /"finish_reason":"stop"/);
+    assert.ok(text.endsWith('data: [DONE]\n\n'), 'the finish frame and sentinel must stay separate');
+    assert.doesNotMatch(text, /stream_truncated/);
+    const after = await wireTotals(id);
+    assert.equal(after.requests, before.requests + 1);
+    assert.equal(after.errors, before.errors);
+  } finally {
+    await dropWireProvider(id);
+  }
+});
+
+await test('an in-stream upstream error does not end as success', async () => {
+  const id = `wire-error-${Date.now()}`;
+  await createWireProvider({ id, models: 'glm-5.3-flash' });
+  try {
+    const before = await wireTotals(id);
+    const res = await wireChat(`${id}/glm-5.3-flash`);
+    const text = await res.text();
+    assert.equal(res.status, 200);
+    assert.match(text, /"code":"stream_error"/);
+    assert.match(text, /stub quota exhausted/);
+    assert.doesNotMatch(text, /\[DONE\]/);
+    const after = await wireTotals(id);
+    assert.equal(after.errors, before.errors + 1);
+    assert.equal(after.requests, before.requests);
+  } finally {
+    await dropWireProvider(id);
+  }
+});
+
+await test('a 200 JSON error body is relayed as an upstream failure', async () => {
+  const id = `wire-json-error-${Date.now()}`;
+  await createWireProvider({ id, models: 'json-error-body' });
+  try {
+    const before = await wireTotals(id);
+    const res = await wireChat(`${id}/json-error-body`, { stream: false });
+    assert.equal(res.status, 502);
+    const body = await res.json();
+    assert.equal(body.error.type, 'upstream_error');
+    assert.match(body.error.message, /upstream refused the turn/);
+    const after = await wireTotals(id);
+    assert.equal(after.errors, before.errors + 1);
+    assert.equal(after.requests, before.requests);
+  } finally {
+    await dropWireProvider(id);
+  }
+});
+
+await test('a force-stream upstream that cuts off fails the buffered turn', async () => {
+  const id = `wire-buffered-${Date.now()}`;
+  await createWireProvider({ id, forceStream: true, models: 'truncated-openai' });
+  try {
+    const before = await wireTotals(id);
+    const res = await wireChat(`${id}/truncated-openai`, { stream: false });
+    assert.equal(res.status, 502, 'nothing reached the client yet, so this is a real 502');
+    const body = await res.json();
+    assert.match(body.error.message, /stream ended before completion/i);
+    const after = await wireTotals(id);
+    assert.equal(after.errors, before.errors + 1);
+    assert.equal(after.requests, before.requests);
+  } finally {
+    await dropWireProvider(id);
+  }
+});
+
+await test('the Responses wire reports truncation and keeps intentional endings', async () => {
+  const id = `wire-responses-${Date.now()}`;
+  await createWireProvider({
+    id,
+    format: 'responses',
+    models: 'responses-truncated,responses-completed-no-newline,responses-incomplete',
+  });
+  try {
+    const before = await wireTotals(id);
+    const truncated = await wireChat(`${id}/responses-truncated`);
+    const truncatedText = await truncated.text();
+    assert.equal(truncated.status, 200);
+    assert.match(truncatedText, /"code":"stream_truncated"/);
+    assert.doesNotMatch(truncatedText, /\[DONE\]/);
+
+    const completed = await wireChat(`${id}/responses-completed-no-newline`);
+    const completedText = await completed.text();
+    assert.equal(completed.status, 200);
+    assert.match(completedText, /responses-completed-no-newline Responses model\./);
+    assert.match(completedText, /"finish_reason":"stop"/);
+    assert.ok(completedText.endsWith('data: [DONE]\n\n'));
+
+    const incomplete = await wireChat(`${id}/responses-incomplete`);
+    const incompleteText = await incomplete.text();
+    assert.equal(incomplete.status, 200);
+    assert.match(incompleteText, /responses-incomplete Responses model\./);
+    assert.ok(incompleteText.endsWith('data: [DONE]\n\n'), 'a deliberate ending is not truncation');
+    assert.doesNotMatch(incompleteText, /"code":"stream_truncated"/);
+
+    const after = await wireTotals(id);
+    assert.equal(after.requests, before.requests + 2, 'only the two completed turns are served');
+    assert.equal(after.errors, before.errors + 1);
+  } finally {
+    await dropWireProvider(id);
+  }
+});
+
+await test('the Anthropic wire reports a stream cut before message_delta', async () => {
+  const id = `wire-anthropic-${Date.now()}`;
+  await createWireProvider({ id, format: 'anthropic', models: 'anthropic-truncated' });
+  try {
+    const before = await wireTotals(id);
+    const res = await wireChat(`${id}/anthropic-truncated`);
+    const text = await res.text();
+    assert.equal(res.status, 200);
+    assert.match(text, /"code":"stream_truncated"/);
+    // This wire streams word by word, so the sentence is never one frame.
+    assert.match(text, /"content":"I "/);
+    assert.match(text, /"content":"anthropic-truncated "/);
+    assert.match(text, /"content":"model\. "/);
+    assert.doesNotMatch(text, /\[DONE\]/);
+    const after = await wireTotals(id);
+    assert.equal(after.errors, before.errors + 1);
+    assert.equal(after.requests, before.requests);
+  } finally {
+    await dropWireProvider(id);
+  }
+});
+
+await test('the Antigravity wire reports a candidate cut before finishReason', async () => {
+  await clearAntigravityAccounts();
+  try {
+    const created = await fetch(`${base}/api/providers/antigravity/accounts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 'Antigravity truncated', access_token: 'ag-stream-token', projectId: 'stub-project' }),
+    });
+    assert.equal(created.status, 201, await created.text());
+    const before = await wireTotals('antigravity');
+    const res = await wireChat('ag/gemini-3.5-flash-lite');
+    const text = await res.text();
+    assert.equal(res.status, 200);
+    assert.match(text, /"code":"stream_truncated"/);
+    assert.match(text, /half an ans/);
+    assert.doesNotMatch(text, /\[DONE\]/);
+    const after = await wireTotals('antigravity');
+    assert.equal(after.errors, before.errors + 1);
+    assert.equal(after.requests, before.requests);
+  } finally {
+    await clearAntigravityAccounts();
+  }
+});
+
+await test('a truncated first combo model never reaches the second model', async () => {
+  const id = `wire-combo-${Date.now()}`;
+  const comboName = `truncated-chain-${Date.now()}`;
+  await createWireProvider({ id, models: 'truncated-openai,truncated-final-frame' });
+  let comboId = null;
+  try {
+    const create = await fetch(`${base}/api/combos`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: comboName,
+        models: [`${id}/truncated-openai`, `${id}/truncated-final-frame`],
+      }),
+    });
+    const created = await create.json();
+    assert.equal(create.status, 201, JSON.stringify(created));
+    comboId = created.combo.id;
+
+    const before = stubCalls.length;
+    const res = await wireChat(comboName);
+    const text = await res.text();
+    assert.equal(res.status, 200);
+    assert.match(text, /"code":"stream_truncated"/);
+    assert.doesNotMatch(text, /complete answer/, 'the second model must not run after headers were sent');
+    assert.doesNotMatch(text, /\[DONE\]/);
+    assert.deepEqual(stubCalls.slice(before), ['truncated-openai']);
+  } finally {
+    if (comboId) await fetch(`${base}/api/combos/${encodeURIComponent(comboId)}`, { method: 'DELETE' });
+    await dropWireProvider(id);
+  }
+});
+
+// The inbound Responses route translates down to the chat pipeline and
+// rebuilds the reply, so these tests check the client-visible event stream and
+// that routing (including vision) still happens on the converted request.
+function collectResponsesEvents(text) {
+  const events = [];
+  for (const block of text.split('\n\n')) {
+    const lines = block.split('\n');
+    const type = lines.find((line) => line.startsWith('event:'))?.slice(6).trim();
+    const data = lines.find((line) => line.startsWith('data:'))?.slice(5).trim();
+    if (!type || !data) continue;
+    events.push({ type, data: JSON.parse(data) });
+  }
+  return events;
+}
+
+function postResponses(payload) {
+  return fetch(`${base}/v1/responses`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+await test('inbound /v1/responses streams Responses events instead of chat chunks', async () => {
+  const id = `inbound-${Date.now()}`;
+  await createWireProvider({ id, models: 'inbound-plain' });
+  try {
+    const res = await postResponses({ model: `${id}/inbound-plain`, input: 'halo', stream: true });
+    const text = await res.text();
+    assert.equal(res.status, 200, text);
+    assert.match(res.headers.get('content-type') || '', /text\/event-stream/);
+    const events = collectResponsesEvents(text);
+    assert.ok(events.length > 3, 'a stream must arrive as several Responses events');
+    for (const event of events) assert.equal(event.type, event.data.type, 'event: and data.type must agree');
+    assert.equal(events[0].type, 'response.created');
+    assert.ok(events.some((event) => event.type === 'response.output_text.delta'));
+    assert.equal(events.at(-1).type, 'response.completed');
+    assert.ok(!events.some((event) => event.type === 'response.failed'));
+    assert.doesNotMatch(text, /\[DONE\]/, 'a Responses stream carries no chat sentinel');
+
+    const completed = events.at(-1).data.response;
+    assert.equal(completed.status, 'completed');
+    assert.equal(completed.model, 'inbound-plain');
+    assert.match(completed.output[0].content[0].text, /stub reply for inbound-plain/);
+    assert.ok(completed.usage.input_tokens > 0 && completed.usage.output_tokens > 0);
+
+    const forwarded = chatBodies.at(-1);
+    assert.equal(forwarded.messages.filter((message) => message.role === 'user').at(-1).content, 'halo');
+    assert.equal(forwarded.stream, true);
+  } finally {
+    await dropWireProvider(id);
+  }
+});
+
+await test('inbound /v1/responses rebuilds streamed tool calls', async () => {
+  const id = `inbound-tool-${Date.now()}`;
+  await createWireProvider({ id, models: 'reasoning-empty-tools,tool-late-name' });
+  try {
+    const res = await postResponses({ model: `${id}/reasoning-empty-tools`, input: 'think', stream: true });
+    const events = collectResponsesEvents(await res.text());
+    const added = events.find((event) => event.type === 'response.output_item.added' && event.data.item?.type === 'function_call');
+    assert.ok(added, 'the function call item must be announced');
+    assert.equal(added.data.item.name, 'stub_tool');
+    const done = events.find((event) => event.type === 'response.output_item.done' && event.data.item?.type === 'function_call');
+    assert.ok(done, 'the function call item must close');
+    assert.equal(done.data.item.arguments, '{}');
+    assert.equal(events.at(-1).type, 'response.completed');
+    const completed = events.at(-1).data.response;
+    const call = completed.output.find((item) => item.type === 'function_call');
+    assert.equal(call.call_id, 'call_stub');
+    assert.equal(call.name, 'stub_tool');
+    assert.ok(completed.output.some((item) => item.type === 'message'), 'text before the call stays a message item');
+
+    // Argument fragments that arrive before the function name must be kept.
+    const late = await postResponses({ model: `${id}/tool-late-name`, input: 'weather', stream: true });
+    const lateEvents = collectResponsesEvents(await late.text());
+    const lateCall = lateEvents.at(-1).data.response.output.find((item) => item.type === 'function_call');
+    assert.equal(lateCall.name, 'get_weather');
+    assert.equal(lateCall.arguments, '{"city":"Jakarta","unit":"celsius"}');
+    const streamed = lateEvents
+      .filter((event) => event.type === 'response.function_call_arguments.delta')
+      .map((event) => event.data.delta)
+      .join('');
+    assert.equal(streamed, '{"city":"Jakarta","unit":"celsius"}');
+  } finally {
+    await dropWireProvider(id);
+  }
+});
+
+await test('inbound /v1/responses turns an upstream stream error into response.failed', async () => {
+  const id = `inbound-err-${Date.now()}`;
+  await createWireProvider({ id, models: 'glm-5.3-flash' });
+  try {
+    const res = await postResponses({ model: `${id}/glm-5.3-flash`, input: 'hi', stream: true });
+    const text = await res.text();
+    assert.equal(res.status, 200, text);
+    const events = collectResponsesEvents(text);
+    assert.equal(events.filter((event) => event.type === 'response.failed').length, 1, 'one terminal failure event');
+    const failed = events.at(-1);
+    assert.equal(failed.type, 'response.failed');
+    assert.equal(failed.data.response.status, 'failed');
+    assert.match(failed.data.error.message, /quota exhausted/);
+    assert.ok(!events.some((event) => event.type === 'response.completed'), 'no fake finish after the failure');
+    assert.doesNotMatch(text, /\[DONE\]/);
+  } finally {
+    await dropWireProvider(id);
+  }
+});
+
+await test('inbound /v1/responses returns a Responses object when not streaming', async () => {
+  const id = `inbound-json-${Date.now()}`;
+  await createWireProvider({ id, format: 'responses', models: 'responses-plain' });
+  try {
+    const res = await postResponses({ model: `${id}/responses-plain`, input: 'halo' });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.equal(body.object, 'response');
+    assert.equal(body.status, 'completed');
+    assert.equal(body.output[0].type, 'message');
+    assert.equal(body.output[0].role, 'assistant');
+    assert.match(body.output[0].content[0].text, /Responses model/);
+    assert.equal(body.usage.input_tokens, 11);
+    assert.equal(body.usage.output_tokens, 7);
+    assert.equal(body.usage.total_tokens, 18);
+  } finally {
+    await dropWireProvider(id);
+  }
+});
+
+await test('inbound /v1/responses keeps image input on the vision chain', async () => {
+  const created = await fetch(`${base}/api/providers/codebuddy-cn/accounts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label: 'Responses vision account', access_token: 'responses-vision-token' }),
+  });
+  assert.equal(created.status, 201);
+  const patch = (payload) => fetch(`${base}/api/vision-routing`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  try {
+    const saved = await patch({ enabled: true, strategy: 'order', models: ['cbcn/deepseek-v4.1-flash'] });
+    assert.equal(saved.status, 200, JSON.stringify(await saved.clone().json()));
+
+    stubCalls.length = 0;
+    const res = await postResponses({
+      model: 'cbcn/glm-5.3',
+      input: [{
+        role: 'user',
+        content: [
+          { type: 'input_text', text: 'what is this?' },
+          { type: 'input_image', image_url: 'data:image/png;base64,AAAA' },
+        ],
+      }],
+    });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.deepEqual(stubCalls, ['deepseek-v4.1-flash'], 'input_image must trigger the vision chain');
+    assert.match(body.output[0].content[0].text, /stub reply for deepseek-v4\.1-flash/);
+
+    const log = (await (await fetch(`${base}/api/request-log`)).json()).requests.at(-1);
+    assert.equal(log.route, 'vision');
+    assert.equal(log.image, true);
+    assert.equal(log.requested, 'cbcn/glm-5.3');
+  } finally {
+    await patch({ enabled: false, strategy: 'order', models: [] });
+    const pool = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+    for (const row of pool.items.filter((item) => item.label === 'Responses vision account')) {
+      await fetch(`${base}/api/providers/codebuddy-cn/accounts/${row.id}`, { method: 'DELETE' });
+    }
+  }
+});
+
+await test('inbound /v1/responses rejects fields it cannot honor', async () => {
+  const previous = await postResponses({ model: 'cbcn/glm-5.3', previous_response_id: 'resp_1', input: 'hi' });
+  assert.equal(previous.status, 400);
+  assert.match((await previous.json()).error.message, /previous_response_id/);
+
+  const tool = await postResponses({ model: 'cbcn/glm-5.3', input: 'hi', tools: [{ type: 'web_search' }] });
+  assert.equal(tool.status, 400);
+  assert.match((await tool.json()).error.message, /function tools/i);
+
+  const missing = await postResponses({ model: 'cbcn/glm-5.3' });
+  assert.equal(missing.status, 400);
+  assert.match((await missing.json()).error.message, /requires input/);
+});
+
+// Inbound Anthropic Messages follows the same deferred-header sink design as
+// Responses, so these tests focus on the rebuilt event stream and on the chat
+// body the request was translated into.
+const postMessages = (payload) => fetch(`${base}/v1/messages`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify(payload),
+});
+
+// Anthropic SSE uses the same `event:` + `data:` framing as the Responses
+// stream, so the existing parser is enough.
+const collectMessagesEvents = collectResponsesEvents;
+
+await test('inbound /v1/messages streams Messages events instead of chat chunks', async () => {
+  const id = `inbound-msg-${Date.now()}`;
+  await createWireProvider({ id, models: 'inbound-plain' });
+  try {
+    const res = await postMessages({
+      model: `${id}/inbound-plain`,
+      max_tokens: 64,
+      system: 'Be brief.',
+      messages: [{ role: 'user', content: 'halo' }],
+      stream: true,
+    });
+    const text = await res.text();
+    assert.equal(res.status, 200, text);
+    assert.match(res.headers.get('content-type') || '', /text\/event-stream/);
+    const events = collectMessagesEvents(text);
+    assert.ok(events.length > 3, 'a stream must arrive as several Messages events');
+    for (const event of events) assert.equal(event.type, event.data.type, 'event: and data.type must agree');
+    assert.equal(events[0].type, 'message_start');
+    assert.equal(events[0].data.message.role, 'assistant');
+    assert.equal(events[0].data.message.model, 'inbound-plain');
+    assert.equal(events.filter((event) => event.type === 'content_block_start').length, 1);
+    assert.equal(events.filter((event) => event.type === 'content_block_delta').length > 1, true);
+    const deltas = events
+      .filter((event) => event.type === 'content_block_delta' && event.data.delta.type === 'text_delta')
+      .map((event) => event.data.delta.text)
+      .join('');
+    assert.match(deltas, /stub reply for inbound-plain/);
+    const final = events.find((event) => event.type === 'message_delta');
+    assert.equal(final.data.delta.stop_reason, 'end_turn');
+    assert.ok(final.data.usage.output_tokens > 0);
+    assert.equal(events.at(-1).type, 'message_stop');
+    assert.doesNotMatch(text, /\[DONE\]/, 'a Messages stream carries no chat sentinel');
+
+    const forwarded = chatBodies.at(-1);
+    const system = forwarded.messages.find((message) => message.role === 'system');
+    assert.ok(system.content.startsWith('Be brief.'));
+    const user = forwarded.messages.filter((message) => message.role === 'user').at(-1);
+    assert.deepEqual(user.content, [{ type: 'text', text: 'halo' }]);
+    assert.equal(forwarded.max_tokens, 64);
+    assert.equal(forwarded.stream, true);
+  } finally {
+    await dropWireProvider(id);
+  }
+});
+
+await test('inbound /v1/messages rebuilds streamed tool calls', async () => {
+  const id = `inbound-msg-tool-${Date.now()}`;
+  await createWireProvider({ id, models: 'reasoning-empty-tools,tool-late-name' });
+  try {
+    const res = await postMessages({
+      model: `${id}/reasoning-empty-tools`,
+      max_tokens: 128,
+      messages: [{ role: 'user', content: 'think' }],
+      stream: true,
+    });
+    const events = collectMessagesEvents(await res.text());
+    const start = events.find((event) => event.type === 'content_block_start' && event.data.content_block.type === 'thinking');
+    assert.ok(start, 'reasoning must stream as a thinking block');
+    const text = events.find((event) => event.type === 'content_block_start' && event.data.content_block.type === 'text');
+    assert.ok(text, 'visible text gets its own block');
+    const tool = events.find((event) => event.type === 'content_block_start' && event.data.content_block.type === 'tool_use');
+    assert.ok(tool, 'the function call becomes a tool_use block');
+    assert.equal(tool.data.content_block.name, 'stub_tool');
+    assert.equal(tool.data.content_block.id, 'call_stub');
+    const input = events.find((event) => event.type === 'content_block_delta' && event.data.delta.type === 'input_json_delta');
+    assert.equal(input.data.delta.partial_json, '{}');
+    assert.equal(events.find((event) => event.type === 'message_delta').data.delta.stop_reason, 'tool_use');
+    assert.equal(events.at(-1).type, 'message_stop');
+
+    // Argument fragments that arrive before the function name must be kept.
+    const late = await postMessages({
+      model: `${id}/tool-late-name`,
+      max_tokens: 128,
+      messages: [{ role: 'user', content: 'weather' }],
+      stream: true,
+    });
+    const lateEvents = collectMessagesEvents(await late.text());
+    const lateTool = lateEvents.find((event) => event.type === 'content_block_start' && event.data.content_block.type === 'tool_use');
+    assert.equal(lateTool.data.content_block.name, 'get_weather');
+    const partial = lateEvents
+      .filter((event) => event.type === 'content_block_delta' && event.data.delta.type === 'input_json_delta')
+      .map((event) => event.data.delta.partial_json)
+      .join('');
+    assert.equal(partial, '{"city":"Jakarta","unit":"celsius"}');
+    assert.equal(lateEvents.find((event) => event.type === 'message_delta').data.delta.stop_reason, 'tool_use');
+  } finally {
+    await dropWireProvider(id);
+  }
+});
+
+await test('inbound /v1/messages turns an upstream stream error into one error event', async () => {
+  const id = `inbound-msg-err-${Date.now()}`;
+  await createWireProvider({ id, models: 'glm-5.3-flash' });
+  try {
+    const res = await postMessages({
+      model: `${id}/glm-5.3-flash`,
+      max_tokens: 64,
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: true,
+    });
+    const text = await res.text();
+    assert.equal(res.status, 200, text);
+    const events = collectMessagesEvents(text);
+    assert.equal(events.filter((event) => event.type === 'error').length, 1, 'one terminal error event');
+    const error = events.at(-1);
+    assert.equal(error.type, 'error');
+    assert.equal(error.data.error.type, 'rate_limit_error');
+    assert.match(error.data.error.message, /quota exhausted/);
+    assert.ok(!events.some((event) => event.type === 'message_stop'), 'no fake finish after the failure');
+    assert.ok(!events.some((event) => event.type === 'message_delta'));
+    assert.doesNotMatch(text, /\[DONE\]/);
+  } finally {
+    await dropWireProvider(id);
+  }
+});
+
+await test('inbound /v1/messages returns a message object when not streaming', async () => {
+  const id = `inbound-msg-json-${Date.now()}`;
+  await createWireProvider({ id, models: 'inbound-plain,reasoning-empty-tools' });
+  try {
+    const res = await postMessages({
+      model: `${id}/inbound-plain`,
+      max_tokens: 64,
+      messages: [{ role: 'user', content: 'halo' }],
+    });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.equal(body.type, 'message');
+    assert.equal(body.role, 'assistant');
+    assert.equal(body.content[0].type, 'text');
+    assert.match(body.content[0].text, /stub reply for inbound-plain/);
+    assert.equal(body.stop_reason, 'end_turn');
+    assert.ok(body.usage.input_tokens > 0 && body.usage.output_tokens > 0);
+
+    const toolRes = await postMessages({
+      model: `${id}/reasoning-empty-tools`,
+      max_tokens: 64,
+      messages: [{ role: 'user', content: 'think' }],
+    });
+    const toolBody = await toolRes.json();
+    assert.equal(toolRes.status, 200, JSON.stringify(toolBody));
+    assert.equal(toolBody.content[0].text, 'Done.');
+    const call = toolBody.content.find((block) => block.type === 'tool_use');
+    assert.equal(call.name, 'stub_tool');
+    assert.deepEqual(call.input, {});
+    assert.equal(toolBody.stop_reason, 'tool_use');
+  } finally {
+    await dropWireProvider(id);
+  }
+});
+
+await test('inbound /v1/messages replays history, tools, and sampling fields', async () => {
+  const id = `inbound-msg-hist-${Date.now()}`;
+  await createWireProvider({ id, models: 'inbound-plain' });
+  const tools = [{
+    name: 'get_weather',
+    description: 'Weather',
+    input_schema: { type: 'object', properties: { city: { type: 'string' } } },
+  }];
+  try {
+    const res = await postMessages({
+      model: `${id}/inbound-plain`,
+      max_tokens: 64,
+      temperature: 0.2,
+      stop_sequences: ['END'],
+      messages: [
+        { role: 'user', content: 'weather in Jakarta?' },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', thinking: 'need a tool' },
+            { type: 'text', text: 'Let me check.' },
+            { type: 'tool_use', id: 'toolu_hist', name: 'get_weather', input: { city: 'Jakarta' } },
+          ],
+        },
+        {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_hist', content: '{"temp":30}' }],
+        },
+      ],
+      tools,
+      tool_choice: { type: 'any' },
+    });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+
+    const forwarded = chatBodies.at(-1);
+    const assistant = forwarded.messages.find((message) => message.role === 'assistant');
+    assert.equal(assistant.content, 'Let me check.');
+    assert.deepEqual(assistant.tool_calls, [{
+      id: 'toolu_hist',
+      type: 'function',
+      function: { name: 'get_weather', arguments: '{"city":"Jakarta"}' },
+    }]);
+    const tool = forwarded.messages.find((message) => message.role === 'tool');
+    assert.equal(tool.tool_call_id, 'toolu_hist');
+    assert.equal(tool.content, '{"temp":30}');
+    assert.ok(!forwarded.messages.some((message) => JSON.stringify(message).includes('need a tool')), 'thinking blocks are dropped');
+    assert.deepEqual(forwarded.tools, [{
+      type: 'function',
+      function: {
+        name: 'get_weather',
+        description: 'Weather',
+        parameters: { type: 'object', properties: { city: { type: 'string' } } },
+      },
+    }]);
+    assert.equal(forwarded.tool_choice, 'required');
+    assert.deepEqual(forwarded.stop, ['END']);
+    assert.equal(forwarded.temperature, 0.2);
+  } finally {
+    await dropWireProvider(id);
+  }
+});
+
+await test('inbound /v1/messages keeps image input on the vision chain', async () => {
+  const created = await fetch(`${base}/api/providers/codebuddy-cn/accounts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label: 'Messages vision account', access_token: 'messages-vision-token' }),
+  });
+  assert.equal(created.status, 201);
+  const patch = (payload) => fetch(`${base}/api/vision-routing`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  try {
+    const saved = await patch({ enabled: true, strategy: 'order', models: ['cbcn/deepseek-v4.1-flash'] });
+    assert.equal(saved.status, 200, JSON.stringify(await saved.clone().json()));
+
+    stubCalls.length = 0;
+    const res = await postMessages({
+      model: 'cbcn/glm-5.3',
+      max_tokens: 64,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'what is this?' },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+        ],
+      }],
+    });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.deepEqual(stubCalls, ['deepseek-v4.1-flash'], 'image blocks must trigger the vision chain');
+    assert.match(body.content[0].text, /stub reply for deepseek-v4\.1-flash/);
+
+    const log = (await (await fetch(`${base}/api/request-log`)).json()).requests.at(-1);
+    assert.equal(log.route, 'vision');
+    assert.equal(log.image, true);
+    assert.equal(log.requested, 'cbcn/glm-5.3');
+  } finally {
+    await patch({ enabled: false, strategy: 'order', models: [] });
+    const pool = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+    for (const row of pool.items.filter((item) => item.label === 'Messages vision account')) {
+      await fetch(`${base}/api/providers/codebuddy-cn/accounts/${row.id}`, { method: 'DELETE' });
+    }
+  }
+});
+
+await test('inbound /v1/messages rejects requests it cannot translate', async () => {
+  const cases = [
+    [{ model: 'cbcn/glm-5.3', max_tokens: 16 }, /at least one message/],
+    [{ model: 'cbcn/glm-5.3', max_tokens: 0, messages: [{ role: 'user', content: 'hi' }] }, /max_tokens/],
+    [{ model: 'cbcn/glm-5.3', max_tokens: 16, messages: [{ role: 'user', content: [{ type: 'tool_use', name: 'x' }] }] }, /Unsupported user content block/],
+    [{
+      model: 'cbcn/glm-5.3',
+      max_tokens: 16,
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+    }, /function tools/i],
+    [{
+      model: 'cbcn/glm-5.3',
+      max_tokens: 16,
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [{ name: 'get_weather' }],
+      tool_choice: { type: 'weird' },
+    }, /tool_choice/],
+    [{
+      model: 'cbcn/glm-5.3',
+      max_tokens: 16,
+      messages: [{ role: 'user', content: [{ type: 'tool_result', content: 'x' }] }],
+    }, /tool_use_id/],
+  ];
+  for (const [payload, pattern] of cases) {
+    const res = await postMessages(payload);
+    const body = await res.json();
+    assert.equal(res.status, 400, JSON.stringify(body));
+    assert.equal(body.type, 'error');
+    assert.equal(body.error.type, 'invalid_request_error');
+    assert.match(body.error.message, pattern);
+  }
+});
+
+// Two helpers the routing-rule tests share: a clean credential pool (the 429
+// fixture parks one account) and the settings endpoint.
+async function resetCodebuddyAccounts(tokens) {
+  for (;;) {
+    const page = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+    if (!page.items.length) break;
+    for (const row of page.items) {
+      await fetch(`${base}/api/providers/codebuddy-cn/accounts/${row.id}`, { method: 'DELETE' });
+    }
+  }
+  for (const token of tokens) {
+    const res = await fetch(`${base}/api/providers/codebuddy-cn/accounts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label: `Routing ${token}`, access_token: token }),
+    });
+    assert.equal(res.status, 201, `account ${token} must be created`);
+  }
+}
+
+function patchRoutingRules(payload) {
+  return fetch(`${base}/api/routing-rules`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+await test('routing rules and per-key default models validate and persist', async () => {
+  const initial = await fetch(`${base}/api/routing-rules`);
+  const initialBody = await initial.json();
+  assert.equal(initial.status, 200);
+  assert.deepEqual(initialBody.routing, { aliases: {}, rules: [] });
+  assert.ok(Array.isArray(initialBody.catalog) && initialBody.catalog.length > 0);
+  assert.ok(Array.isArray(initialBody.combos));
+  assert.ok(Array.isArray(initialBody.keys));
+
+  const create = await fetch(`${base}/api/keys`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'Routing settings key', secret: 'routing_settings_secret', defaultModel: 'glm-5.3' }),
+  });
+  const created = await create.json();
+  assert.equal(create.status, 201, JSON.stringify(created));
+  assert.equal(created.key.defaultModel, 'cbcn/glm-5.3', 'the default model must store its canonical id');
+  const keyId = created.key.id;
+  try {
+    const view = await (await fetch(`${base}/api/routing-rules`)).json();
+    assert.ok(view.keys.some((key) => key.id === keyId), 'a rule may target this key id');
+    assert.ok(!JSON.stringify(view).includes('routing_settings_secret'), 'the routing payload must never leak a secret');
+
+    const bad = [
+      [{ oops: true }, /Unknown routing rules field/],
+      [{ aliases: [] }, /aliases must be a JSON object/],
+      [{ aliases: { 'cbcn/glm-5.3': 'cbcn/glm-5.2' } }, /shadow/],
+      [{ aliases: { 'chat-alias': 'cbcn/not-a-model' } }, /Invalid model/],
+      [{ rules: [{ name: 'x', match: {}, models: ['cbcn/glm-5.3'] }] }, /at least one match condition/],
+      [{ rules: [{ name: 'x', match: { region: 'eu' }, models: ['cbcn/glm-5.3'] }] }, /Unknown match field/],
+      [{ rules: [{ name: 'x', match: { apiKeyId: 'missing-key' }, models: ['cbcn/glm-5.3'] }] }, /Unknown API key/],
+      [{ rules: [{ name: 'x', match: { hasTools: true }, models: [] }] }, /needs at least one model/],
+      [{ rules: [{ name: 'x', match: { hasTools: true }, models: ['cbcn/glm-5.3', 'glm-5.3'] }] }, /twice/],
+      [{
+        rules: [
+          { name: 'dup', match: { hasTools: true }, models: ['cbcn/glm-5.3'] },
+          { name: 'DUP', match: { hasTools: true }, models: ['cbcn/glm-5.3'] },
+        ],
+      }, /already exists/],
+      [{ rules: [{ name: 'x', match: { hasTools: true }, models: ['cbcn/glm-5.3'], enabled: 'yes' }] }, /enabled must be boolean/],
+      [{ rules: [{ name: 'x', match: { hasTools: true }, models: ['cbcn/glm-5.3'], extra: 1 }] }, /Unknown rule field/],
+    ];
+    for (const [payload, pattern] of bad) {
+      const res = await patchRoutingRules(payload);
+      assert.equal(res.status, 400, `expected 400 for ${JSON.stringify(payload)}`);
+      assert.match((await res.json()).error.message, pattern);
+    }
+    const unchanged = await (await fetch(`${base}/api/routing-rules`)).json();
+    assert.deepEqual(unchanged.routing, { aliases: {}, rules: [] }, 'a rejected patch must not persist');
+
+    const aliasOnly = await patchRoutingRules({ aliases: { 'chat-alias': 'glm-5.3' } });
+    const aliasBody = await aliasOnly.json();
+    assert.equal(aliasOnly.status, 200, JSON.stringify(aliasBody));
+    assert.deepEqual(aliasBody.routing.aliases, { 'chat-alias': 'cbcn/glm-5.3' });
+
+    const rulesSaved = await patchRoutingRules({
+      rules: [{ name: 'Premium', match: { apiKeyId: keyId, hasTools: true }, models: ['glm-5.3', 'cbcn/glm-5.2'] }],
+    });
+    const rulesBody = await rulesSaved.json();
+    assert.equal(rulesSaved.status, 200, JSON.stringify(rulesBody));
+    assert.deepEqual(rulesBody.routing.aliases, { 'chat-alias': 'cbcn/glm-5.3' }, 'a rules-only patch keeps aliases');
+    assert.equal(rulesBody.routing.rules.length, 1);
+    assert.deepEqual(rulesBody.routing.rules[0].models, ['cbcn/glm-5.3', 'cbcn/glm-5.2'], 'rule targets are canonical');
+    assert.ok(rulesBody.routing.rules[0].id, 'a saved rule gets an id');
+
+    const draft = await patchRoutingRules({ rules: [{ name: 'Draft', enabled: false, match: { hasTools: true }, models: [] }] });
+    assert.equal(draft.status, 200, 'a disabled rule may be saved without models');
+    const aliasesOnly = await patchRoutingRules({ aliases: { 'chat-alias': 'glm-5.3' } });
+    const aliasesBody = await aliasesOnly.json();
+    assert.equal(aliasesBody.routing.rules.length, 1, 'an aliases-only patch keeps the saved rules');
+    assert.equal(aliasesBody.routing.rules[0].name, 'Draft');
+
+    const badDefault = await fetch(`${base}/api/keys/${keyId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ defaultModel: 'cbcn/not-a-model' }),
+    });
+    assert.equal(badDefault.status, 400);
+    assert.match((await badDefault.json()).error.message, /defaultModel/);
+    const cleared = await fetch(`${base}/api/keys/${keyId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ defaultModel: '' }),
+    });
+    assert.equal(cleared.status, 200);
+    assert.equal((await cleared.json()).key.defaultModel, null);
+
+    const reset = await patchRoutingRules({ aliases: {}, rules: [] });
+    assert.equal(reset.status, 200);
+    assert.deepEqual((await reset.json()).routing, { aliases: {}, rules: [] });
+  } finally {
+    await patchRoutingRules({ aliases: {}, rules: [] });
+    await fetch(`${base}/api/keys/${keyId}`, { method: 'DELETE' });
+  }
+});
+
+await test('routing rule matching combines conditions and skips unusable rules', async () => {
+  const { estimateContextTokens, matchRoutingRule } = await import('../noroute_src/lib/routing-rules.js');
+  const settings = {
+    aliases: {},
+    rules: [
+      { id: 'off', name: 'disabled', enabled: false, match: { hasTools: true }, models: ['cbcn/glm-5.2'] },
+      { id: 'key', name: 'key rule', enabled: true, match: { apiKeyId: 'key-1' }, models: ['cbcn/glm-5.2'] },
+      { id: 'big', name: 'big tool turn', enabled: true, match: { hasTools: true, minContextTokens: 1000 }, models: ['glm-5.3'] },
+      { id: 'header', name: 'header rule', enabled: true, match: { header: { name: 'x-route-tier', value: 'premium' } }, models: ['cbcn/glm-5.2'] },
+      { id: 'stale', name: 'stale target', enabled: true, match: { hasTools: false }, models: ['cbcn/model-that-vanished'] },
+      { id: 'fallback', name: 'fallback target', enabled: true, match: { hasTools: false }, models: ['cbcn/glm-5.2'] },
+    ],
+  };
+  const small = { model: 'cbcn/glm-5.3', messages: [{ role: 'user', content: 'hi' }] };
+  const toolTurn = { messages: [{ role: 'user', content: 'x'.repeat(4000) }], tools: [{ type: 'function', function: { name: 'read_file' } }] };
+  const plainReq = { headers: {} };
+
+  assert.equal(estimateContextTokens(small), 1);
+  assert.equal(estimateContextTokens({
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'hi' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+      ],
+    }],
+  }), 1001, 'an image adds a flat allowance');
+  assert.ok(estimateContextTokens(toolTurn) >= 1000, 'the tool turn counts as a large context');
+
+  assert.equal(matchRoutingRule(settings, small, { headers: { 'x-route-tier': 'Premium' } }, { managedId: 'key-1' }).name, 'key rule', 'the first enabled match wins');
+  const bigMatch = matchRoutingRule(settings, toolTurn, plainReq, { managedId: 'key-2' });
+  assert.equal(bigMatch.name, 'big tool turn');
+  assert.deepEqual(bigMatch.chain, ['cbcn/glm-5.3'], 'stored rule targets are canonical at match time');
+  assert.equal(matchRoutingRule(settings, small, { headers: { 'x-route-tier': 'PREMIUM' } }, { managedId: 'key-2' }).name, 'header rule', 'header matching is case-insensitive');
+  const stale = matchRoutingRule(settings, small, plainReq, { managedId: 'key-2' });
+  assert.equal(stale.name, 'fallback target', 'a rule whose only target vanished is skipped');
+  assert.deepEqual(stale.chain, ['cbcn/glm-5.2']);
+  assert.equal(matchRoutingRule({ rules: settings.rules.slice(0, 5) }, small, plainReq, { managedId: 'key-2' }), null, 'no usable rule means no rewrite');
+});
+
+await test('a saved alias rewrites the model and the request log names the alias', async () => {
+  await resetCodebuddyAccounts(['routing-alias-token']);
+  let comboId = null;
+  try {
+    const saved = await patchRoutingRules({ aliases: { 'chat-alias': 'glm-5.3' } });
+    const savedBody = await saved.json();
+    assert.equal(saved.status, 200, JSON.stringify(savedBody));
+    assert.deepEqual(savedBody.routing.aliases, { 'chat-alias': 'cbcn/glm-5.3' });
+
+    stubCalls.length = 0;
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'chat-alias', messages: [{ role: 'user', content: 'halo' }] }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.match(body.choices[0].message.content, /stub reply for glm-5\.3/);
+    assert.deepEqual(stubCalls, ['glm-5.3'], 'the upstream must see the alias target');
+    assert.equal(chatBodies.at(-1).model, 'glm-5.3');
+
+    let log = (await (await fetch(`${base}/api/request-log`)).json()).requests.at(-1);
+    assert.equal(log.requested, 'chat-alias');
+    assert.equal(log.route, 'alias');
+    assert.equal(log.via, 'chat-alias');
+    assert.equal(log.model, 'glm-5.3');
+    assert.deepEqual(log.attempted, ['cbcn/glm-5.3']);
+
+    // An alias may point at a whole combo; the alias stays the stated reason.
+    const create = await fetch(`${base}/api/combos`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'alias-combo', models: ['cbcn/glm-5.3'] }),
+    });
+    const comboBody = await create.json();
+    assert.equal(create.status, 201, JSON.stringify(comboBody));
+    comboId = comboBody.combo.id;
+    const savedCombo = await patchRoutingRules({ aliases: { 'alias-to-combo': 'alias-combo' } });
+    const savedComboBody = await savedCombo.json();
+    assert.equal(savedCombo.status, 200, JSON.stringify(savedComboBody));
+
+    stubCalls.length = 0;
+    const comboRes = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'alias-to-combo', messages: [{ role: 'user', content: 'halo' }] }),
+    });
+    const comboReply = await comboRes.json();
+    assert.equal(comboRes.status, 200, JSON.stringify(comboReply));
+    assert.match(comboReply.choices[0].message.content, /stub reply for glm-5\.3/);
+    log = (await (await fetch(`${base}/api/request-log`)).json()).requests.at(-1);
+    assert.equal(log.route, 'alias');
+    assert.equal(log.via, 'alias-to-combo');
+    assert.equal(log.model, 'glm-5.3');
+    assert.deepEqual(log.attempted, ['cbcn/glm-5.3']);
+
+    const shadow = await patchRoutingRules({ aliases: { 'cbcn/glm-5.3': 'cbcn/glm-5.2' } });
+    assert.equal(shadow.status, 400);
+    assert.match((await shadow.json()).error.message, /shadow/);
+  } finally {
+    await patchRoutingRules({ aliases: {}, rules: [] });
+    if (comboId) await fetch(`${base}/api/combos/${encodeURIComponent(comboId)}`, { method: 'DELETE' });
+  }
+});
+
+await test('a header routing rule walks its chain and reports the rule in the trace', async () => {
+  await resetCodebuddyAccounts(['routing-rule-token-a', 'routing-rule-token-b']);
+  try {
+    const model = await fetch(`${base}/api/providers/codebuddy-cn/models`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'combo-always-429' }),
+    });
+    assert.ok([201, 409].includes(model.status), `catalog model: ${model.status}`);
+
+    const saved = await patchRoutingRules({
+      aliases: {},
+      rules: [{
+        name: 'Premium tier',
+        match: { header: { name: 'x-route-tier', value: 'premium' } },
+        models: ['cbcn/combo-always-429', 'glm-5.3'],
+      }],
+    });
+    const savedBody = await saved.json();
+    assert.equal(saved.status, 200, JSON.stringify(savedBody));
+
+    stubCalls.length = 0;
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-route-tier': 'Premium' },
+      body: JSON.stringify({ model: 'cbcn/glm-5.2', messages: [{ role: 'user', content: 'halo' }] }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.match(body.choices[0].message.content, /stub reply for glm-5\.3/);
+    assert.deepEqual(stubCalls, ['combo-always-429', 'glm-5.3'], 'the rule chain is walked in order');
+
+    let log = (await (await fetch(`${base}/api/request-log`)).json()).requests.at(-1);
+    assert.equal(log.requested, 'cbcn/glm-5.2');
+    assert.equal(log.route, 'rule');
+    assert.equal(log.via, 'Premium tier');
+    assert.equal(log.model, 'glm-5.3');
+    assert.deepEqual(log.attempted, ['cbcn/combo-always-429', 'cbcn/glm-5.3']);
+
+    // Without the header the router leaves the requested model alone.
+    stubCalls.length = 0;
+    const direct = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'cbcn/glm-5.2', messages: [{ role: 'user', content: 'halo' }] }),
+    });
+    const directBody = await direct.json();
+    assert.equal(direct.status, 200, JSON.stringify(directBody));
+    assert.match(directBody.choices[0].message.content, /stub reply for glm-5\.2/);
+    assert.deepEqual(stubCalls, ['glm-5.2']);
+    log = (await (await fetch(`${base}/api/request-log`)).json()).requests.at(-1);
+    assert.equal(log.route, 'direct');
+    assert.equal(log.via, null);
+    assert.deepEqual(log.attempted, ['cbcn/glm-5.2']);
+  } finally {
+    await patchRoutingRules({ aliases: {}, rules: [] });
+  }
+});
+
+await test('a managed key default model fills only a missing model', async () => {
+  await resetCodebuddyAccounts(['routing-default-token']);
+  const create = await fetch(`${base}/api/keys`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'Default model key', secret: 'routing_default_key', defaultModel: 'glm-5.3' }),
+  });
+  const created = await create.json();
+  assert.equal(create.status, 201, JSON.stringify(created));
+  assert.equal(created.key.defaultModel, 'cbcn/glm-5.3');
+  const keyId = created.key.id;
+
+  const invalid = await fetch(`${base}/api/keys/${keyId}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ defaultModel: 'cbcn/not-a-model' }),
+  });
+  assert.equal(invalid.status, 400);
+  assert.match((await invalid.json()).error.message, /defaultModel/);
+
+  const enabled = await fetch(`${base}/api/auth-settings`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ requireApiKey: true }),
+  });
+  assert.equal(enabled.status, 200);
+  try {
+    stubCalls.length = 0;
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer routing_default_key' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'halo' }] }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.match(body.choices[0].message.content, /stub reply for glm-5\.3/);
+    assert.deepEqual(stubCalls, ['glm-5.3'], 'the key default must pick the model');
+
+    const log = (await (await fetch(`${base}/api/request-log`)).json()).requests.at(-1);
+    assert.equal(log.requested, null, 'no model was requested');
+    assert.equal(log.route, 'direct');
+    assert.equal(log.model, 'glm-5.3');
+
+    // An explicit model always wins over the key default.
+    stubCalls.length = 0;
+    const explicit = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer routing_default_key' },
+      body: JSON.stringify({ model: 'cbcn/glm-5.2', messages: [{ role: 'user', content: 'halo' }] }),
+    });
+    const explicitBody = await explicit.json();
+    assert.equal(explicit.status, 200, JSON.stringify(explicitBody));
+    assert.match(explicitBody.choices[0].message.content, /stub reply for glm-5\.2/);
+    assert.deepEqual(stubCalls, ['glm-5.2']);
+    const explicitLog = (await (await fetch(`${base}/api/request-log`)).json()).requests.at(-1);
+    assert.equal(explicitLog.requested, 'cbcn/glm-5.2');
+    assert.equal(explicitLog.model, 'glm-5.2');
+  } finally {
+    await fetch(`${base}/api/auth-settings`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ requireApiKey: false }),
+    });
+    await fetch(`${base}/api/keys/${keyId}`, { method: 'DELETE' });
+  }
+});
+
+function patchBudgets(payload) {
+  return fetch(`${base}/api/budgets`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+}
+
+async function waitFor(predicate, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return false;
+}
+
+await test('daily budgets validate, persist and report today usage', async () => {
+  const initial = await (await fetch(`${base}/api/budgets`)).json();
+  assert.equal(initial.enabled, true);
+  assert.match(initial.day, /^\d{4}-\d{2}-\d{2}$/);
+  assert.ok(Array.isArray(initial.keys));
+  const codebuddy = initial.providers.find((row) => row.id === 'codebuddy-cn');
+  assert.ok(codebuddy, 'every provider is listed with its limit and usage');
+  assert.equal(codebuddy.limit, null);
+
+  const create = await fetch(`${base}/api/keys`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'Budget settings key', secret: 'budget_settings_secret' }),
+  });
+  const created = await create.json();
+  assert.equal(create.status, 201, JSON.stringify(created));
+  const keyId = created.key.id;
+  try {
+    const bad = [
+      [{}, /Nothing to update/],
+      [{ enabled: 'yes' }, /enabled must be boolean/],
+      [{ oops: true }, /Unknown field/],
+      [{ keys: [] }, /keys must be a JSON object/],
+      [{ keys: { [keyId]: {} } }, /needs at least one of tokens or cost/],
+      [{ keys: { [keyId]: { tokens: 0 } } }, /tokens must be a positive integer/],
+      [{ keys: { [keyId]: { cost: -1 } } }, /cost must be a positive number/],
+      [{ keys: { [keyId]: { extra: 1 } } }, /Unknown limit field/],
+      [{ providers: { '': { tokens: 10 } } }, /needs an id/],
+    ];
+    for (const [payload, pattern] of bad) {
+      const res = await patchBudgets(payload);
+      assert.equal(res.status, 400, `expected 400 for ${JSON.stringify(payload)}`);
+      assert.match((await res.json()).error.message, pattern);
+    }
+    const unchanged = await (await fetch(`${base}/api/budgets`)).json();
+    assert.equal(unchanged.keys.find((row) => row.id === keyId).limit, null, 'a rejected patch must not persist');
+
+    const saved = await patchBudgets({ keys: { [keyId]: { tokens: 1000, cost: 0.5 } } });
+    const savedBody = await saved.json();
+    assert.equal(saved.status, 200, JSON.stringify(savedBody));
+    const row = savedBody.keys.find((entry) => entry.id === keyId);
+    assert.deepEqual(row.limit, { tokens: 1000, cost: 0.5 });
+    assert.equal(row.used.tokens, 0);
+    assert.equal(row.percent, 0);
+    assert.equal(row.costPercent, 0);
+    assert.ok(!JSON.stringify(savedBody).includes('budget_settings_secret'), 'the payload must never leak a key secret');
+
+    const providerSaved = await patchBudgets({ providers: { 'codebuddy-cn': { tokens: 5000 } } });
+    const providerBody = await providerSaved.json();
+    assert.equal(providerSaved.status, 200, JSON.stringify(providerBody));
+    assert.deepEqual(providerBody.providers.find((entry) => entry.id === 'codebuddy-cn').limit, { tokens: 5000 });
+    assert.deepEqual(
+      providerBody.keys.find((entry) => entry.id === keyId).limit,
+      { tokens: 1000, cost: 0.5 },
+      'a provider patch keeps key limits',
+    );
+
+    // The page must still show a configured limit while enforcement is off.
+    const disabled = await patchBudgets({ enabled: false });
+    const disabledBody = await disabled.json();
+    assert.equal(disabled.status, 200);
+    assert.equal(disabledBody.enabled, false);
+    assert.deepEqual(disabledBody.keys.find((entry) => entry.id === keyId).limit, { tokens: 1000, cost: 0.5 });
+
+    const cleared = await patchBudgets({ enabled: true, keys: { [keyId]: null }, providers: { 'codebuddy-cn': null } });
+    const clearedBody = await cleared.json();
+    assert.equal(cleared.status, 200);
+    assert.equal(clearedBody.enabled, true);
+    assert.equal(clearedBody.keys.find((entry) => entry.id === keyId).limit, null);
+    assert.equal(clearedBody.providers.find((entry) => entry.id === 'codebuddy-cn').limit, null);
+  } finally {
+    await patchBudgets({ enabled: true, keys: { [keyId]: null }, providers: { 'codebuddy-cn': null } });
+    await fetch(`${base}/api/keys/${keyId}`, { method: 'DELETE' });
+  }
+});
+
+await test('a key budget refuses the request before upstream and alerts once', async () => {
+  const http = await import('node:http');
+  await resetCodebuddyAccounts(['budget-key-token']);
+  const delivered = [];
+  const receiver = http.createServer((req, res) => {
+    let text = '';
+    req.on('data', (chunk) => { text += chunk; });
+    req.on('end', () => {
+      try { delivered.push(JSON.parse(text)); } catch { /* a malformed hook is not the router's problem */ }
+      res.writeHead(204).end();
+    });
+  });
+  await new Promise((resolve) => receiver.listen(0, '127.0.0.1', resolve));
+  const hookUrl = `http://127.0.0.1:${receiver.address().port}/hook`;
+
+  const create = await fetch(`${base}/api/keys`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'Budget key', secret: 'budget_key_secret' }),
+  });
+  const created = await create.json();
+  assert.equal(create.status, 201, JSON.stringify(created));
+  const keyId = created.key.id;
+  const ask = () => fetch(`${base}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: 'Bearer budget_key_secret' },
+    body: JSON.stringify({ model: 'cbcn/glm-5.3', messages: [{ role: 'user', content: 'halo' }] }),
+  });
+  try {
+    const hook = await fetch(`${base}/api/webhook`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true, url: hookUrl }),
+    });
+    assert.equal(hook.status, 200, JSON.stringify(await hook.json()));
+
+    // The limit must exist before the first request: counters are only written
+    // for scopes that are capped at the time the request completes.
+    assert.equal((await patchBudgets({ keys: { [keyId]: { tokens: 100000 } } })).status, 200);
+    const auth = await fetch(`${base}/api/auth-settings`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ requireApiKey: true }),
+    });
+    assert.equal(auth.status, 200);
+
+    stubCalls.length = 0;
+    const first = await ask();
+    const firstBody = await first.json();
+    assert.equal(first.status, 200, JSON.stringify(firstBody));
+    assert.deepEqual(stubCalls, ['glm-5.3']);
+    const afterFirst = await (await fetch(`${base}/api/budgets`)).json();
+    const row = afterFirst.keys.find((entry) => entry.id === keyId);
+    assert.ok(row.used.tokens > 0, 'a successful request must be counted');
+    assert.equal(row.limit.tokens, 100000);
+
+    assert.equal((await patchBudgets({ keys: { [keyId]: { tokens: 1 } } })).status, 200);
+    stubCalls.length = 0;
+    const blocked = await ask();
+    const blockedBody = await blocked.json();
+    assert.equal(blocked.status, 429, JSON.stringify(blockedBody));
+    assert.equal(blockedBody.error.type, 'budget_error');
+    assert.equal(blockedBody.error.code, 'budget_exhausted');
+    assert.equal(blockedBody.error.scope, `key:${keyId}`);
+    assert.deepEqual(blockedBody.error.reasons, ['tokens']);
+    assert.equal(blockedBody.error.limit.tokens, 1);
+    assert.ok(blockedBody.error.used.tokens > 0);
+    assert.match(blockedBody.error.message, /Daily budget reached/);
+    assert.equal(stubCalls.length, 0, 'a budget refusal must never reach upstream');
+    const log = (await (await fetch(`${base}/api/request-log`)).json()).requests.at(-1);
+    assert.equal(log.status, 429);
+
+    assert.ok(await waitFor(() => delivered.some((event) => event.event === 'budget')), 'a budget alert must reach the webhook');
+    const alerts = delivered.filter((event) => event.event === 'budget');
+    assert.equal(alerts.length, 1);
+    assert.equal(alerts[0].scope, `key:${keyId}`);
+    assert.deepEqual(alerts[0].reasons, ['tokens']);
+    assert.ok(!JSON.stringify(alerts[0]).includes('budget_key_secret'), 'alerts carry metadata only');
+
+    const again = await ask();
+    assert.equal(again.status, 429);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(delivered.filter((event) => event.event === 'budget').length, 1, 'one alert per scope per day');
+  } finally {
+    await fetch(`${base}/api/auth-settings`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ requireApiKey: false }),
+    });
+    await fetch(`${base}/api/webhook`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false, url: '' }),
+    });
+    await patchBudgets({ keys: { [keyId]: null } });
+    await fetch(`${base}/api/keys/${keyId}`, { method: 'DELETE' });
+    await resetCodebuddyAccounts([]);
+    await new Promise((resolve) => receiver.close(resolve));
+  }
+});
+
+await test('a provider budget falls back inside a chain', async () => {
+  await resetCodebuddyAccounts(['budget-provider-token']);
+  let providerId = null;
+  let fallbackCombo = null;
+  let blockedCombo = null;
+  try {
+    const providerRes = await fetch(`${base}/api/providers`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        id: 'budget-alt',
+        name: 'Budget Alt',
+        baseUrl: stubBase,
+        chatPath: '/chat/completions',
+        models: ['alt-model'],
+        // The stub rejects unauthenticated chat calls, so the fallback target
+        // needs a real pool account like any other credentialed provider.
+        requiresAccount: true,
+      }),
+    });
+    const providerBody = await providerRes.json();
+    assert.equal(providerRes.status, 201, JSON.stringify(providerBody));
+    providerId = providerBody.created;
+    const altAccount = await fetch(`${base}/api/providers/${providerId}/accounts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 'Budget Alt account', access_token: 'budget-alt-token' }),
+    });
+    assert.equal(altAccount.status, 201, await altAccount.text());
+
+    assert.equal((await patchBudgets({ providers: { 'codebuddy-cn': { tokens: 100000 } } })).status, 200);
+    stubCalls.length = 0;
+    const warm = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'cbcn/glm-5.3', messages: [{ role: 'user', content: 'halo' }] }),
+    });
+    assert.equal(warm.status, 200, JSON.stringify(await warm.json()));
+    assert.deepEqual(stubCalls, ['glm-5.3']);
+    const budgetView = await (await fetch(`${base}/api/budgets`)).json();
+    const providerRow = budgetView.providers.find((entry) => entry.id === 'codebuddy-cn');
+    assert.ok(providerRow.used.tokens > 0, 'provider usage is counted for a capped provider');
+    assert.equal((await patchBudgets({ providers: { 'codebuddy-cn': { tokens: 1 } } })).status, 200);
+
+    const createFallback = await fetch(`${base}/api/combos`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'budget-fallback', models: ['cbcn/glm-5.3', 'budget-alt/alt-model'] }),
+    });
+    const fallbackBody = await createFallback.json();
+    assert.equal(createFallback.status, 201, JSON.stringify(fallbackBody));
+    fallbackCombo = fallbackBody.combo.id;
+
+    stubCalls.length = 0;
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'budget-fallback', messages: [{ role: 'user', content: 'halo' }] }),
+    });
+    const body = await res.json();
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.match(body.choices[0].message.content, /stub reply for alt-model/);
+    assert.deepEqual(stubCalls, ['alt-model'], 'the capped provider must not be called');
+    const log = (await (await fetch(`${base}/api/request-log`)).json()).requests.at(-1);
+    assert.deepEqual(log.attempted, ['cbcn/glm-5.3', 'budget-alt/alt-model'], 'the trace keeps the skipped attempt');
+
+    const createBlocked = await fetch(`${base}/api/combos`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'budget-blocked', models: ['cbcn/glm-5.3', 'cbcn/glm-5.2'] }),
+    });
+    const blockedBody = await createBlocked.json();
+    assert.equal(createBlocked.status, 201, JSON.stringify(blockedBody));
+    blockedCombo = blockedBody.combo.id;
+
+    stubCalls.length = 0;
+    const allBlocked = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'budget-blocked', messages: [{ role: 'user', content: 'halo' }] }),
+    });
+    const allBlockedBody = await allBlocked.json();
+    assert.equal(allBlocked.status, 429, JSON.stringify(allBlockedBody));
+    assert.match(allBlockedBody.error.message, /Tried: cbcn\/glm-5\.3 → cbcn\/glm-5\.2/);
+    assert.deepEqual(allBlockedBody.error.attempted, ['cbcn/glm-5.3', 'cbcn/glm-5.2']);
+    assert.equal(stubCalls.length, 0);
+  } finally {
+    await patchBudgets({ providers: { 'codebuddy-cn': null } });
+    if (fallbackCombo) await fetch(`${base}/api/combos/${encodeURIComponent(fallbackCombo)}`, { method: 'DELETE' });
+    if (blockedCombo) await fetch(`${base}/api/combos/${encodeURIComponent(blockedCombo)}`, { method: 'DELETE' });
+    if (providerId) await fetch(`${base}/api/providers/${encodeURIComponent(providerId)}`, { method: 'DELETE' });
+    await resetCodebuddyAccounts([]);
+  }
+});
+
+await test('maintenance settings validate and a manual run records its result', async () => {
+  const initial = await (await fetch(`${base}/api/maintenance`)).json();
+  assert.equal(initial.settings.enabled, true);
+  assert.equal(initial.settings.intervalMinutes, 15);
+  assert.equal(initial.running, false, 'the scheduler starts only from the server entry point');
+  assert.deepEqual(initial.tasks.map((task) => task.id), ['tokens', 'quota', 'catalog']);
+  assert.ok(initial.tasks.every((task) => task.due === true && task.lastRunAt === null));
+
+  const bad = [
+    [{}, /Nothing to update/],
+    [{ enabled: 'yes' }, /enabled must be boolean/],
+    [{ intervalMinutes: 4 }, /between 5 and 1440/],
+    [{ intervalMinutes: 1441 }, /between 5 and 1440/],
+    [{ intervalMinutes: 15.5 }, /between 5 and 1440/],
+    [{ oops: 1 }, /Unknown field/],
+  ];
+  for (const [payload, pattern] of bad) {
+    const res = await fetch(`${base}/api/maintenance`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    assert.equal(res.status, 400, `expected 400 for ${JSON.stringify(payload)}`);
+    assert.match((await res.json()).error.message, pattern);
+  }
+
+  const saved = await fetch(`${base}/api/maintenance`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ intervalMinutes: 30 }),
+  });
+  const savedBody = await saved.json();
+  assert.equal(saved.status, 200, JSON.stringify(savedBody));
+  assert.equal(savedBody.settings.intervalMinutes, 30);
+  assert.equal(savedBody.tasks[0].everyMinutes, 10, 'the task cadence is fixed; the interval only decides how often to check');
+
+  const disabled = await fetch(`${base}/api/maintenance`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ enabled: false }),
+  });
+  assert.equal((await disabled.json()).settings.enabled, false);
+  const reenabled = await fetch(`${base}/api/maintenance`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ enabled: true }),
+  });
+  assert.equal((await reenabled.json()).settings.intervalMinutes, 30, 'a partial patch keeps the interval');
+
+  const unknown = await fetch(`${base}/api/maintenance/run`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ tasks: ['nope'] }),
+  });
+  assert.equal(unknown.status, 400);
+  assert.match((await unknown.json()).error.message, /Unknown maintenance task/);
+
+  const run = await fetch(`${base}/api/maintenance/run`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ tasks: ['tokens'] }),
+  });
+  const runBody = await run.json();
+  assert.equal(run.status, 200, JSON.stringify(runBody));
+  assert.equal(runBody.results.length, 1);
+  assert.equal(runBody.results[0].id, 'tokens');
+  assert.equal(runBody.results[0].ok, true);
+  assert.equal(runBody.snapshot.running, false);
+  const tokensTask = runBody.snapshot.tasks.find((task) => task.id === 'tokens');
+  assert.ok(tokensTask.lastRunAt > 0, 'a manual run records its time');
+  assert.equal(tokensTask.due, false, 'a just-run task is no longer due');
+  assert.ok(tokensTask.lastResult.summary.length > 0);
+
+  const reset = await fetch(`${base}/api/maintenance`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ enabled: true, intervalMinutes: 15 }),
+  });
+  assert.equal(reset.status, 200);
+});
 
 server.close();
 stub.close();
