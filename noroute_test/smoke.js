@@ -1017,6 +1017,28 @@ await test('dashboard shell ships viewport meta and its assets', async () => {
   }
 });
 
+await test('dashboard scripts never reference a later script by bare identifier', async () => {
+  // Classic scripts share one global scope: naming a later module's function
+  // directly throws at load time and silently kills the rest of that file.
+  const sources = await Promise.all(DASHBOARD_SCRIPTS.map(async (file) => [file, await (await fetch(`${base}/assets/${file}`)).text()]));
+  const declared = new Map(sources.map(([file, text]) => [file, new Set([
+    ...[...text.matchAll(/^(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/gm)].map((match) => match[1]),
+    ...[...text.matchAll(/^(?:const|let|var)\s+([A-Za-z_$][\w$]*)/gm)].map((match) => match[1]),
+  ])]));
+  const seen = new Set();
+  const broken = [];
+  for (const [file, text] of sources) {
+    const target = text.replace(/`[^`]*`|"[^"]*"|'[^']*'/g, '');
+    const later = new Set(DASHBOARD_SCRIPTS.slice(DASHBOARD_SCRIPTS.indexOf(file) + 1).flatMap((name) => [...(declared.get(name) || [])]));
+    for (const match of target.matchAll(/(?:^|[=(,:\s!&|?])([A-Za-z_$][\w$]*)\s*(?=[,;)])/g)) {
+      const id = match[1];
+      if (!seen.has(id) && later.has(id)) broken.push(`${file}:${target.slice(0, match.index).split('\n').length} ${id}`);
+    }
+    (declared.get(file) || []).forEach((name) => seen.add(name));
+  }
+  assert.deepEqual(broken, [], 'wrap the reference in an arrow function so it resolves at call time');
+});
+
 await test('service map ships the full page without a dashboard card', async () => {
   const page = await fetch(`${base}/map`);
   const html = await page.text();

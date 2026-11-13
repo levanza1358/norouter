@@ -240,7 +240,8 @@ $('replyVerbosity')?.addEventListener('change', (event) => {
 $('replyCoding')?.addEventListener('change', (event) => {
   patchReplyFilters({ coding: event.currentTarget.checked });
 });
-$('saveReplyInstructions')?.addEventListener('click', saveReplyInstructions);
+// saveReplyInstructions lives in settings.js, which loads after this file: call it lazily.
+$('saveReplyInstructions')?.addEventListener('click', () => saveReplyInstructions());
 $('replyAddressAs')?.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter') return;
   event.preventDefault();
