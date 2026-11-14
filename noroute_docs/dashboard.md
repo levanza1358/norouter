@@ -168,7 +168,7 @@ The page polls `/api/usage` every two seconds while the document is visible, so 
 
 - **Egress card** — master switch (off by default), strategy (`round-robin` or `random`), Strict, and the auto-bench threshold. Turning the master switch on with an empty pool is allowed; without Strict those requests fall back to direct.
 - **Add proxy card** — Fields mode (protocol, host, port, username, password) or Paste URL mode. The form percent-encodes credentials and never sends a SOCKS4 password. An optional test runs on add; a failed test still stores the row.
-- **Import card** — text area and a `.txt`/`.json` file picker, up to 1000 candidates, with added/duplicate/invalid counts. Invalid input is never echoed.
+- **Import card** — text area and a `.txt`/`.json` file picker, up to 5000 candidates, with added/duplicate/invalid counts. Invalid input is never echoed.
 - **Scrape card** — source checkboxes, candidate limit, free-proxy warning, a Run scrape button, progress while running, and the last summary. One scrape at a time.
 - **Pool table** — masked URL, label, source, health, latency, fail count, last check, and last error code. Actions: Test, Enable/Disable, Delete. Full URLs and credentials are never rendered.
 - **Provider routing** — one row per provider from the status snapshot: Global, Direct, or Pinned plus a proxy picker. The choice is saved with `PUT /api/proxy/providers/:id`; a deleted pinned proxy falls back to Global.

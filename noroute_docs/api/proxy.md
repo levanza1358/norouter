@@ -189,7 +189,7 @@ or
 { "urls": ["http://203.0.113.10:8080", "socks4://203.0.113.11:1080"] }
 ```
 
-Accepted input is a JSON array, newline-separated text, or a mix of canonical URLs and `host:port` (stored as `http`). Blank lines and `#` comments are skipped. At most 1000 candidates per call; a larger input returns `400`. No network testing is performed. Response:
+Accepted input is a JSON array, newline-separated text, or a mix of canonical URLs and `host:port` (stored as `http`). Blank lines and `#` comments are skipped. At most 5000 candidates per call; a larger input returns `400`. No network testing is performed. Response:
 
 ```json
 { "added": 2, "duplicates": 1, "invalid": 0, "total": 3 }

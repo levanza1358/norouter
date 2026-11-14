@@ -153,7 +153,7 @@ In-memory counters exposed on the Proxy page:
 Three entry paths:
 
 - **Manual** — protocol/host/port/username/password fields, or a pasted URL. Optionally test immediately. A failed test still stores the row, marked `fail`, so the operator can see what was rejected.
-- **Import** — paste text or choose a file. Accepted lines are canonical URLs, `host:port` (stored as `http`), and a JSON array of either. Blank lines and `#` comments are skipped. Up to 1000 candidates per import, no automatic testing. Invalid values are counted, never echoed, because the input may contain credentials.
+- **Import** — paste text or choose a file. Accepted lines are canonical URLs, `host:port` (stored as `http`), and a JSON array of either. Blank lines and `#` comments are skipped. Up to 5000 candidates per import, no automatic testing. Invalid values are counted, never echoed, because the input may contain credentials.
 - **Scrape** — see below.
 
 Adding a duplicate returns `409` with the existing masked row. A proxy URL is immutable: edit `label` or `enabled`, or delete and re-add it.

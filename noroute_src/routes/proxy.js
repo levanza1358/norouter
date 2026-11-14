@@ -21,6 +21,11 @@ import {
 import { startProxyTestJob, testAndRecord } from '../lib/proxy-test.js';
 import { SCRAPE_SOURCES, startScrapeJob } from '../lib/proxy-scrape.js';
 
+// Pasted lists are commonly a few thousand lines; allow room for long URLs
+// while keeping the request bounded.
+const MAX_IMPORT_CANDIDATES = 5000;
+const IMPORT_BODY_LIMIT = 1024 * 1024;
+
 async function bodyOf(req, res, limit = 64 * 1024) {
   try {
     return await readJson(req, limit);
@@ -132,15 +137,15 @@ export async function handleTestAllProxies(req, res) {
 }
 
 export async function handleImportProxies(req, res) {
-  const body = await bodyOf(req, res);
+  const body = await bodyOf(req, res, IMPORT_BODY_LIMIT);
   if (body === null) return undefined;
   let raw;
   if (Array.isArray(body?.urls)) raw = body.urls.map((url) => String(url)).join('\n');
   else if (typeof body?.text === 'string') raw = body.text;
   else return sendError(res, 400, 'Provide text or a urls array.');
 
-  if (importCandidates(raw).length > 1000) {
-    return sendError(res, 400, 'At most 1000 candidates per import.');
+  if (importCandidates(raw).length > MAX_IMPORT_CANDIDATES) {
+    return sendError(res, 400, `At most ${MAX_IMPORT_CANDIDATES} candidates per import.`);
   }
   const parsed = parseProxyImport(raw);
   const added = importProxyEntries(parsed.entries);

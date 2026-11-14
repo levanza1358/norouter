@@ -339,12 +339,17 @@ async function socksAddress(host, protocol) {
   }
   let resolved;
   try {
-    resolved = await dns.lookup(raw);
+    resolved = await dns.lookup(raw, { all: true });
   } catch {
     throw new ProxyTransportError('connect_failed');
   }
-  if (resolved.family === 6) return { atyp: 4, bytes: ipv6Bytes(resolved.address), name: raw };
-  return { atyp: 1, bytes: ipv4Bytes(resolved.address), name: raw };
+  // Most SOCKS5 proxies cannot reach IPv6 targets, while a dual-stack resolver
+  // often returns AAAA first (Node's verbatim order). Prefer A, keep AAAA as
+  // the fallback for IPv6-only names.
+  const chosen = resolved.find((row) => row.family === 4) || resolved[0];
+  if (!chosen) throw new ProxyTransportError('connect_failed');
+  if (chosen.family === 6) return { atyp: 4, bytes: ipv6Bytes(chosen.address), name: raw };
+  return { atyp: 1, bytes: ipv4Bytes(chosen.address), name: raw };
 }
 
 function socksReplyError(code) {

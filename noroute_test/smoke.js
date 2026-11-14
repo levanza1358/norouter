@@ -7467,6 +7467,9 @@ await test('proxy URL parsing, masking and import counts are strict', async () =
   assert.equal(proxyLabel('', auth), '127.0.0.1:' + pxAuth.port);
   assert.throws(() => parseProxyUrl('socks4://user:pass@127.0.0.1:1080'), /SOCKS4/);
   assert.throws(() => parseProxyUrl('http://127.0.0.1'), /port/);
+  // Lists spell out the default port; URL would otherwise drop it.
+  assert.equal(parseProxyUrl('http://127.0.0.1:80').url, 'http://127.0.0.1:80');
+  assert.equal(parseProxyUrl('https://127.0.0.1:443').port, 443);
   assert.throws(() => parseProxyUrl('ftp://127.0.0.1:21'), /Unsupported/);
   assert.throws(() => parseProxyUrl('http://127.0.0.1:8080/path'), /path/);
   const parsed = parseProxyImport([
@@ -7617,7 +7620,7 @@ await test('proxy test endpoint records health and the job covers the pool', asy
 
 await test('proxy import and scrape endpoints validate their inputs', async () => {
   assert.equal((await pxCall('/api/proxies/import', { method: 'POST', body: {} })).status, 400);
-  const tooMany = Array.from({ length: 1001 }, (_, index) => `127.0.0.1:${10000 + index}`).join('\n');
+  const tooMany = Array.from({ length: 5001 }, (_, index) => `127.0.0.1:${10000 + index}`).join('\n');
   assert.equal((await pxCall('/api/proxies/import', { method: 'POST', body: { text: tooMany } })).status, 400);
 
   const before = new Set((await pxCall('/api/proxy')).body.proxies.map((row) => row.id));

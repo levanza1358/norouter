@@ -46,6 +46,15 @@ function hostForUrl(rawHost) {
   return host;
 }
 
+// WHATWG URL drops a scheme's default port (http:80, https:443), so a list
+// that spells it out would look port-less. Read it back from the authority.
+function explicitPort(text) {
+  const authority = text.slice(text.indexOf('://') + 3).split(/[/?#]/, 1)[0];
+  const hostPart = authority.slice(authority.lastIndexOf('@') + 1);
+  const match = hostPart.match(/:(\d+)$/);
+  return match ? Number(match[1]) : null;
+}
+
 function canonical(protocol, username, password, host, port) {
   let auth = '';
   if (username || password) {
@@ -81,8 +90,8 @@ export function parseProxyUrl(raw) {
   if (parsed.search || parsed.hash) fail('Proxy URL must not contain a query or fragment.');
   if (parsed.pathname && parsed.pathname !== '/') fail('Proxy URL must not contain a path.');
 
-  const port = Number(parsed.port);
-  if (!parsed.port || !Number.isInteger(port) || port < 1 || port > 65535) {
+  const port = parsed.port ? Number(parsed.port) : explicitPort(text);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
     fail('Proxy URL must include a port from 1 to 65535.');
   }
 
