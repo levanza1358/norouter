@@ -18,6 +18,7 @@ import {
   handleDeleteAccount,
   handleListAccounts,
   handlePreviewAccounts,
+  handleRestartAccount,
   handleTestAccount,
   handleTestAllAccounts,
   handleUpdateAccount,
@@ -61,6 +62,18 @@ import { handleAsset, handleDashboard, handleOAuthWaitPage } from './routes/dash
 import { handleGetRoutingRules, handleUpdateRoutingRules } from './routes/routing-rules.js';
 import { handleGetBudgets, handleUpdateBudgets } from './routes/budgets.js';
 import { handleGetMaintenance, handleRunMaintenance, handleUpdateMaintenance } from './routes/maintenance.js';
+import {
+  handleCreateProxy,
+  handleDeleteProxy,
+  handleGetProxy,
+  handleImportProxies,
+  handleProxyAssignment,
+  handleScrapeProxies,
+  handleTestAllProxies,
+  handleTestProxy,
+  handleUpdateProxy,
+  handleUpdateProxySettings,
+} from './routes/proxy.js';
 import { startMaintenance, stopMaintenance } from './lib/maintenance.js';
 import { handleModels } from './routes/models.js';
 import { handleAddModel, handleCreateProvider, handleDeleteProvider, handleFetchModels, handleProviderDetail, handleRemoveModel, handleSetModelEnabled, handleTestModels, handleUpdateProvider } from './routes/provider.js';
@@ -104,7 +117,7 @@ import {
   handleUpdateAuthSettings,
 } from './routes/api-keys.js';
 
-const PAGES = new Set(['/', '/dashboard', '/providers', '/usage', '/chat', '/settings', '/api-keys', '/combos', '/map']);
+const PAGES = new Set(['/', '/dashboard', '/providers', '/usage', '/chat', '/settings', '/api-keys', '/combos', '/map', '/proxy']);
 
 function authorizationContext(req, settings, consume = true) {
   if (!getRequireApiKey(settings.requireApiKey)) return { managedId: null };
@@ -279,6 +292,28 @@ export function createServer(overrides = {}) {
       if (path === '/api/maintenance' && req.method === 'GET') return handleGetMaintenance(req, res);
       if (path === '/api/maintenance' && req.method === 'PATCH') return await handleUpdateMaintenance(req, res);
       if (path === '/api/maintenance/run' && req.method === 'POST') return await handleRunMaintenance(req, res);
+
+      // ---- proxy egress ----
+      if (path === '/api/proxy' && req.method === 'GET') return handleGetProxy(req, res);
+      if (path === '/api/proxy' && req.method === 'PATCH') return await handleUpdateProxySettings(req, res);
+      if (path === '/api/proxy/scrape' && req.method === 'POST') return await handleScrapeProxies(req, res);
+      if (path === '/api/proxies' && req.method === 'POST') return await handleCreateProxy(req, res);
+      if (path === '/api/proxies/test' && req.method === 'POST') return await handleTestAllProxies(req, res);
+      if (path === '/api/proxies/import' && req.method === 'POST') return await handleImportProxies(req, res);
+      const proxyAssignmentMatch = path.match(/^\/api\/proxy\/providers\/([^/]+)$/);
+      if (proxyAssignmentMatch && req.method === 'PUT') {
+        return await handleProxyAssignment(req, res, decodeURIComponent(proxyAssignmentMatch[1]));
+      }
+      const proxyTestMatch = path.match(/^\/api\/proxies\/([^/]+)\/test$/);
+      if (proxyTestMatch && req.method === 'POST') {
+        return await handleTestProxy(req, res, decodeURIComponent(proxyTestMatch[1]));
+      }
+      const proxyMatch = path.match(/^\/api\/proxies\/([^/]+)$/);
+      if (proxyMatch) {
+        const proxyId = decodeURIComponent(proxyMatch[1]);
+        if (req.method === 'PATCH') return await handleUpdateProxy(req, res, proxyId);
+        if (req.method === 'DELETE') return handleDeleteProxy(req, res, proxyId);
+      }
       const comboMatch = path.match(/^\/api\/combos\/([^/]+)$/);
       if (comboMatch) {
         const comboId = decodeURIComponent(comboMatch[1]);
@@ -341,12 +376,13 @@ export function createServer(overrides = {}) {
       }
 
       const accountAction = path.match(
-        /^\/api\/providers\/([^/]+)\/accounts\/([^/]+)\/(test|quota|checkin)$/,
+        /^\/api\/providers\/([^/]+)\/accounts\/([^/]+)\/(test|quota|checkin|restart)$/,
       );
       if (accountAction && req.method === 'POST') {
         const accountId = decodeURIComponent(accountAction[2]);
         if (accountAction[3] === 'test') return handleTestAccount(res, accountAction[1], accountId);
         if (accountAction[3] === 'quota') return handleAccountQuota(res, accountAction[1], accountId);
+        if (accountAction[3] === 'restart') return handleRestartAccount(res, accountAction[1], accountId);
         return handleAccountCheckin(res, accountAction[1], accountId);
       }
 

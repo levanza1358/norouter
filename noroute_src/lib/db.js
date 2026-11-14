@@ -223,6 +223,28 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   UNIQUE(session_id, seq)
 );
 CREATE INDEX IF NOT EXISTS chat_messages_session ON chat_messages(session_id, seq);
+
+-- Proxy egress pool. url is the canonical form and keeps credentials because
+-- the transport needs them; every API and dashboard response masks it. The
+-- unique index is what makes an import duplicate a cheap constraint error.
+CREATE TABLE IF NOT EXISTS proxies (
+  id           TEXT PRIMARY KEY,
+  url          TEXT NOT NULL UNIQUE,
+  label        TEXT NOT NULL DEFAULT '',
+  source       TEXT NOT NULL DEFAULT 'manual',
+  protocol     TEXT NOT NULL,
+  host         TEXT NOT NULL,
+  port         INTEGER NOT NULL,
+  enabled      INTEGER NOT NULL DEFAULT 1,
+  status       TEXT NOT NULL DEFAULT 'unchecked',
+  latency_ms   INTEGER,
+  fail_count   INTEGER NOT NULL DEFAULT 0,
+  last_checked INTEGER,
+  last_error   TEXT NOT NULL DEFAULT '',
+  created_at   INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS proxies_enabled ON proxies(enabled, status);
 `;
 
 let db = null;

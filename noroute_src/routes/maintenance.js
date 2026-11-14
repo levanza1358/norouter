@@ -10,7 +10,7 @@ import {
   validateMaintenancePatch,
 } from '../lib/maintenance.js';
 
-const TASK_IDS = ['tokens', 'quota', 'catalog'];
+const TASK_IDS = ['tokens', 'quota', 'catalog', 'proxy'];
 
 export function handleGetMaintenance(req, res) {
   return sendJson(res, 200, maintenanceSnapshot());

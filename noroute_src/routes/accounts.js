@@ -11,6 +11,7 @@ import {
   previewAccounts,
   quotaForAccount,
   refreshQuotaOrder,
+  restartAccount,
   testAccount,
   updateAccount,
   warmupAccount,
@@ -112,6 +113,20 @@ export async function handleAccountPing(res, rawId, accountId) {
     return sendJson(res, result.status || 400, { error: { message: result.error, type: 'invalid_request_error' } });
   }
   return sendJson(res, 200, result);
+}
+
+// POST /api/providers/:id/accounts/:id/restart
+// Pauses and resumes one account; resuming clears its cooldown and last error.
+export function handleRestartAccount(res, rawId, accountId) {
+  const provider = resolveProvider(res, rawId);
+  if (!provider) return undefined;
+  const account = getAccount(accountId);
+  if (!account || account.provider !== provider.id) {
+    return sendError(res, 404, 'Account not found.');
+  }
+  const result = restartAccount(accountId);
+  if (result.error) return sendError(res, result.status, result.error);
+  return sendJson(res, 200, { account: result.account });
 }
 
 // POST /api/providers/:id/accounts/:id/warmup

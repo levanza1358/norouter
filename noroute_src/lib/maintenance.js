@@ -1,14 +1,18 @@
-// Periodic account upkeep. Three tasks keep the pool honest without a request
-// having to discover a stale token, an exhausted account, or a missing model:
-// refresh tokens before they expire, re-read quota so "highest quota" stays
-// accurate, and re-fetch the Codex catalog. The scheduler only starts from
-// server.js when it is the process entry point, so tests never touch upstream.
+// Periodic account upkeep. Four tasks keep the pool honest without a request
+// having to discover a stale token, an exhausted account, a missing model, or a
+// proxy that stopped working: refresh tokens before they expire, re-read quota
+// so "highest quota" stays accurate, re-fetch the Codex catalog, and sweep the
+// proxy pool. The scheduler only starts from server.js when it is the process
+// entry point, so tests never touch upstream.
 import { getDb } from './db.js';
 import { quotaForAccount, refreshAccountNow } from './accounts.js';
 import { hasQuotaEndpoint, hasRefreshEndpoint } from './codebuddy.js';
 import { catalogUrl, fetchCatalogForAccount } from './provider-catalog.js';
 import { notifyWebhook } from './webhook.js';
 import { getProvider, providers } from '../providers/index.js';
+import { getProxySettings, proxyState } from './proxies.js';
+import { runProxyTests } from './proxy-test.js';
+import { scrapeProxies } from './proxy-scrape.js';
 
 const CONFIG_KEY = 'maintenance';
 const STATE_KEY = 'maintenance.state';
@@ -24,12 +28,15 @@ const TOKEN_WINDOW_MS = 30 * 60_000;
 const TOKEN_LIMIT = 20;
 const QUOTA_LIMIT = 20;
 const CATALOG_LIMIT = 10;
+const PROXY_LIMIT = 10;
+const PROXY_STALE_MS = 6 * 60 * 60_000;
 const CONCURRENCY = 3;
 
 const TASKS = [
   { id: 'tokens', label: 'Token refresh', everyMs: 10 * 60_000, run: runTokenRefresh },
   { id: 'quota', label: 'Quota refresh', everyMs: 6 * 60 * 60_000, run: runQuotaRefresh },
   { id: 'catalog', label: 'Model catalog', everyMs: 12 * 60 * 60_000, run: runCatalogRefresh },
+  { id: 'proxy', label: 'Proxy health', everyMs: 30 * 60_000, run: runProxyUpkeep },
 ];
 
 function readMeta(key) {
@@ -221,6 +228,33 @@ async function runCatalogRefresh() {
     if (Array.isArray(result?.models)) fetched += 1;
   });
   return { ok: fetched > 0, summary: `${fetched}/${rows.length} Codex catalog${rows.length === 1 ? '' : 's'} refreshed` };
+}
+
+async function runProxyUpkeep() {
+  const settings = getProxySettings();
+  const parts = [];
+  if (settings.enabled) {
+    // Only proxies whose health is unknown or old enough to be worth a retest;
+    // a 30 minute tick with 10 rows catches up a large pool over several ticks.
+    const rows = getDb().prepare(`
+      SELECT * FROM proxies
+       WHERE enabled = 1 AND (last_checked IS NULL OR last_checked <= ?)
+       ORDER BY COALESCE(last_checked, 0) ASC, created_at ASC
+       LIMIT ?
+    `).all(Date.now() - PROXY_STALE_MS, PROXY_LIMIT);
+    await runProxyTests(rows);
+    parts.push(rows.length
+      ? `${rows.length} prox${rows.length === 1 ? 'y' : 'ies'} tested`
+      : 'No proxy needed a test.');
+  }
+  const scrape = settings.scrape;
+  if (scrape.auto && Date.now() - (proxyState().lastScrapeAt || 0) >= scrape.intervalMinutes * 60_000) {
+    const result = await scrapeProxies({ limit: scrape.limit });
+    parts.push(result.started
+      ? `Scrape added ${result.scrape.added} prox${result.scrape.added === 1 ? 'y' : 'ies'}.`
+      : 'Scrape already running.');
+  }
+  return { ok: true, summary: parts.length ? parts.join(' ') : 'Proxy upkeep is idle.' };
 }
 
 const runningTasks = new Set();

@@ -30,6 +30,24 @@ Use `/v1/models`. Prefix with `cbcn/` or `codebuddy-cn/`, or use bare ID only wh
 
 Check endpoint, credential, network, upstream response, and timeout. For CodeBuddy, verify production endpoint and clear test-only URL overrides. Non-stream in-stream error frames become 502.
 
+## `502 proxy_unavailable`
+
+Strict is on and no assigned proxy can be used: the pool is empty, every candidate is disabled or benched, a pinned proxy was deleted, or all tunnel attempts failed before response headers. Check the `/proxy` pool table, the provider assignment, and `autoDisableAfter`. Turn Strict off only if a direct fallback is acceptable. The error body uses `type: "proxy_error"` and `code: "proxy_unavailable"`.
+
+## Proxy test fails
+
+`timeout`, `connect_failed`, `auth_failed`, `tunnel_refused`, or `tls_failed` is stored as a short code on the row; the URL and credentials are never echoed. A `407` from an HTTP proxy is an authentication failure. Confirm the scheme, host, port, and credentials with the provider of the proxy; free proxies expire quickly. A failed test still stores a manually added proxy, so you can inspect and retest it.
+
+A recorded failure increments `fail_count`; reaching `autoDisableAfter` benches the row. A successful test or a later successful data-plane request resets the count. `autoDisableAfter: 0` disables benching.
+
+## Scrape stores nothing
+
+Free proxy batches are unreliable and often yield zero validated tunnels. Scraping is off by default and validates every candidate against `https://www.gstatic.com/generate_204` with a 6 second budget; only passing candidates are stored. Check the scrape summary counts, lower the limit, or add a known-good proxy manually. One scrape runs at a time.
+
+## Proxy looks enabled but traffic still goes direct
+
+The master switch must be on, and the provider assignment must resolve to a candidate: `global` needs at least one enabled, non-benched proxy; `pinned` needs that exact row; `direct` always bypasses. OAuth refresh, quota, catalog fetch, and dashboard/admin traffic never use the pool by design. `fallbackDirect` in the proxy counters increments on a pre-header tunnel failure that fell back to a direct connection.
+
 ## Model fetch fails
 
 Custom discovery assumes `<base-url>/models`. CodeBuddy may not expose a conventional models route. Use bundled catalog or add a custom model manually.

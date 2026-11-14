@@ -184,6 +184,7 @@ async function refresh() {
     if (currentPath === '/providers') refreshProviderQuota();
 
     if (currentPath === '/usage') loadUsage({ fromPoll: true });
+    if (currentPath === '/proxy') loadProxy({ quiet: true });
 
     if (currentPath === '/') {
       loadDashboardUsage();

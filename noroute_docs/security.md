@@ -11,6 +11,7 @@ Norouter assumes a single trusted local operator supplies provider credentials. 
 - `REQUIRE_API_KEY` gates only `/v1` routes.
 - CORS is unrestricted (`*`).
 - Account access/refresh/API-key values are stored plaintext in SQLite.
+- Proxy URLs, including username/password, are stored plaintext in SQLite.
 - Custom provider URLs can target arbitrary hosts, localhost/private networks, or plaintext HTTP.
 - Test URL overrides can redirect credential-bearing calls.
 - No TLS termination, rate limiting, CSRF protection, RBAC, or audit log exists.
@@ -39,6 +40,14 @@ Remaining risk: browser form submission and local SQLite are trusted-boundary op
 ### Router API key
 
 `ROUTER_API_KEY` remains an exact legacy static Bearer value for `/v1`. Managed keys are stored as plaintext in SQLite so `/api-keys` can show, hide, copy, edit, disable, expire, limit, revoke, or rotate them. Treat the database, WAL/SHM, backups, dashboard, and `/api` as secret-bearing local-admin surfaces. The toggle protects only `/v1`; dashboard and `/api` remain unauthenticated and require firewall/reverse-proxy protection when the default `0.0.0.0` bind is used.
+
+### Proxy egress
+
+An enabled proxy sees the target host, TLS SNI, timing, and volume. For `http://` targets it also sees the request and response body, including the upstream `Authorization` header; for `https://` targets the tunnel is opaque unless the proxy presents a trusted certificate. NoRouter ships no MITM CA and does not disable certificate validation, so a hostile proxy can still block, delay, replay, or substitute responses.
+
+Mitigations: the feature is off by default; Strict is opt-in; only data-plane calls use the pool (OAuth refresh, quota, catalog, and dashboard stay direct); full proxy URLs and credentials are masked in API responses, UI rows, errors, and logs; job summaries contain counts only; proxy credentials are sent only to the proxy and never forwarded to the target; free proxies are treated as untrusted candidates and validated before storage. Scraping is off by default.
+
+Do not enable a proxy pool on a host whose policy forbids third-party egress, and do not route provider traffic through a proxy you would not trust with it.
 
 ### SSRF and plaintext upstream
 
@@ -71,3 +80,4 @@ Allowed sources are `.env` or manually pasted SQLite account-pool values. Refres
 - Reverse proxy/TLS/authentication before any remote access.
 - Separate test DB from operator DB.
 - No real credential fixtures.
+- Proxy pool off unless explicitly required; Strict on when a direct fallback would violate policy; free proxies treated as untrusted.

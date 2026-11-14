@@ -68,38 +68,6 @@ function initialOf(name) {
     .slice(0, 2).map((w) => w[0].toUpperCase()).join('') || 'P';
 }
 
-// Model rows per column. Width alone is not enough: 1280x720 and 1280x1080 have
-// very different vertical room, so the row budget is the smaller of the two
-// axes. A 24px deadband around each threshold keeps a window sitting exactly on
-// a boundary from flipping the bucket (and re-rendering the list) repeatedly.
-const DENSITY_WIDTH_STEPS = [1200, 1500];
-const DENSITY_HEIGHT_STEPS = [820, 1000];
-const densityState = { width: null, height: null };
-
-function densityStep(value, thresholds, previous) {
-  let index = 0;
-  for (const threshold of thresholds) if (value >= threshold) index += 1;
-  if (previous === null) return index;
-  const margin = 24;
-  // Only move up once the value clearly clears the threshold above it, and
-  // only move down once it clearly drops below the one it is leaving.
-  if (index > previous && value >= thresholds[previous] + margin) return index;
-  if (index < previous && value < thresholds[previous - 1] - margin) return index;
-  return previous;
-}
-
-function density() {
-  const w = window.innerWidth;
-  const h = window.innerHeight;
-  const widthStep = densityStep(w, DENSITY_WIDTH_STEPS, densityState.width);
-  const heightStep = densityStep(h, DENSITY_HEIGHT_STEPS, densityState.height);
-  densityState.width = widthStep;
-  densityState.height = heightStep;
-  // Whichever axis is tighter decides; a tall narrow window still gets 6 rows.
-  const step = Math.min(widthStep, heightStep);
-  return { models: step === 2 ? 11 : step === 1 ? 9 : 6 };
-}
-
 // The dashboard's request table is always one page of five rows. It used to
 // fill whatever height the card had, so shrinking the window showed a different
 // amount of history; a fixed page keeps every screen on the same five rows.

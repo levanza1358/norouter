@@ -599,31 +599,6 @@ h1 {
   color: var(--muted);
 }
 
-.topbar-right { display: flex; align-items: center; gap: 12px; }
-
-.topbar-connect { display: flex; align-items: center; gap: 8px; }
-.topbar-connect-item {
-  display: grid;
-  grid-template-columns: auto minmax(76px, 132px) auto;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  padding: 4px 6px 4px 9px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--surface) 82%, transparent);
-}
-.topbar-connect-label { color: var(--muted); font-size: 10px; white-space: nowrap; }
-.topbar-connect-item code {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--ink-2);
-  font-size: 10px;
-}
-.topbar-connect-item .btn { flex: 0 0 auto; }
-
 .today { display: flex; flex-direction: column; align-items: flex-end; padding-right: 4px; }
 .today-label { font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
 .today-alt { font-size: 11.5px; color: var(--muted); }
@@ -4094,9 +4069,6 @@ body.modal-open { overflow: hidden; }
     grid-template-columns: minmax(0, 1fr);
   }
   .topbar { flex-direction: column; align-items: stretch; }
-  .topbar-right { justify-content: space-between; flex-wrap: wrap; }
-  .topbar-connect { flex: 1 1 100%; order: 3; justify-content: flex-end; }
-  .topbar-connect-item { flex: 1 1 220px; }
   .main { min-height: 0; }
   /* The chat page is the one route that must not scroll the document: the
      transcript scrolls on its own. Pin the shell to the viewport only while
@@ -4571,8 +4543,6 @@ h1 {
 
 #tagline { margin: 4px 0 0; font-size: 12.5px; color: var(--muted); }
 
-.topbar-right { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-
 .today { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
 .today-label {
   color: var(--ink-2);
@@ -4584,40 +4554,6 @@ h1 {
 }
 .today-alt { color: var(--faint); font-size: 11px; }
 
-.topbar-connect { display: flex; align-items: stretch; gap: 6px; flex-wrap: wrap; }
-
-.topbar-connect-item {
-  display: grid;
-  grid-template-columns: auto auto;
-  grid-template-rows: auto auto;
-  gap: 1px 10px;
-  align-items: center;
-  padding: 6px 9px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: transparent;
-  box-shadow: none;
-}
-
-.topbar-connect-label {
-  grid-column: 1 / -1;
-  color: var(--faint);
-  font-family: var(--font-mono);
-  font-size: 8px;
-  font-weight: 500;
-  letter-spacing: .12em;
-  text-transform: uppercase;
-}
-
-.topbar-connect-item code {
-  color: var(--ink-2);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  white-space: nowrap;
-}
-
-.topbar-connect-item .btn { min-height: 24px; padding: 2px 7px; font-size: 10px; }
-
 /* ---------- dashboard layout ---------- */
 
 .dashboard-page {
@@ -4626,26 +4562,43 @@ h1 {
   gap: var(--gap);
 }
 
-.dash-toolbar {
+/* One overview card: range, totals and chart answer the same question, so they
+   share a border instead of stacking three heads. */
+.dash-overview {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  min-width: 0;
+  padding-bottom: 14px;
 }
 
-.dash-traffic { flex: 0 0 auto; }
+.dash-overview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 18px;
+  flex-wrap: wrap;
+  margin-bottom: 15px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
 
-.dash-traffic .card-head { margin-bottom: 14px; }
+.dash-overview-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
 
 .dash-stats {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: minmax(140px, 1.3fr) repeat(4, minmax(0, 1fr));
   align-items: end;
+  gap: 0 16px;
 }
 
 .dash-stat {
   min-width: 0;
-  padding: 0 18px;
+  padding-left: 16px;
   border-left: 1px solid var(--line);
 }
 
@@ -4667,7 +4620,7 @@ h1 {
   overflow: hidden;
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: clamp(19px, 1.55vw, 24px);
+  font-size: clamp(18px, 1.4vw, 22px);
   font-weight: 500;
   letter-spacing: -.03em;
   line-height: 1.1;
@@ -4676,31 +4629,28 @@ h1 {
   white-space: nowrap;
 }
 
-.dash-traffic-foot {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-}
-
-.dash-note {
-  margin-left: auto;
-  color: var(--faint);
-  font-size: 11px;
-}
+/* The request count is the headline; the other four numbers support it. */
+.dash-stat-primary .dash-stat-value { font-size: clamp(26px, 2.2vw, 34px); }
 
 .dash-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.62fr) minmax(320px, .82fr);
+  grid-template-columns: minmax(0, 1.62fr) minmax(300px, .82fr);
   gap: var(--gap);
-  align-items: stretch;
+  align-items: start;
   min-width: 0;
 }
 
-.dash-main,
+.dash-recent { display: flex; min-width: 0; flex-direction: column; }
+
+/* A page is five rows, so the table sets the card's height instead of the card
+   stretching to fill a slot and cutting the fifth row off. */
+.dash-recent .table-wrap {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.dash-recent .tbl { margin: 0; }
+
 .dash-side {
   display: flex;
   min-width: 0;
@@ -4708,23 +4658,45 @@ h1 {
   gap: var(--gap);
 }
 
+.dash-side > .card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.dash-side .card-head { flex: 0 0 auto; }
+
+/* The list scrolls inside its card instead of stretching the side column; six
+   rows is the slice that keeps the Models card close to the Recent card. */
+.dash-side .mlist { min-height: 0; max-height: 246px; overflow-y: auto; overscroll-behavior: contain; }
+
+.dash-side .mrow { flex: 0 0 auto; }
+
 .dash-chart {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
 }
 
-.dash-chart .card-head { flex: 0 0 auto; }
-
-.dash-chart-toolbar {
+.dash-chart-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
-.dash-chart .dtabs { align-self: auto; }
+.dash-chart-label {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
 
 .dash-chart .spark {
   position: relative;
@@ -4732,7 +4704,7 @@ h1 {
   grid-auto-flow: column;
   grid-auto-columns: 1fr;
   align-items: end;
-  height: clamp(150px, 25vh, 260px);
+  height: clamp(112px, 13vh, 150px);
   margin-top: 0;
   border-bottom: 1px solid var(--line);
 }
@@ -4827,74 +4799,88 @@ h1 {
 /* One bucket, one centred bar: centre its label with it. */
 .dash-chart .spark-foot.is-single { justify-content: center; }
 
-.dash-recent { display: flex; min-width: 0; flex-direction: column; }
-
-/* A page is five rows, so the table sets the card's height instead of the card
-   stretching to fill a slot and cutting the fifth row off. */
-.dash-recent .table-wrap {
-  min-width: 0;
-  overflow-x: auto;
+.dash-connect-row {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 0;
 }
 
-.dash-recent .tbl { margin: 0; }
+.dash-connect-row + .dash-connect-row { border-top: 1px solid var(--line); }
 
-.dash-side > .card {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
+.dash-connect-label {
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: .09em;
+  text-transform: uppercase;
 }
 
-.dash-side .card-head { flex: 0 0 auto; }
-
-.dash-side .mlist {
-  flex: 1 1 auto;
-  min-height: 0;
+.dash-connect-row code {
+  min-width: 0;
   overflow: hidden;
-}
-
-.dash-side .mrow { flex: 0 0 auto; }
-
-/* Bounded board only when there is room for the full five-row request card.
-   Short windows keep the normal document flow so nothing is clipped behind the
-   fold. */
-@media (min-width: 1100px) and (min-height: 900px) {
-  body:has(.dashboard-page:not([hidden])) { height: 100dvh; overflow: hidden; }
-  body:has(.dashboard-page:not([hidden])) .main {
-    display: flex;
-    flex-direction: column;
-    height: 100dvh;
-    min-height: 0;
-    /* A window just over the threshold can be shorter than the board's content;
-       scrolling keeps the fifth row reachable instead of hiding it. */
-    overflow: auto;
-  }
-  body:has(.dashboard-page:not([hidden])) .topbar { flex: 0 0 auto; }
-
-  .dashboard-page { flex: 1 1 auto; min-height: 0; }
-  .dash-layout { flex: 1 1 auto; min-height: 0; }
-  .dash-chart { flex: 1 1 auto; min-height: 0; }
-  .dash-recent { flex: 0 0 auto; }
-  .dash-chart .spark { flex: 1 1 auto; height: auto; min-height: 100px; }
-  .dash-side > .card { flex: 1 1 0; min-height: 0; }
-  .dash-side .card-head { margin-bottom: 10px; }
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 1099px) {
   .dash-layout { grid-template-columns: minmax(0, 1fr); }
-  .dash-side { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; }
-  .dash-side > .card { min-height: 260px; }
+  .dash-side {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  }
 }
 
 @media (max-width: 760px) {
-  .dash-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px 18px; }
-  .dash-stat { padding: 0; border-left: 0; }
-  .dash-note { width: 100%; margin-left: 0; }
+  .dash-overview-head { align-items: flex-start; }
+  .dash-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 18px; }
+  .dash-stat { padding-left: 0; border-left: 0; }
+  .dash-stat-primary {
+    grid-column: 1 / -1;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .dash-stat-primary .dash-stat-value { font-size: 30px; }
   .dash-side { grid-template-columns: minmax(0, 1fr); }
-  .dash-side > .card { min-height: 0; }
-  /* Models still trims to its own box on phones. */
-  .dash-side .mlist { max-height: 300px; overflow-y: auto; }
-  .dash-chart .spark { height: 160px; }
+  .dash-chart .spark { height: 112px; }
   .dash-recent .usage-pager { margin-top: 12px; }
+  .dash-connect-row { grid-template-columns: 54px minmax(0, 1fr) auto; }
+}
+
+@media (max-width: 620px) {
+  /* Four columns need 344px of table, so a phone gives the numeric columns a
+     fixed slot and lets the model name ellipsize instead of scrolling sideways.
+     The gutters shrink because the token and status cells would clip otherwise. */
+  .dash-recent .tbl { table-layout: fixed; }
+  .dash-recent .tbl th { padding-left: 5px; padding-right: 5px; }
+  .dash-recent .tbl td { padding-left: 5px; padding-right: 5px; }
+  .dash-recent .tbl th:first-child,
+  .dash-recent .tbl td:first-child { padding-left: 0; }
+  .dash-recent .tbl th:last-child,
+  .dash-recent .tbl td:last-child { padding-right: 0; }
+  .dash-recent th:nth-child(2), .dash-recent td:nth-child(2) { width: 64px; }
+  .dash-recent th:nth-child(3), .dash-recent td:nth-child(3) { width: 70px; }
+  .dash-recent th:nth-child(4), .dash-recent td:nth-child(4) { width: 58px; }
+  .dash-recent td.model { overflow: hidden; text-overflow: ellipsis; }
+
+  /* Seven 44px page buttons overflow the card and wrap the arrows onto a second
+     line. The range text already says where the page sits, so a phone gets the
+     arrows plus the current page; wider screens keep the full number row. */
+  .usage-pager-btns { flex-wrap: nowrap; }
+  .usage-page-btn:not(:first-child):not(:last-child):not(.is-current),
+  .usage-page-gap { display: none; }
+}
+
+@media (max-width: 480px) {
+  /* Below this width the model name would be cut to a dozen characters; latency
+     is the least load-bearing column, so it gives up its slot first. */
+  .dash-recent th:nth-child(3), .dash-recent td:nth-child(3) { display: none; }
 }
 
 /* ---------- shared flat primitives ---------- */
@@ -5323,11 +5309,7 @@ body.dashboard-locked {
 
 @media (max-width: 620px) {
   .topbar { align-items: flex-start; flex-direction: column; gap: 12px; }
-  .topbar-right { width: 100%; align-items: flex-start; justify-content: space-between; }
   .today { align-items: flex-start; }
-  .topbar-connect { width: 100%; }
-  .topbar-connect-item { flex: 1 1 160px; grid-template-columns: minmax(0, 1fr) auto; }
-  .topbar-connect-item code { overflow: hidden; text-overflow: ellipsis; }
   .rail-brand-copy { display: none; }
   .rail-brand { padding-right: 4px; }
   .dash-stat-value { font-size: 20px; }
@@ -5409,15 +5391,13 @@ body.dashboard-locked {
 .tbl td.empty-cell { white-space: normal; }
 
 /* ---------- touch targets ----------
-   The compact console sizing is right under a mouse and wrong under a thumb. The
-   old 860px block that asked for 44px sits above the console base layer, so the
-   later .btn sizing won and the topbar copy buttons came out 24px tall. Restate
-   the floor last, at matching specificity for the topbar's own override. */
+   The compact console sizing is right under a mouse and wrong under a thumb.
+   The old 860px block that asked for 44px sits above the console base layer, so
+   the later .btn sizing won and the copy buttons came out 24px tall. Restate
+   the floor last. */
 @media (max-width: 860px) {
-  .btn,
-  .topbar-connect-item .btn { min-height: 44px; }
-  .btn.btn-xs,
-  .topbar-connect-item .btn.btn-xs { min-height: 44px; padding: 8px 12px; }
+  .btn { min-height: 44px; }
+  .btn.btn-xs { min-height: 44px; padding: 8px 12px; }
   .iconbtn { min-width: 44px; min-height: 44px; }
 }
 
@@ -5448,20 +5428,6 @@ body.dashboard-locked {
 /* The rail is ink-dark in every theme, so the accent ring that works on paper
    all but vanishes here. Use the rail's own ink for the ring. */
 .rail :focus-visible { outline-color: var(--rail-ink); }
-
-/* Two connect cards sharing one 390px line left the URL and key clipped under
-   their Copy buttons. Give each card the full width and let a long value wrap
-   instead of running beneath the button. */
-@media (max-width: 620px) {
-  .topbar-connect { display: grid; grid-template-columns: minmax(0, 1fr); }
-  .topbar-connect-item { grid-template-columns: minmax(0, 1fr) auto; }
-  .topbar-connect-item code {
-    overflow: visible;
-    text-overflow: clip;
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-}
 
 /* ---------- live service map ----------
    The map is a board of nodes over one SVG wire layer and one canvas layer.
@@ -6243,4 +6209,98 @@ a.smap-stop:hover .smap-stop-dot { border-color: var(--accent); }
   .smap-stop-dot,
   .smap-rail-line,
   .smap-wire { transition: none; }
+}
+
+/* ---------------- proxy ---------------- */
+
+.proxy-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.proxy-kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.proxy-grid { grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); }
+
+.proxy-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 16px 0 10px;
+}
+.proxy-switch { flex: 0 0 auto; }
+
+.proxy-sources { display: flex; flex-wrap: wrap; gap: 10px 18px; margin: 14px 0 2px; }
+.proxy-job { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.proxy-source-list { display: grid; gap: 0; margin-top: 8px; }
+.proxy-source-list:empty { display: none; }
+.proxy-source-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 11.5px;
+}
+.proxy-source-row:last-child { border-bottom: 0; }
+.proxy-source-name { color: var(--ink-2); font-weight: 600; }
+.proxy-source-count { color: var(--faint); font-family: var(--font-mono); font-size: 10.5px; }
+.proxy-source-count.ok { color: var(--ok-ink); }
+.proxy-source-count.failed { color: var(--bad-ink); }
+
+.proxy-provider-list { display: flex; flex-direction: column; margin-top: 14px; border-top: 1px solid var(--line); }
+.proxy-provider-row { display: flex; align-items: center; gap: 10px; padding: 11px 0; border-bottom: 1px solid var(--line); }
+.proxy-provider-main { display: grid; flex: 1 1 auto; gap: 2px; min-width: 0; }
+.proxy-provider-main strong,
+.proxy-provider-main code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proxy-provider-main strong { font-size: 12.5px; }
+.proxy-provider-main code { color: var(--muted); font-size: 10.5px; }
+.proxy-provider-mode { flex: 0 1 auto; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proxy-provider-row .btn { flex: 0 0 auto; }
+
+.proxy-pool { margin-top: 16px; }
+.proxy-pool .key-list { margin-top: 4px; }
+
+.proxy-row.is-off .key-main,
+.proxy-row.is-off .key-limits { opacity: .62; }
+.proxy-row .key-identity { flex-wrap: wrap; }
+.proxy-url {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.proxy-meta { display: block; margin-top: 3px; color: var(--muted); font-size: 10.5px; }
+.proxy-last-error { color: var(--bad-ink); }
+.proxy-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.proxy-metric { display: grid; gap: 2px; min-width: 0; }
+.proxy-metric span { color: var(--faint); font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; }
+.proxy-metric b { color: var(--ink-2); font-family: var(--font-mono); font-size: 11.5px; font-weight: 600; }
+.proxy-row-toggle b { min-width: 18px; }
+
+.proxy-dialog { width: min(560px, 100%); }
+.proxy-import-dialog { width: min(600px, 100%); }
+.proxy-advanced { display: grid; gap: 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.proxy-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.proxy-field-grid .key-field:first-child { grid-column: 1 / -1; }
+
+#proxyAssignModal .desc { margin: 0 0 4px; }
+#proxyAssignModal .dtabs { margin: 12px 0; }
+.proxy-assign-target { margin-bottom: 12px; }
+#proxyAssignModal .key-form-footer { margin-top: 12px; }
+
+@media (max-width: 980px) {
+  .proxy-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .proxy-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 760px) {
+  .proxy-kpis { grid-template-columns: 1fr; }
+  .proxy-provider-mode { max-width: 108px; }
+  .proxy-field-grid { grid-template-columns: minmax(0, 1fr); }
+  .proxy-field-grid .key-field:first-child { grid-column: auto; }
+  .proxy-row .proxy-metrics { grid-column: 2; }
+  .proxy-job { flex-wrap: wrap; }
 }

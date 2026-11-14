@@ -67,6 +67,7 @@ credentials. It is the executable spec — behavior changes start there.
 
 - [Status](noroute_docs/status.md) — what is implemented, route by route
 - [Admin API](noroute_docs/api/admin.md) — every `/api` endpoint
+- [Proxy egress](noroute_docs/proxy.md) and [proxy API](noroute_docs/api/proxy.md)
 - [Design](noroute_docs/design.md) and [data model](noroute_docs/data-model.md)
 - [Operations](noroute_docs/operations.md) and [troubleshooting](noroute_docs/troubleshooting.md)
 - [Runtime rules](noroute_docs/rules.md) — invariants the code and tests keep

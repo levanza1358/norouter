@@ -15,6 +15,7 @@ client
             ├── model resolver
             ├── account pool / .env credential resolution
             ├── provider chat endpoint
+            ├── proxy egress (optional CONNECT/SOCKS tunnel)
             ├── SSE relay or accumulator
             └── in-memory stats + SQLite account counters
 ```
@@ -27,7 +28,7 @@ No framework, bundler, or dependency. Node HTTP server owns routing. The dashboa
 2. Provider registry loads shipped providers (CodeBuddy CN, Codex, Antigravity) and saved custom providers from SQLite.
 3. SQLite opens lazily, enables WAL/NORMAL/busy timeout, creates schema, and migrates legacy JSON once.
 4. Server binds `HOST:PORT`.
-5. The maintenance scheduler starts with the process entry point: one timer at the configured interval, first tick after a full interval, tasks refresh tokens (10 min), quota (6 h), and the Codex catalog (12 h).
+5. The maintenance scheduler starts with the process entry point: one timer at the configured interval, first tick after a full interval, tasks refresh tokens (10 min), quota (6 h), the Codex catalog (12 h), and stale proxy health (30 min, plus optional auto-scrape).
 6. Dashboard loads saved theme/accent before first paint, shows splash, then polls status.
 
 ## Model resolution
@@ -69,13 +70,21 @@ A per-key daily budget is checked once, immediately after the body is parsed and
 - Preview reads existing fingerprints and incoming fingerprints but never writes.
 - Refresh calls are deduplicated per account.
 
+## Proxy egress
+
+Data-plane calls may be routed through an operator-managed proxy pool. The choice is resolved per upstream attempt from `meta.proxy_settings` and `meta.proxy_assignments`: master switch off → direct; provider assigned `direct` → direct; `pinned` → that proxy; missing or `global` → shared pool with round-robin or random selection. Candidates are enabled rows below the auto-bench failure threshold. If no candidate is usable, the attempt falls back to direct unless Strict is on, in which case it returns `502 proxy_unavailable` before any upstream request.
+
+The transport is dependency-free (`node:net`/`node:tls`/`node:http`): HTTP `CONNECT`, TLS-to-proxy for `https://`, and SOCKS4/4a/5/5h handshakes. A tunnel is opened first, then the target request is written over the socket (wrapped in TLS for an HTTPS target). The result is rebuilt as a standard `Response`, so chat streaming, buffering, wire translation, account retry, and SSE relay are untouched. One retry on a second proxy is allowed only for a pre-header transport failure; any HTTP status from the target counts as a tunnel success. Proxy failures never mark an account as failed. Catalog fetch, quota, OAuth, and dashboard traffic stay direct.
+
+Pool state (URLs with credentials, enabled flag, health, settings, assignments) is SQLite. Rotation cursor, job state, and counters are memory. URL grammar, masking, scraping, and failure codes are in [proxy.md](proxy.md).
+
 ## Provider adapters
 
 Built-in CodeBuddy has provider metadata plus CodeBuddy-specific refresh/quota modules. Codex adds the Responses wire and ChatGPT OAuth; Antigravity adds the Cloud Code `v1internal` envelope, Gemini `contents` translation, Google OAuth with project binding, and a quota reader over `loadCodeAssist` plus `retrieveUserQuotaSummary` (shared weekly/5h pools per model family, with per-model `fetchAvailableModels` as a paid-tier fallback). Custom providers are generic OpenAI-shaped forwarding only; no translation, custom headers, or generic refresh.
 
 ## Dashboard
 
-The UI has page surfaces for dashboard, service map, providers, usage, chat, combos, settings, and API keys, plus provider detail. App state is browser memory. Status/detail polling refreshes visible data; a separate `GET /api/live` SSE stream carries per-request lifecycle deltas for the service map, so particles and counters reflect real traffic while topology and health stay on the two-second `/api/status` poll. Account rows are server-paginated. Theme/accent are localStorage-only. Model tests return `answer` and display a bounded escaped toast in the bottom-right.
+The UI has page surfaces for dashboard, service map, providers, usage, chat, combos, proxy, settings, and API keys, plus provider detail. App state is browser memory. Status/detail polling refreshes visible data; a separate `GET /api/live` SSE stream carries per-request lifecycle deltas for the service map, so particles and counters reflect real traffic while topology and health stay on the two-second `/api/status` poll. Account rows are server-paginated. Theme/accent are localStorage-only. Model tests return `answer` and display a bounded escaped toast in the bottom-right.
 
 ## Persistence boundary
 
@@ -85,6 +94,8 @@ The UI has page surfaces for dashboard, service map, providers, usage, chat, com
 | Account records/counters/daily usage | SQLite | persist |
 | Custom providers/models | SQLite | persist |
 | Daily budgets and scheduler state | SQLite (`meta` + `budget_usage`) | persist |
+| Proxies, proxy settings, assignments | SQLite (`proxies` + `meta`) | persist |
+| Proxy rotation cursor, jobs, counters | memory | reset |
 | Theme/accent | browser localStorage | persist per browser |
 | Raw credential values | SQLite or process env | persist according to source |
 

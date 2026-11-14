@@ -30,6 +30,7 @@ import { applyReplyFilters, getReplyFiltersSettings } from '../lib/reply-filters
 import { recordRequestLog } from '../lib/request-log.js';
 import { notifyWebhook } from '../lib/webhook.js';
 import { nextLiveId, publishLive } from '../lib/live.js';
+import { dataPlaneFetch, isProxyError } from '../lib/proxy-fetch.js';
 import { upstreamModelFor, wireFor, wireHeaders } from '../providers/index.js';
 import { createResponsesStreamState, fromResponsesResponse, fromResponsesStream, toResponsesRequest } from '../lib/responses-format.js';
 import { createAnthropicStream, fromAnthropicResponse, toAnthropicRequest } from '../lib/anthropic-format.js';
@@ -406,9 +407,9 @@ function flushSSE(res, acc, decoder, bufferRef) {
 
 // A streamed client only understands SSE, so a mid-stream failure has to take
 // the shape of an error frame; a bare close reads as a finished, empty answer.
-function writeStreamErrorFrame(res, code, message) {
+function writeStreamErrorFrame(res, code, message, type = 'upstream_error') {
   if (res.destroyed || res.writableEnded) return;
-  res.write(`data: ${JSON.stringify({ error: { message, type: 'upstream_error', code } })}\n\n`);
+  res.write(`data: ${JSON.stringify({ error: { message, type, code } })}\n\n`);
   res.end();
 }
 
@@ -828,7 +829,7 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
   let activeId = null;
 
   const callUpstream = (payload, token) =>
-    fetch(wireUrl, {
+    dataPlaneFetch(provider.id, wireUrl, {
 
       method: 'POST',
       headers: buildHeaders(provider, token, wireFormat),
@@ -873,6 +874,16 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
         response = await callUpstream(payloadFor(attempt.row), attempt.token);
       } catch (err) {
         if (clientGone || err.name === 'AbortError') throw err;
+        // A proxy failure is about egress, not this account: parking every
+        // account would punish the pool for the network path.
+        if (isProxyError(err)) {
+          failure = {
+            status: 502,
+            text: JSON.stringify({ error: { message: err.message, type: 'proxy_error', code: 'proxy_unavailable' } }),
+            proxyError: true,
+          };
+          break;
+        }
         markFailure(attempt.row?.id, { message: err.message || 'Upstream request failed.', cooldownMs: DEFAULT_COOLDOWN_MS });
         failure = { status: 502, text: err.message || 'Upstream request failed.' };
         continue;
@@ -968,7 +979,8 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
       }
       if (deferHeaders) {
         // Nothing has been written yet, so the caller decides: retry the next
-        // combo model or relay this failure.
+        // combo model or relay this failure. Egress is the same for every
+        // model, so a proxy failure is never worth another attempt.
         publishLive({
           phase: 'error',
           id: liveId,
@@ -976,7 +988,7 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
           provider: provider.id,
           model,
           status: failure.status,
-          stage: 'upstream',
+          stage: failure.proxyError ? 'proxy' : 'upstream',
         });
         return {
           ok: false,
@@ -984,7 +996,7 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
           message: firstMessage(failure.text),
           model,
           provider: provider.id,
-          fallback: isFallbackStatus(failure.status),
+          fallback: failure.proxyError ? false : isFallbackStatus(failure.status),
         };
       }
       publishLive({
@@ -994,8 +1006,13 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
         provider: provider.id,
         model,
         status: failure.status,
-        stage: 'upstream',
+        stage: failure.proxyError ? 'proxy' : 'upstream',
       });
+      if (failure.proxyError) {
+        noteError(firstMessage(failure.text), { provider: provider.id, model, status: 502, trace });
+        sendJson(res, 502, JSON.parse(failure.text));
+        return { ok: false, status: 502, message: firstMessage(failure.text), model, provider: provider.id, fallback: false };
+      }
       relayFailure(res, failure.status, failure.text, provider, model, attempt.row?.label || '', trace);
       return { ok: false, status: failure.status, message: firstMessage(failure.text), model, fallback: isFallbackStatus(failure.status) };
     }
@@ -1386,6 +1403,28 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
         else res.end();
       }
       return { ok: false, status: 499, message: 'Request aborted', model, fallback: false, aborted: true };
+    }
+    // A proxy retry can escape the inner catch (the 401 refresh path), so the
+    // same egress rule applies here: no account penalty, no model fallback.
+    if (isProxyError(err)) {
+      const message = err.message || 'Proxy egress is unavailable.';
+      noteError(message, { provider: provider.id, model, status: 502, trace });
+      publishLive({
+        phase: 'error',
+        id: liveId,
+        at: Date.now(),
+        provider: provider.id,
+        model,
+        status: 502,
+        stage: 'proxy',
+      });
+      if (!res.headersSent) {
+        if (deferHeaders) return { ok: false, status: 502, message, model, provider: provider.id, fallback: false };
+        sendJson(res, 502, { error: { message, type: 'proxy_error', code: 'proxy_unavailable' } });
+        return { ok: false, status: 502, message, model, provider: provider.id, fallback: false };
+      }
+      writeStreamErrorFrame(res, 'proxy_unavailable', message, 'proxy_error');
+      return { ok: false, status: 502, message, model, provider: provider.id, fallback: false };
     }
     if (attempt.row) {
       markFailure(attempt.row.id, {

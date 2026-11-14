@@ -6,6 +6,7 @@ import { codexModelAccounts } from './codex-account.js';
 import { fromResponsesStream, toResponsesRequest } from './responses-format.js';
 import { createAnthropicStream, toAnthropicRequest } from './anthropic-format.js';
 import { createAntigravityStream, toAntigravityRequest } from './antigravity-format.js';
+import { dataPlaneFetch, isProxyError } from './proxy-fetch.js';
 
 const TEST_TIMEOUT_MS = 30_000;
 export const MODEL_TEST_PROMPT = 'Hi, what your model AI ? and your training cut off ?';
@@ -182,7 +183,7 @@ async function testOne(provider, model, { disableOnError = false } = {}) {
     const timer = setTimeout(() => controller.abort(), TEST_TIMEOUT_MS);
     try {
       const headers = wireHeaders(provider, token, wireFormat);
-      const response = await fetch(wireUrl, {
+      const response = await dataPlaneFetch(provider.id, wireUrl, {
         method: 'POST',
         headers,
         body: JSON.stringify(payload),
@@ -217,7 +218,8 @@ async function testOne(provider, model, { disableOnError = false } = {}) {
     // A 400 is request-shaped: every account would reject it identically, so
     // disabling this one would take a healthy account out of rotation for a
     // problem it did not cause. Only target-shaped failures may park an account.
-    const disableable = status !== 400;
+    // A proxy failure never reached the target either.
+    const disableable = status !== 400 && !isProxyError(err);
     if (disableOnError && disableable) {
       markFailure(row.id, { message: error });
       updateAccount(row.id, { enabled: false });
@@ -275,7 +277,7 @@ async function testAccountRequest(provider, row, { prompt = PING_PROMPT } = {}) 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TEST_TIMEOUT_MS);
     try {
-      const response = await fetch(wireUrl, {
+      const response = await dataPlaneFetch(provider.id, wireUrl, {
         method: 'POST',
         headers: wireHeaders(provider, token, wireFormat),
         body: JSON.stringify(payload),
@@ -306,6 +308,10 @@ async function testAccountRequest(provider, row, { prompt = PING_PROMPT } = {}) 
     }
   } catch (err) {
     const reason = err.name === 'AbortError' ? `Account test timed out after ${TEST_TIMEOUT_MS / 1000}s.` : redact(err.message, token);
+    // An egress failure says nothing about the account's token or quota.
+    if (isProxyError(err)) {
+      return { ...base, ok: false, status: 502, state: publicAccount(getAccountRow(row.id)).status, reason, latencyMs: Date.now() - started, proxyError: true };
+    }
     markFailure(row.id, { message: reason, cooldownMs: 60_000 });
     return { ...base, ok: false, status: 502, state: 'cooldown', reason, latencyMs: Date.now() - started };
   }

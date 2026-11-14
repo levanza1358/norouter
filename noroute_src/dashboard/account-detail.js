@@ -828,13 +828,14 @@ function updateBulkBar() {
 }
 
 // Pool actions run from one "More" button so the user sees Warmup all, Test
-// accounts all and Check in All together. Each job is client-driven: it pings
-// (answers "Pong") or warms up every enabled account one by one and reports
-// "N of M accounts" with a progress bar in the account head.
+// accounts all, Check in All and Restart all together. Each job is client-driven:
+// it pings (answers "Pong"), warms up or restarts every account one by one and
+// reports "N of M accounts" with a progress bar in the account head.
 const POOL_ACTIONS = {
   warmup: { id: 'poolItemWarmup', label: 'Warm up all', icon: '↻' },
   test: { id: 'poolItemTest', label: 'Test accounts all', icon: '◎' },
   checkin: { id: 'poolItemCheckin', label: 'Check in All', icon: '✓' },
+  restart: { id: 'poolItemRestart', label: 'Restart all accounts', icon: '⟳' },
 };
 
 let poolJob = null;
@@ -888,6 +889,45 @@ async function runPoolJob(kind) {
       detailNote(note,
         parts.length ? `${parts.join(' · ')}.` : 'No enabled OAuth accounts to check in.',
         checkinBody.failed ? 'bad' : 'ok');
+      return;
+    }
+
+    if (kind === 'restart') {
+      // Restart reaches every row, including paused ones, so it walks all pages
+      // instead of the page the operator happens to be looking at.
+      const items = [];
+      for (let page = 1; ; page += 1) {
+        const listRes = await detailApi(`/accounts?page=${page}&pageSize=200&status=all`, { cache: 'no-store' });
+        const listBody = await listRes.json().catch(() => ({}));
+        if (!listRes.ok) throw new Error(listBody.error?.message || `Request failed (${listRes.status})`);
+        const rows = listBody.items || [];
+        items.push(...rows);
+        if (!rows.length || items.length >= (listBody.total || 0)) break;
+      }
+      if (!items.length) {
+        detailNote(note, `No accounts for ${currentDetailId}.`, 'bad');
+        return;
+      }
+      paintProgress(0, items.length);
+
+      // Pause/resume happens server-side in one transaction, so a poll never
+      // sees a row parked halfway through the job.
+      let restarted = 0;
+      let failed = 0;
+      for (let i = 0; i < items.length; i += 1) {
+        try {
+          const restartRes = await detailApi(`/accounts/${encodeURIComponent(items[i].id)}/restart`, { method: 'POST' });
+          if (restartRes.ok) restarted += 1;
+          else failed += 1;
+        } catch {
+          failed += 1;
+        }
+        paintProgress(i + 1, items.length);
+      }
+
+      await loadAccounts();
+      const tone = failed === 0 ? 'ok' : restarted === 0 ? 'bad' : '';
+      detailNote(note, `${action.label}: ${fmtFull(restarted)} restarted${failed ? ` · ${fmtFull(failed)} failed` : ''}.`, tone);
       return;
     }
 

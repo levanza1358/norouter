@@ -40,6 +40,9 @@ Use only fake fixture values. Never point a production `.env` at test overrides.
 - Rate-limit cooldown/failover.
 - Pool-level account actions: check-in all, provider warmup.
 - Per-account ping and warmup, including paused and missing accounts.
+- Proxy URL parsing, canonicalisation, masking, and import parsing.
+- Proxy CONNECT/SOCKS tunnels against local fixtures, including authentication, target TLS, redirects, abort, and SSE passthrough.
+- Proxy selection precedence, strict/unavailable behaviour, benching, and proxy-off parity.
 
 ## Manual production checklist
 
@@ -51,7 +54,8 @@ Use only fake fixture values. Never point a production `.env` at test overrides.
 - Preview duplicate/new/invalid statuses are correct.
 - Model test uses active account and returns expected answer toast.
 - Quota card is clearly labeled upstream versus local.
-- No raw provider credential appears in API response, browser DOM, logs, screenshots, or git diff. Managed proxy API keys are intentionally available to the local API Keys dashboard.
+- No raw provider credential appears in API response, browser DOM, logs, screenshots, or git diff. Managed proxy API keys are intentionally available to the local API Keys dashboard. Upstream proxy credentials are never returned; only masked URLs appear.
+- Proxy page: add a test tunnel, test it, assign Direct/Global/Pinned, then confirm a chat still streams; turn Strict on with an empty pool and confirm `502 proxy_unavailable`, then turn it off and confirm direct fallback.
 
 ## Known gaps
 

@@ -44,17 +44,6 @@ window.addEventListener('resize', () => {
   resizeTimer = setTimeout(renderCurrent, 180);
 });
 
-// The Models card is sized by its column, which the request card's pager can
-// change, so re-trim whenever that card's own box changes.
-const recentCard = $('recentTable')?.closest('.card');
-if ('ResizeObserver' in window) {
-  const observer = new ResizeObserver(() => {
-    if (currentPath !== '/') return;
-    requestAnimationFrame(trimModelsToCard);
-  });
-  if (recentCard) observer.observe(recentCard);
-}
-
 setInterval(() => {
   if (document.visibilityState === 'visible') refresh();
 }, REFRESH_MS);

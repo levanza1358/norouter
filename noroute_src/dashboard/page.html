@@ -233,6 +233,10 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="17" height="6" rx="2"/><rect x="3.5" y="14" width="17" height="6" rx="2"/><path d="M7 7h.01M7 17h.01"/></svg>
         <span class="rail-btn-label">Providers</span>
       </a>
+      <a class="rail-btn" href="/proxy" data-route="/proxy" title="Proxy" aria-label="Proxy">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.4 2.3 2.4 14.7 0 17M12 3.5c-2.4 2.3-2.4 14.7 0 17"/></svg>
+        <span class="rail-btn-label">Proxy</span>
+      </a>
       <a class="rail-btn" href="/usage" data-route="/usage" title="Usage" aria-label="Usage">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V9M9.5 19V5M15 19v-6M20.5 19v-9"/></svg>
         <span class="rail-btn-label">Usage</span>
@@ -264,47 +268,35 @@
         <h1 id="pageTitle">Dashboard</h1>
         <p id="tagline">Traffic, provider health and recent activity.</p>
       </div>
-      <div class="topbar-right">
-        <div class="today">
-          <span class="today-label" id="todayLabel">—</span>
-          <span class="today-alt" id="todayAlt"></span>
-        </div>
-        <div class="topbar-connect" id="topbarConnect" hidden>
-          <div class="topbar-connect-item">
-            <span class="topbar-connect-label">Base URL</span>
-            <code id="baseUrl">—</code>
-            <button class="btn btn-ghost btn-xs" id="copyBase" type="button">Copy</button>
-          </div>
-          <div class="topbar-connect-item">
-            <span class="topbar-connect-label">API key</span>
-            <code id="dashboardApiKey">Not configured</code>
-            <button class="btn btn-ghost btn-xs" id="copyApiKey" type="button" disabled>Copy</button>
-          </div>
-        </div>
+      <div class="today">
+        <span class="today-label" id="todayLabel">—</span>
+        <span class="today-alt" id="todayAlt"></span>
       </div>
     </header>
 
     <!-- ============ DASHBOARD ============ -->
     <section class="page dashboard-page" data-page="/" hidden>
+      <span class="sr-only" id="reqRangeChip">since start</span>
+      <span class="sr-only" id="inOutChip">no traffic</span>
 
-      <div class="dash-toolbar">
-        <div class="dtabs" id="dashboardRangeTabs" role="tablist" aria-label="Dashboard usage range">
-          <button class="dtab is-active" id="dashboardRangeDay" type="button" role="tab" data-dashboard-range="day" aria-selected="true" aria-controls="dashboardHistoryPanel">Daily</button>
-          <button class="dtab" id="dashboardRangeWeek" type="button" role="tab" data-dashboard-range="week" aria-selected="false" aria-controls="dashboardHistoryPanel" tabindex="-1">Weekly</button>
-          <button class="dtab" id="dashboardRangeMonth" type="button" role="tab" data-dashboard-range="month" aria-selected="false" aria-controls="dashboardHistoryPanel" tabindex="-1">Monthly</button>
-          <button class="dtab" id="dashboardRangeAll" type="button" role="tab" data-dashboard-range="all" aria-selected="false" aria-controls="dashboardHistoryPanel" tabindex="-1">All time</button>
+      <article class="card dashboard-primary dash-overview" id="dashboardHistoryPanel" role="tabpanel" aria-labelledby="dashboardRangeDay">
+        <div class="dash-overview-head">
+          <div class="dash-overview-title">
+            <h2 class="card-title">Traffic</h2>
+            <span class="chip chip-quiet" id="statRangeChip">today</span>
+            <span class="chip chip-quiet" id="uptimeChip">up —</span>
+            <span class="chip chip-quiet" id="successChip">—</span>
+          </div>
+          <div class="dtabs" id="dashboardRangeTabs" role="tablist" aria-label="Dashboard usage range">
+            <button class="dtab is-active" id="dashboardRangeDay" type="button" role="tab" data-dashboard-range="day" aria-selected="true" aria-controls="dashboardHistoryPanel">Daily</button>
+            <button class="dtab" id="dashboardRangeWeek" type="button" role="tab" data-dashboard-range="week" aria-selected="false" aria-controls="dashboardHistoryPanel" tabindex="-1">Weekly</button>
+            <button class="dtab" id="dashboardRangeMonth" type="button" role="tab" data-dashboard-range="month" aria-selected="false" aria-controls="dashboardHistoryPanel" tabindex="-1">Monthly</button>
+            <button class="dtab" id="dashboardRangeAll" type="button" role="tab" data-dashboard-range="all" aria-selected="false" aria-controls="dashboardHistoryPanel" tabindex="-1">All time</button>
+          </div>
         </div>
-        <span class="sr-only" id="reqRangeChip">since start</span>
-        <span class="sr-only" id="inOutChip">no traffic</span>
-      </div>
 
-      <article class="card dash-traffic">
-        <div class="card-head">
-          <div><h2 class="card-title">Traffic</h2></div>
-          <span class="chip chip-quiet" id="statRangeChip">today</span>
-        </div>
         <div class="dash-stats">
-          <div class="dash-stat">
+          <div class="dash-stat dash-stat-primary">
             <span class="dash-stat-label">Requests</span>
             <span class="dash-stat-value" id="statRequests">0</span>
           </div>
@@ -325,56 +317,66 @@
             <span class="dash-stat-value" id="statErrors">0</span>
           </div>
         </div>
-        <div class="dash-traffic-foot">
-          <span class="chip chip-quiet" id="uptimeChip">up —</span>
-          <span class="chip chip-quiet" id="successChip">—</span>
-          <span class="dash-note">Persisted usage for the selected range, plus live uptime.</span>
+
+        <div class="dash-chart">
+          <div class="dash-chart-head">
+            <span class="dash-chart-label">Request volume</span>
+            <span class="chip chip-quiet" id="sparkWindow">no history</span>
+          </div>
+          <div class="spark" id="spark" role="img" aria-label="Request activity chart"></div>
+          <p class="spark-summary" id="sparkSummary"></p>
+          <div class="spark-foot" id="sparkFoot" aria-hidden="true">
+            <span id="sparkFrom"></span>
+            <span id="sparkMid"></span>
+            <span id="sparkTo"></span>
+          </div>
         </div>
       </article>
 
       <div class="dash-layout">
-        <div class="dash-main">
-          <article class="card dashboard-primary dash-chart" id="dashboardHistoryPanel" role="tabpanel" aria-labelledby="dashboardRangeDay">
-            <div class="card-head">
-              <div><h2 class="card-title">Request volume</h2></div>
-              <span class="chip chip-quiet" id="sparkWindow">no history</span>
-            </div>
-            <div class="spark" id="spark" role="img" aria-label="Request activity chart"></div>
-            <p class="spark-summary" id="sparkSummary"></p>
-            <div class="spark-foot" id="sparkFoot" aria-hidden="true">
-              <span id="sparkFrom"></span>
-              <span id="sparkMid"></span>
-              <span id="sparkTo"></span>
-            </div>
-          </article>
-
-          <article class="card dashboard-primary dash-recent">
-            <div class="card-head">
-              <h2 class="card-title">Recent requests</h2>
-              <span class="chip chip-quiet" id="recentCount">0</span>
-            </div>
-            <div class="table-wrap">
-              <table class="tbl tbl-compact">
-                <thead>
-                  <tr>
-                    <th>Model</th>
-                    <th class="r">Tokens</th>
-                    <th class="r">Latency</th>
-                    <th class="r">Status</th>
-                  </tr>
-                </thead>
-                <tbody id="recentTable"></tbody>
-              </table>
-            </div>
-            <nav class="usage-pager" id="recentPager" aria-label="Recent requests pages" hidden>
-              <span class="usage-pager-info" id="recentPageInfo">0 requests</span>
-              <div class="usage-pager-btns" id="recentPageBtns"></div>
-            </nav>
-          </article>
-        </div>
+        <article class="card dashboard-primary dash-recent">
+          <div class="card-head">
+            <h2 class="card-title">Recent requests</h2>
+            <span class="chip chip-quiet" id="recentCount">0</span>
+          </div>
+          <div class="table-wrap">
+            <table class="tbl tbl-compact">
+              <thead>
+                <tr>
+                  <th>Model</th>
+                  <th class="r">Tokens</th>
+                  <th class="r">Latency</th>
+                  <th class="r">Status</th>
+                </tr>
+              </thead>
+              <tbody id="recentTable"></tbody>
+            </table>
+          </div>
+          <nav class="usage-pager" id="recentPager" aria-label="Recent requests pages" hidden>
+            <span class="usage-pager-info" id="recentPageInfo">0 requests</span>
+            <div class="usage-pager-btns" id="recentPageBtns"></div>
+          </nav>
+        </article>
 
         <div class="dash-side">
-          <article class="card">
+          <article class="card dash-connect" id="topbarConnect" hidden>
+            <div class="card-head">
+              <h2 class="card-title">Connection</h2>
+              <span class="chip chip-quiet">OpenAI-compatible</span>
+            </div>
+            <div class="dash-connect-row">
+              <span class="dash-connect-label">Base URL</span>
+              <code id="baseUrl">—</code>
+              <button class="btn btn-ghost btn-xs" id="copyBase" type="button">Copy</button>
+            </div>
+            <div class="dash-connect-row">
+              <span class="dash-connect-label">API key</span>
+              <code id="dashboardApiKey">Not configured</code>
+              <button class="btn btn-ghost btn-xs" id="copyApiKey" type="button" disabled>Copy</button>
+            </div>
+          </article>
+
+          <article class="card dash-models">
             <div class="card-head">
               <h2 class="card-title">Models</h2>
               <span class="chip chip-quiet" id="modelCount">—</span>
@@ -403,6 +405,111 @@
       </header>
 
       <div class="pgrid" id="providerCards"></div>
+    </section>
+
+    <!-- ============ PROXY ============ -->
+    <section class="page proxy-page" data-page="/proxy" id="proxyContent" hidden>
+      <div class="key-actions">
+        <div class="proxy-actions">
+          <button class="btn btn-primary" id="openAddProxy" type="button">+ Add proxy</button>
+          <button class="btn btn-ghost" id="openImportProxy" type="button">Import</button>
+          <button class="btn btn-ghost" id="testAllProxies" type="button">Test all</button>
+        </div>
+      </div>
+
+      <div class="key-kpis proxy-kpis">
+        <article class="card key-kpi"><span class="tile-label">Pool</span><strong id="proxyTotal">0</strong><span class="tile-label">Saved proxies</span></article>
+        <article class="card key-kpi"><span class="tile-label">Enabled</span><strong id="proxyEnabledCount">0</strong><span class="tile-label">Eligible for traffic</span></article>
+        <article class="card key-kpi"><span class="tile-label">Healthy</span><strong id="proxyHealthy">0</strong><span class="tile-label">Last probe succeeded</span></article>
+        <article class="card key-kpi"><span class="tile-label">Proxied</span><strong id="proxyProxied">0</strong><span class="tile-label">Requests via proxy</span></article>
+      </div>
+
+      <div class="sgrid proxy-grid">
+        <div class="scol">
+          <article class="card">
+            <div class="card-head">
+              <div>
+                <h2 class="card-title">Egress</h2>
+                <p class="desc">Send chat, images, embeddings, and model tests through the pool. OAuth, quota, and catalog calls stay direct.</p>
+              </div>
+              <label class="key-toggle"><input id="proxyEnabled" type="checkbox"><span></span><b>Enabled</b></label>
+            </div>
+            <div class="proxy-toolbar">
+              <div class="dtabs" id="proxyStrategy" role="group" aria-label="Proxy pick strategy">
+                <button class="dtab" type="button" data-proxy-strategy="round-robin">Round robin</button>
+                <button class="dtab" type="button" data-proxy-strategy="random">Random</button>
+              </div>
+              <label class="mini-toggle proxy-switch"><input id="proxyStrict" type="checkbox"><span></span><b>Strict</b></label>
+            </div>
+            <p class="desc">Strict fails a request when no proxy is usable instead of falling back to a direct connection.</p>
+            <div class="setting-inline-row">
+              <label class="apfield" for="proxyAutoDisable"><span>Bench after failures <em>0 disables</em></span><input id="proxyAutoDisable" type="number" min="0" max="100" step="1" inputmode="numeric"></label>
+              <button class="btn btn-ghost" id="saveProxyAutoDisable" type="button">Apply</button>
+            </div>
+            <p class="toolnote" id="proxyEgressNote" role="status" aria-live="polite"></p>
+          </article>
+
+          <article class="card">
+            <div class="card-head">
+              <div>
+                <h2 class="card-title">Free proxy scrape</h2>
+                <p class="desc">Fetch public proxy lists, probe each candidate, and keep only reachable ones. Off by default.</p>
+              </div>
+              <label class="key-toggle"><input id="scrapeAuto" type="checkbox"><span></span><b>Scheduled</b></label>
+            </div>
+            <div class="setting-inline-row">
+              <label class="apfield" for="scrapeInterval"><span>Interval (minutes)</span><input id="scrapeInterval" type="number" min="30" max="10080" step="1" inputmode="numeric"></label>
+              <button class="btn btn-ghost" id="saveScrapeInterval" type="button">Set interval</button>
+            </div>
+            <div class="setting-inline-row">
+              <label class="apfield" for="scrapeLimit"><span>Probe limit</span><input id="scrapeLimit" type="number" min="10" max="1000" step="1" inputmode="numeric"></label>
+              <button class="btn btn-ghost" id="saveScrapeLimit" type="button">Set limit</button>
+            </div>
+            <div class="proxy-sources" id="scrapeSources" role="group" aria-label="Scrape sources">
+              <label class="mini-toggle"><input type="checkbox" value="proxifly" data-scrape-source checked><span></span><b>Proxifly</b></label>
+              <label class="mini-toggle"><input type="checkbox" value="monosans" data-scrape-source checked><span></span><b>monosans</b></label>
+              <label class="mini-toggle"><input type="checkbox" value="thespeedx" data-scrape-source checked><span></span><b>TheSpeedX</b></label>
+              <label class="mini-toggle"><input type="checkbox" value="geonode" data-scrape-source checked><span></span><b>Geonode</b></label>
+            </div>
+            <div class="proxy-job">
+              <button class="btn btn-ghost" id="scrapeNow" type="button">Scrape now</button>
+              <span class="chip chip-quiet" id="scrapeState">idle</span>
+            </div>
+            <div class="proxy-source-list" id="scrapeSourceList"></div>
+            <p class="toolnote" id="scrapeNote" role="status" aria-live="polite"></p>
+          </article>
+        </div>
+
+        <div class="scol">
+          <article class="card">
+            <div class="card-head">
+              <div>
+                <h2 class="card-title">Per-provider routing</h2>
+                <p class="desc">Global uses the pool. Direct bypasses it. Pinned always uses one proxy.</p>
+              </div>
+              <span class="chip chip-quiet" id="proxyAssignCount">0 providers</span>
+            </div>
+            <div class="proxy-provider-list" id="proxyProviderList"></div>
+            <p class="toolnote" id="proxyAssignNote" role="status" aria-live="polite"></p>
+          </article>
+        </div>
+      </div>
+
+      <article class="card proxy-pool">
+        <div class="card-head">
+          <div>
+            <h2 class="card-title">Proxy pool</h2>
+            <p class="desc">Credentials stay masked. Disabled rows never receive traffic.</p>
+          </div>
+          <span class="chip chip-quiet" id="proxyPoolCount">0 saved</span>
+        </div>
+        <p class="toolnote" id="proxyPoolNote" role="status" aria-live="polite"></p>
+        <div class="key-list" id="proxyList"></div>
+        <nav class="usage-pager" id="proxyPager" aria-label="Proxy pool pages" hidden>
+          <span class="usage-pager-info" id="proxyPageInfo">0 proxies</span>
+          <div class="usage-pager-btns" id="proxyPageBtns"></div>
+        </nav>
+      </article>
     </section>
 
     <!-- ============ USAGE ============ -->
@@ -820,6 +927,77 @@
       </section>
     </div>
 
+    <div class="key-modal" id="proxyModal" hidden>
+      <div class="key-modal-backdrop" data-proxy-close></div>
+      <section class="key-dialog proxy-dialog" role="dialog" aria-modal="true" aria-labelledby="proxyDialogTitle">
+        <div class="card-head"><h2 class="card-title" id="proxyDialogTitle">Add proxy</h2><button class="iconbtn" type="button" data-proxy-close aria-label="Close">×</button></div>
+        <form class="key-create-form" id="proxyForm" autocomplete="off">
+          <label class="apfield key-field"><span class="key-field-label">Proxy URL <em>scheme://user:pass@host:port</em></span><input name="url" id="proxyUrlInput" placeholder="socks5://user:pass@127.0.0.1:1080" spellcheck="false"></label>
+          <p class="toolnote">HTTP, HTTPS, SOCKS4, SOCKS4a, SOCKS5, and SOCKS5h are supported.</p>
+          <div class="proxy-advanced">
+            <p class="key-field-label">Or fill the fields separately</p>
+            <div class="proxy-field-grid">
+              <label class="apfield key-field"><span class="key-field-label">Protocol</span><select name="protocol" id="proxyProtocol" data-custom-select><option value="http">HTTP</option><option value="https">HTTPS</option><option value="socks4">SOCKS4</option><option value="socks4a">SOCKS4a</option><option value="socks5">SOCKS5</option><option value="socks5h">SOCKS5h</option></select></label>
+              <label class="apfield key-field"><span class="key-field-label">Host</span><input name="host" placeholder="127.0.0.1" spellcheck="false"></label>
+              <label class="apfield key-field"><span class="key-field-label">Port</span><input name="port" type="number" min="1" max="65535" step="1" inputmode="numeric" placeholder="1080"></label>
+              <label class="apfield key-field"><span class="key-field-label">Username <em>optional</em></span><input name="username" autocomplete="off" spellcheck="false"></label>
+              <label class="apfield key-field"><span class="key-field-label">Password <em>optional</em></span><input name="password" type="password" autocomplete="new-password"></label>
+            </div>
+          </div>
+          <label class="apfield key-field"><span class="key-field-label">Label <em>optional</em></span><input name="label" maxlength="80" placeholder="Home proxy" autocomplete="off"></label>
+          <div class="key-form-footer">
+            <label class="mini-toggle"><input name="test" type="checkbox" checked><span></span><b>Test after adding</b></label>
+            <button class="btn btn-primary" type="submit">Add proxy</button>
+          </div>
+          <p class="toolnote" id="proxyFormNote" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+    </div>
+
+    <div class="key-modal" id="proxyImportModal" hidden>
+      <div class="key-modal-backdrop" data-proxy-import-close></div>
+      <section class="key-dialog proxy-import-dialog" role="dialog" aria-modal="true" aria-labelledby="proxyImportTitle">
+        <div class="card-head"><h2 class="card-title" id="proxyImportTitle">Import proxies</h2><button class="iconbtn" type="button" data-proxy-import-close aria-label="Close">×</button></div>
+        <form class="key-create-form" id="proxyImportForm" autocomplete="off">
+          <label class="apfield key-field"><span class="key-field-label">One proxy per line</span><textarea name="text" rows="8" maxlength="120000" placeholder="http://user:pass@host:port&#10;socks5://host:1080" spellcheck="false"></textarea></label>
+          <p class="toolnote">Up to 1000 candidates. Duplicates and invalid lines are skipped.</p>
+          <div class="key-form-footer"><span class="toolnote" id="proxyImportNote" role="status" aria-live="polite"></span><button class="btn btn-primary" type="submit">Import</button></div>
+        </form>
+      </section>
+    </div>
+
+    <div class="key-modal" id="proxyEditModal" hidden>
+      <div class="key-modal-backdrop" data-proxy-edit-close></div>
+      <section class="key-dialog" role="dialog" aria-modal="true" aria-labelledby="proxyEditTitle">
+        <div class="card-head"><h2 class="card-title" id="proxyEditTitle">Rename proxy</h2><button class="iconbtn" type="button" data-proxy-edit-close aria-label="Close">×</button></div>
+        <form class="key-create-form" id="proxyEditForm" autocomplete="off">
+          <label class="apfield key-field"><span class="key-field-label">Label</span><input name="label" maxlength="80" placeholder="Host and port" required></label>
+          <p class="toolnote">The connection URL cannot be changed. Remove and re-add the proxy instead.</p>
+          <div class="key-form-footer"><span class="toolnote" id="proxyEditNote" role="status" aria-live="polite"></span><button class="btn btn-primary" type="submit">Save label</button></div>
+        </form>
+      </section>
+    </div>
+
+    <div class="key-modal" id="proxyAssignModal" hidden>
+      <div class="key-modal-backdrop" data-proxy-assign-close></div>
+      <section class="key-dialog" role="dialog" aria-modal="true" aria-labelledby="proxyAssignTitle">
+        <div class="card-head"><h2 class="card-title" id="proxyAssignTitle">Route provider</h2><button class="iconbtn" type="button" data-proxy-assign-close aria-label="Close">×</button></div>
+        <p class="desc" id="proxyAssignDesc"></p>
+        <div class="dtabs" id="proxyAssignModes" role="group" aria-label="Assignment mode">
+          <button class="dtab" type="button" data-assign-mode="global">Global pool</button>
+          <button class="dtab" type="button" data-assign-mode="direct">Direct</button>
+          <button class="dtab" type="button" data-assign-mode="pinned">Pinned</button>
+        </div>
+        <label class="apfield key-field proxy-assign-target" id="proxyAssignTargetField">
+          <span class="key-field-label">Pinned proxy</span>
+          <select id="proxyAssignTarget" data-custom-select aria-label="Pinned proxy"></select>
+          <span class="desc">Only enabled proxies can be pinned.</span>
+        </label>
+        <p class="toolnote" id="proxyAssignModalNote" role="status" aria-live="polite"></p>
+        <div class="key-form-footer"><button class="btn btn-ghost" type="button" data-proxy-assign-close>Cancel</button><button class="btn btn-primary" id="proxyAssignSave" type="button">Apply</button></div>
+      </section>
+    </div>
+
     <div class="key-modal" id="confirmModal" hidden>
       <div class="key-modal-backdrop" data-confirm-close></div>
       <section class="key-dialog confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
@@ -891,6 +1069,7 @@
                 <button class="apool-menuitem" id="poolItemWarmup" type="button" data-pool-action="warmup"><span class="apool-icon">↻</span> Warm up all</button>
                 <button class="apool-menuitem" id="poolItemTest" type="button" data-pool-action="test"><span class="apool-icon">◎</span> Test accounts all</button>
                 <button class="apool-menuitem" id="poolItemCheckin" type="button" data-pool-action="checkin"><span class="apool-icon">✓</span> Check in All</button>
+                <button class="apool-menuitem" id="poolItemRestart" type="button" data-pool-action="restart"><span class="apool-icon">⟳</span> Restart all accounts</button>
               </div>
               <button class="btn btn-ghost" id="openBulk" type="button">Bulk add</button>
               <button class="btn btn-primary" id="openAddAccount" type="button">Add account</button>
@@ -1293,6 +1472,7 @@
 <script src="/assets/account-detail.js"></script>
 <script src="/assets/account-events.js"></script>
 <script src="/assets/service-map.js"></script>
+<script src="/assets/proxy.js"></script>
 <script src="/assets/glue.js"></script>
 <script src="/assets/actions.js"></script>
 <script src="/assets/boot.js"></script>

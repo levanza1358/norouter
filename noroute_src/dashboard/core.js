@@ -73,6 +73,7 @@ const ROUTES = {
   '/': { title: 'Dashboard', sub: 'Monitor gateway health, traffic, and recent activity.', copy: true },
   '/map': { title: 'Service map', sub: 'Live request path from client to upstream.', copy: false },
   '/providers': { title: 'Providers', sub: 'Every upstream this router can reach.', copy: false },
+  '/proxy': { title: 'Proxy', sub: 'Route upstream traffic through a proxy pool.', copy: false },
   '/usage': { title: 'Usage', sub: 'Tokens and requests, broken down per model.', copy: false },
   '/chat': { title: 'Chat', sub: 'Talk to your local model gateway.', copy: false },
   '/combos': { title: 'Combos', sub: 'Virtual model names that fall back through a list.', copy: false },

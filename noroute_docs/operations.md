@@ -71,7 +71,7 @@ A turn that stops early leaves a request log entry with status 502 and `Upstream
 
 ## Database backup
 
-Stop server for a simple backup. Copy `data/norouter.db`, `data/norouter.db-wal`, and `data/norouter.db-shm` together when present, or use an SQLite-aware backup. Database contains plaintext access/refresh tokens.
+Stop server for a simple backup. Copy `data/norouter.db`, `data/norouter.db-wal`, and `data/norouter.db-shm` together when present, or use an SQLite-aware backup. Database contains plaintext access/refresh tokens and full proxy URLs.
 
 ## Account backup & restore
 
@@ -103,9 +103,23 @@ Settings → Daily budgets puts a token or cost cap on a managed API key or a wh
 - A key that reaches its cap returns 429 `budget_error` / `budget_exhausted` before any upstream call. A provider that reaches its cap is skipped by failover chains; the request continues on another target and only fails if none is left.
 - When a scope crosses its limit, the webhook (if enabled) receives one `budget` event per scope per day with the limit, the used counters, and the reason (`tokens` and/or `cost`). No credential, prompt, or response text is included.
 - Counters are written only for completed requests with usage, and only for scopes that had a limit at request time. Turning a limit off stops its counter but keeps the day's row visible in the card.
-- Settings → Scheduled upkeep runs three background tasks while the server is up: token refresh (10 minutes), quota refresh (6 hours), and Codex model catalog (12 hours). The scheduler interval defaults to 15 minutes and accepts 5–1440; the first automatic tick happens one full interval after start, so a restart does not fire upstream traffic immediately.
-- Each tick only touches a bounded batch (20 token refreshes, 20 quota reads, 10 catalogs) in oldest-first order, so a large pool is caught up over several ticks instead of one long burst.
+- Settings → Scheduled upkeep runs four background tasks while the server is up: token refresh (10 minutes), quota refresh (6 hours), Codex model catalog (12 hours), and proxy health (30 minutes, including an optional scheduled scrape). The scheduler interval defaults to 15 minutes and accepts 5–1440; the first automatic tick happens one full interval after start, so a restart does not fire upstream traffic immediately.
+- Each tick only touches a bounded batch (20 token refreshes, 20 quota reads, 10 catalogs, 10 stale proxies) in oldest-first order, so a large pool is caught up over several ticks instead of one long burst.
 - **Run all now** (or `POST /api/maintenance/run`) works even with the scheduler switched off, which is the way to verify credentials and catalog reads without waiting. A task that throws is reported in the card and webhook as an `error` event with `scope: "maintenance"`; the next tick retries.
+
+## Proxy pool
+
+`/proxy` manages optional data-plane egress. The master switch is off by default; with it off, every request goes direct and per-provider assignments are kept but unused. See [proxy.md](proxy.md) for URL grammar, transport, and security.
+
+- **Add** one proxy manually (protocol/host/port/username/password or a pasted URL). Credentials are encoded by the form. The immediate test is optional; a failed test still stores the row so the failure is visible.
+- **Import** up to 1000 lines or a JSON array. `host:port` is stored as `http`; duplicates are counted; invalid values are never echoed. Import does not test.
+- **Scrape** is opt-in. Sources are fetched directly, candidates are deduplicated and capped, and each is validated through a real tunnel before storage. A public batch can yield zero usable proxies; treat free proxies as untrusted. One scrape runs at a time.
+- **Test** checks one proxy against a target with an 8 second budget (or runs a background job for all/selected). Any HTTP response counts as reachable; `407` from an HTTP proxy is an authentication failure.
+- **Assign** each provider to `global` (shared pool), `direct` (bypass), or `pinned` (one proxy). A missing entry means `global`.
+- **Strict** makes an unavailable pool a `502 proxy_unavailable` instead of a direct fallback. Without it, an empty, benched, or failed pool falls back to direct and increments `fallbackDirect`.
+- Health: a proxy whose `fail_count` reaches `autoDisableAfter` is benched (candidates exclude it). A successful test resets the count; `autoDisableAfter: 0` disables benching. A running server tests up to 10 enabled proxies with stale/null health every 30 minutes.
+- OAuth refresh, quota, catalog fetch, and dashboard/admin traffic never use the pool.
+- Logs contain short failure codes, never a proxy URL or credential. The database stores full proxy URLs, so it is as sensitive as the account table.
 
 ## Account names
 
@@ -126,11 +140,11 @@ New accounts without an explicit name are numbered from the provider's short pre
 4. Pull/copy code.
 5. Start once so schema/legacy migration can run.
 6. Run `npm test` in an isolated test environment.
-7. Verify `/health`, `/api/status`, account count, provider model catalog, and one controlled chat test.
+7. Verify `/health`, `/api/status`, account count, provider model catalog, proxy pool state, and one controlled chat test.
 
 ## Restart behavior
 
-Global request history, uptime, and dashboard stats reset. SQLite accounts, custom providers/models, account counters, and daily usage persist.
+Global request history, uptime, and dashboard stats reset. SQLite accounts, custom providers/models, account counters, proxy settings/rows/assignments, and daily usage persist. Proxy rotation cursor, job progress, and proxy counters reset.
 
 ## Production posture
 

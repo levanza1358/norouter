@@ -20,7 +20,7 @@ WAL and SHM sidecars are part of the database state and may contain sensitive da
 
 Schema metadata. Current schema marker is `1`.
 
-The `meta` key/value table also holds JSON settings that do not need their own table: `budgets` (API key/provider daily limits), `budget_alerts` (one alert marker per scope per day), `budget_pruned` (last retention pass day), `maintenance` (scheduler enabled/interval), and `maintenance.state` (last run per maintenance task).
+The `meta` key/value table also holds JSON settings that do not need their own table: `budgets` (API key/provider daily limits), `budget_alerts` (one alert marker per scope per day), `budget_pruned` (last retention pass day), `maintenance` (scheduler enabled/interval), `maintenance.state` (last run per maintenance task), `proxy_settings` (master switch, strategy, strict, auto-bench, scrape schedule), `proxy_assignments` (per-provider `global`/`direct`/`pinned`), and `proxy_state` (last completed scrape time).
 
 ### `accounts`
 
@@ -48,6 +48,12 @@ SHA-256(`${kind}:${secret}`)
 The fingerprint is never returned to the API/UI.
 
 At startup, before the identity index is installed, the server decodes stored Codex JWTs to backfill `uid` and `plan`, merges rows that share `(provider, uid)` into the row that can still serve (preferring a refresh token, then an enabled/healthy/recently used row) while summing usage counters and copying model catalogs, and only then creates the index. Import-time checks remain as a fallback if the index cannot be installed.
+
+### `proxies`
+
+Operator-managed proxy pool for data-plane egress. Columns: `id` (primary key), `url` (unique, canonical, **includes credentials**), `label`, `source` (`manual`, `import`, `scrape`), `protocol`, `host`, `port`, `enabled`, `status` (`unchecked`, `ok`, `fail`), `latency_ms`, `fail_count`, `last_checked`, `last_error`, `created_at`, and `updated_at`.
+
+The row is the connection target; the API only ever exposes a masked URL (`scheme://•••@host:port` when credentials exist). URLs are immutable after insert, and a duplicate canonical URL is rejected. `fail_count` is incremented on a transport failure and reset by a successful test or a later successful request; a candidate is benched when it reaches the configured `autoDisableAfter`. `last_error` stores a short code, never a URL or credential. Deleting a row rewrites any `pinned` assignment that referenced it to `global`.
 
 ### `custom_models`
 
@@ -95,7 +101,7 @@ Buckets follow the server machine's timezone. Changing the OS timezone affects o
 
 ## Persistence split
 
-Live dashboard counters (`noroute_src/lib/stats.js`) remain in memory and reset after restart. Account counters, custom providers/models, daily account usage, daily budget counters, scheduler state, and the global `usage_hourly` history persist in SQLite.
+Live dashboard counters (`noroute_src/lib/stats.js`) remain in memory and reset after restart. Account counters, custom providers/models, daily account usage, daily budget counters, scheduler state, proxy rows, proxy settings/assignments, and the global `usage_hourly` history persist in SQLite. Proxy rotation cursor, test/scrape job snapshots, and proxy counters are memory-only.
 
 Timezone note: `account_usage` and `api_key_usage` use UTC day keys, `budget_usage` (and the `budgets` meta snapshot) uses local-time day keys, and `usage_hourly` uses local-time hour keys.
 

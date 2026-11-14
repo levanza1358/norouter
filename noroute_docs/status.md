@@ -40,6 +40,7 @@
 - Managed API keys with custom/automatic secrets, expiry, request/token limits, and daily usage history.
 - Daily token/cost budgets per managed API key and per provider, stored in `meta` with counters in `budget_usage` (local-day reset, 90-day retention). A capped key gets 429 `budget_exhausted`; a capped provider is skipped by failover chains; a `budget` webhook event fires once per scope per day.
 - Background maintenance scheduler: token refresh (10 min), quota refresh (6 h), and Codex model catalog (12 h), with a configurable 15-minute default tick, a 5–1440 minute interval, per-task last result, and a manual **Run all now** that works while the scheduler is off. State persists in `meta`; task throws surface as `error` webhook events with `scope: "maintenance"`.
+- Optional data-plane proxy egress: a persisted proxy pool with masked URLs, manual add/import, opt-in validated free-proxy scraping, HTTP CONNECT and SOCKS4/4a/5/5h transport (including proxy authentication and target TLS), global/round-robin or random selection, per-provider `global`/`direct`/`pinned` routing, Strict or direct fallback, benching by failure count, and a `/proxy` dashboard page. OAuth refresh, quota, catalog, and dashboard traffic stay direct.
 - Native Windows/Linux autostart settings and confirmation-gated uninstall CLI.
 - Local upstream stub and smoke suite at last verification.
 
@@ -65,6 +66,7 @@
 - Built-in model catalog is a repository snapshot.
 - CodeBuddy quota body/host/fields are upstream-dependent.
 - Dashboard visual/accessibility behavior is not fully automated.
+- Free proxy sources are public and unreliable; validation drops most candidates, and a proxy can still block, delay, or inspect data-plane traffic. Treat the pool as untrusted.
 - Failed streams end with one error frame (`code: "stream_truncated"` / `"stream_error"`) and no `[DONE]`; the message text still comes from the upstream and differs per provider.
 - Daily budget cost is a local estimate from list prices, not provider billing. Unpriced models add tokens but zero cost, counters exist only for traffic routed through norouter, and they start when a limit is first configured.
 

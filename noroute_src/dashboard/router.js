@@ -169,6 +169,7 @@ function navigate(path, { push = true, initial = false } = {}) {
     loadMaintenance();
   }
   if (target === '/usage') loadUsage();
+  if (target === '/proxy') loadProxy();
   if (target === '/chat') loadChat();
   if (target === '/combos') {
     loadCombos();

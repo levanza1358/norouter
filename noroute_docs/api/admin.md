@@ -120,6 +120,23 @@ Enforcement: a managed API key that has reached its limit is refused at `POST /v
 
 The snapshot is `{ settings: { enabled, intervalMinutes }, running, lastTickAt, tasks }`. Each task carries `id`, `label`, `everyMinutes`, `lastRunAt`, `lastResult` (`{ ok, summary, ms }` or `null`), `nextDueAt`, and `due`. Tasks are token refresh (10 minutes), quota refresh (6 hours), and model catalog (12 hours). `POST /api/maintenance/run` works even while the scheduler is disabled and returns `{ results, snapshot }`; an unknown task ID returns 400. The timer only runs while the server process is up, and the first automatic tick happens after one full interval, so a restart never triggers upstream traffic immediately.
 
+## Proxy egress
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/proxy` | Settings, masked pool, assignments, counters, job snapshots |
+| PATCH | `/api/proxy` | Master switch, strategy, strict, auto-bench, scrape schedule |
+| POST | `/api/proxies` | Add one proxy; tests by default but stores even when the test fails |
+| PATCH | `/api/proxies/:id` | Update `enabled` or `label` only; the URL is immutable |
+| DELETE | `/api/proxies/:id` | Delete; pinned assignments fall back to `global` |
+| POST | `/api/proxies/:id/test` | Synchronous tunnel test, 8 second budget |
+| POST | `/api/proxies/import` | Parse up to 1000 pasted lines or a JSON array; no testing |
+| POST | `/api/proxies/test` | Background test of all or selected proxies; 409 when a job is running |
+| PUT | `/api/proxy/providers/:id` | Set one provider to `global`, `direct`, or `pinned` |
+| POST | `/api/proxy/scrape` | Opt-in scrape and validate; 202, or 409 when already running |
+
+Proxy URLs may carry `user:pass`, are stored plaintext in SQLite, and are never returned: responses only expose a masked URL plus `hasAuth`. Full request/response fields, selection rules, failure codes, and scraping behavior are in [`proxy.md`](proxy.md). These endpoints are unauthenticated like the rest of `/api`.
+
 ## Status/provider
 
 | Method | Path | Notes |
@@ -270,6 +287,7 @@ Success result includes a bounded `answer`, `latencyMs`, and public masked accou
 | POST | `/api/providers/:id/accounts/:accountId/checkin` | Claim CodeBuddy daily check-in with an OAuth access/refresh-token account |
 | POST | `/api/providers/:id/accounts/:accountId/ping` | one real chat turn; returns the upstream answer |
 | POST | `/api/providers/:id/accounts/:accountId/warmup` | probe one parked account whose cooldown expired |
+| POST | `/api/providers/:id/accounts/:accountId/restart` | pause then resume one account; clears cooldown and last error without an upstream probe |
 | POST | `/api/providers/:id/accounts/test` | provider-native probe across every enabled account, sequentially |
 | POST | `/api/providers/:id/accounts/warmup` | probe parked accounts with expired cooldowns; healthy accounts are untouched |
 | POST | `/api/providers/:id/accounts/checkin` | daily check-in for every enabled OAuth account; API keys and paused rows are skipped |

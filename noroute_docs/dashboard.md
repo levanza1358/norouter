@@ -10,6 +10,7 @@ Dashboard shell is served by the same HTTP process. It uses HTML, CSS, and vanil
 - `/providers/:id`: provider detail.
 - `/usage`: persistent usage with Daily, Weekly, Monthly, and All time ranges, each showing totals, a bucket chart, and a model breakdown.
 - `/combos`: combo list, the global vision routing rule, and an Aliases and rules card — model aliases plus conditional routing rules evaluated top to bottom with the first match winning. A rule can match a request header, an API key, a minimum context size, or tool presence (conditions are ANDed), and it carries an ordered fallback chain; a target that no longer resolves is marked `Unavailable`.
+- `/proxy`: optional upstream proxy pool — master switch, strategy, Strict, auto-bench threshold, manual add, import, scrape, pool table with test/enable/delete, live counters, and per-provider Global/Direct/Pinned assignment.
 - `/settings`: theme, accent, connection details, reply style, request log, reset.
 - `/api-keys`: multiple managed proxy keys, auto/custom token creation, persistent Show/Hide/Copy, edit/rotate, `/v1` protection toggle, expiry/request/token limits, an optional default model (used when a request omits `model`; clear it by emptying the field), and daily usage history.
 
@@ -17,7 +18,7 @@ Dashboard shell is served by the same HTTP process. It uses HTML, CSS, and vanil
 
 ### Accounts
 
-Server-paginated account table with search by label/UID and filters: all, active, cooling, error, paused. Actions include check, pause/resume, delete, select/bulk update. Each account name carries its subscription tier badge — Free, Plus, Pro, Ultra, Team, Business, or Enterprise. The tier comes from the account's stored `plan`; an account whose tier has not been read yet shows no badge rather than a guess.
+Server-paginated account table with search by label/UID and filters: all, active, cooling, error, paused. Actions include check, pause/resume, delete, select/bulk update. The **More** menu runs pool-wide jobs — Warm up all, Test accounts all, Check in All, and Restart all accounts — and each one reports its progress as `N / M` with a bar above the table. Restart pauses and resumes every account, including paused ones, which clears its cooldown and last error without probing the upstream; the client walks all pages one account at a time, so the pool never goes empty. Each account name carries its subscription tier badge — Free, Plus, Pro, Ultra, Team, Business, or Enterprise. The tier comes from the account's stored `plan`; an account whose tier has not been read yet shows no badge rather than a guess.
 
 Clicking an account name opens a summary popup: Today, Last 7 days, Last 30 days, and Lifetime request/token counts, a 30-day token bar chart, and lifetime errors. The popup header repeats the account kind, tier, and masked credential. Windows come from `account_usage`, which is keyed by **UTC** day and counts successful requests only; lifetime totals come from the account row and include failures. The endpoint is `GET /api/providers/:id/accounts/:accountId/summary` and never returns a raw token.
 
@@ -161,8 +162,22 @@ Ranges are Daily (24 hourly buckets), Weekly (Monday-first, 7 daily buckets), Mo
 
 The page polls `/api/usage` every two seconds while the document is visible, so new traffic appears without a manual reload. A `live · <age>` chip reports the last successful poll and switches to `offline — retrying` when the request fails. Unchanged reports skip re-rendering so the chart does not flicker.
 
+## Proxy page
+
+`/proxy` is the control surface for the data-plane proxy pool. The page reads `GET /api/proxy` on navigation and on the normal visible-tab refresh; job progress (test all, scrape) comes from the same snapshot while either job is running.
+
+- **Egress card** — master switch (off by default), strategy (`round-robin` or `random`), Strict, and the auto-bench threshold. Turning the master switch on with an empty pool is allowed; without Strict those requests fall back to direct.
+- **Add proxy card** — Fields mode (protocol, host, port, username, password) or Paste URL mode. The form percent-encodes credentials and never sends a SOCKS4 password. An optional test runs on add; a failed test still stores the row.
+- **Import card** — text area and a `.txt`/`.json` file picker, up to 1000 candidates, with added/duplicate/invalid counts. Invalid input is never echoed.
+- **Scrape card** — source checkboxes, candidate limit, free-proxy warning, a Run scrape button, progress while running, and the last summary. One scrape at a time.
+- **Pool table** — masked URL, label, source, health, latency, fail count, last check, and last error code. Actions: Test, Enable/Disable, Delete. Full URLs and credentials are never rendered.
+- **Provider routing** — one row per provider from the status snapshot: Global, Direct, or Pinned plus a proxy picker. The choice is saved with `PUT /api/proxy/providers/:id`; a deleted pinned proxy falls back to Global.
+- **Counters** — proxied, direct fallbacks, transport failures, and the last short error code. These are in memory and reset on restart.
+
+All server-provided strings are escaped. Destructive actions (delete proxy) use the shared confirmation modal. The page uses the theme tokens, never a separate accent.
+
 ## UI security
 
-Provider account tokens are never returned to the dashboard. Managed proxy API keys are returned by the local API-key API for persistent Show/Hide/Copy; the browser is part of the local operator trust boundary.
+Provider account tokens are never returned to the dashboard. Managed proxy API keys are returned by the local API-key API for persistent Show/Hide/Copy; the browser is part of the local operator trust boundary. Upstream proxy URLs are returned masked only; the operator supplies new credentials through the add form.
 
 All destructive dashboard actions use a custom confirmation modal with Cancel/Confirm, keyboard Escape, backdrop close, and focus restoration. Browser `confirm`, `alert`, and `prompt` are not used. Native file picker remains for account `.json`/text import; semantic controls, native date/time inputs, and OS scrollbars remain native unless a concrete UI requirement needs replacement.

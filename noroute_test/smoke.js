@@ -23,6 +23,8 @@ process.env.CODEBUDDY_CN_BASE_URL = `${stubBase}/v2`;
 process.env.CODEBUDDY_CN_REFRESH_URL = `${stubBase}/v2/plugin/auth/token/refresh`;
 process.env.CODEBUDDY_CN_QUOTA_URL = `${stubBase}/v2/billing/meter/get-user-resource`;
 process.env.CODEBUDDY_CN_CHECKIN_URL = `${stubBase}/v2/billing/meter/daily-checkin`;
+// Proxy probes must stay hermetic too; the stub's 404 still proves the tunnel.
+process.env.PROXY_TEST_URL = `${stubBase}/generate_204`;
 // The Antigravity envelope is translated locally; the base URL only has to
 // reach the stub. OAuth credentials stay unset on purpose: the start route must
 // fail closed instead of opening a browser flow in CI.
@@ -260,7 +262,7 @@ await test('in-stream error frame is captured, not swallowed', async () => {
 const { server } = createServer({ port: 0, host: '127.0.0.1', logRequests: false });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
-const DASHBOARD_SCRIPTS = ['core.js','utils.js','custom-select.js','appearance.js','router.js','dashboard.js','providers.js','chat.js','usage.js','combos.js','settings.js','provider-add.js','account-detail.js','account-events.js','service-map.js','glue.js','actions.js','boot.js'];
+const DASHBOARD_SCRIPTS = ['core.js','utils.js','custom-select.js','appearance.js','router.js','dashboard.js','providers.js','chat.js','usage.js','combos.js','settings.js','provider-add.js','account-detail.js','account-events.js','service-map.js','proxy.js','glue.js','actions.js','boot.js'];
 const fetchDashboardSources = async () => {
   const texts = await Promise.all(DASHBOARD_SCRIPTS.map(async (file) => {
     const response = await fetch(`${base}/assets/${file}`);
@@ -960,7 +962,7 @@ await test('settings exposes accessible tabs and Token Saver controls', async ()
 await test('dashboard shell keeps navigation and control ownership consistent', async () => {
   const html = await (await fetch(`${base}/`)).text();
   const rail = [...html.matchAll(/<a class="rail-btn" href="([^"]+)"/g)].map((match) => match[1]);
-  assert.deepEqual(rail, ['/', '/map', '/chat', '/providers', '/usage', '/api-keys', '/combos', '/settings']);
+  assert.deepEqual(rail, ['/', '/map', '/chat', '/providers', '/proxy', '/usage', '/api-keys', '/combos', '/settings']);
   assert.equal((html.match(/id="requireKeyToggle"/g) || []).length, 1);
   assert.match(html, /id="pageTitle">Dashboard<\/h1>/);
 
@@ -972,6 +974,7 @@ await test('dashboard shell keeps navigation and control ownership consistent', 
   assert.match(js, /escapeHtml\(value\)/);
   assert.match(html, /id="apoolMore"/);
   assert.match(html, /id="poolItemCheckin"/);
+  assert.match(html, /id="poolItemRestart"/);
   assert.match(html, /id="poolHead"/);
   assert.match(html, /id="poolCount"/);
   assert.match(html, /id="poolFill"/);
@@ -1119,8 +1122,8 @@ await test('API Keys page has clear control and action hierarchy', async () => {
 await test('dashboard cards use persisted SQLite usage data', async () => {
   const html = await (await fetch(`${base}/`)).text();
   // The chart card is the range tabpanel; its heading names the data it plots.
-  assert.match(html, /id="dashboardHistoryPanel"[^>]*>[\s\S]{0,160}<h2 class="card-title">Request volume<\/h2>/);
-  assert.match(html, /Persisted usage for the selected range/);
+  assert.match(html, /id="dashboardHistoryPanel"[^>]*>[\s\S]{0,300}<h2 class="card-title">Traffic<\/h2>/);
+  assert.match(html, /class="dash-chart-label">Request volume<\/span>/);
   assert.doesNotMatch(html, /Persisted usage from SQLite|Persisted requests from SQLite/);
   const js = await fetchDashboardSources();
   assert.match(js, /renderStatistics\(latest \|\| \{\}, report\)/);
@@ -1146,16 +1149,17 @@ await test('dashboard has branded logo and motion polish', async () => {
 
 await test('dashboard keeps connection actions compact and useful', async () => {
   const html = await (await fetch(`${base}/`)).text();
-  assert.match(html, /class="topbar-connect"[^>]*id="topbarConnect"/);
+  assert.match(html, /class="card dash-connect" id="topbarConnect"/);
   assert.match(html, /id="copyBase"[^>]*>Copy</);
   assert.match(html, /id="copyApiKey"/);
   assert.match(html, /id="dashboardApiKey"/);
   assert.doesNotMatch(html, /<h2 class="card-title">Connect<\/h2>/);
   assert.doesNotMatch(html, /copyBase3/);
   // Storage branding stays out of the connect actions; the rail foot names the
-  // store once, so scope the check to the header block.
-  const connectBlock = html.slice(html.indexOf('id="topbarConnect"'), html.indexOf('</header>'));
-  assert.ok(connectBlock.length > 0, 'connect block must stay inside the header');
+  // store once, so scope the check to the connection card.
+  const connectStart = html.indexOf('id="topbarConnect"');
+  const connectBlock = html.slice(connectStart, html.indexOf('</article>', connectStart));
+  assert.ok(connectBlock.length > 0, 'connect card must close');
   assert.doesNotMatch(connectBlock, /SQLite/);
   const js = await fetchDashboardSources();
   assert.match(js, /function renderDashboardConnect/);
@@ -1176,11 +1180,11 @@ await test('dashboard declares its data ranges and chart summary', async () => {
   for (const id of ['statRequests', 'statIn', 'statOut', 'statLatency', 'statErrors']) {
     assert.match(html, new RegExp(`id="${id}"`), `${id} must render`);
   }
-  assert.match(html, /class="dash-note">Persisted usage for the selected range, plus live uptime\./);
+  assert.match(html, /class="dash-chart-label">Request volume<\/span>/);
   // The chart needs a text equivalent that does not depend on hovering a bar.
   assert.match(html, /id="sparkSummary"/);
   assert.match(html, /id="sparkWindow"/);
-  // The base URL stays visible in the header instead of being buried below the fold.
+  // The base URL stays visible in the connection card beside the request table.
   assert.match(html, /id="topbarConnect"/);
   // Usage breakdown and activity paginate client-side at ten rows.
   assert.match(html, /id="uModelPager"[^>]*aria-label="Breakdown by model pages"/);
@@ -3911,6 +3915,57 @@ await test('per-account warmup probes one parked account and skips healthy ones'
   assert.equal(pool.items.find((row) => row.id === parked.id).status, 'active');
 
   for (const account of [parked, healthy]) {
+    await fetch(`${base}/api/providers/codebuddy-cn/accounts/${account.id}`, { method: 'DELETE' });
+  }
+});
+
+await test('account restart pauses then resumes a row without probing upstream', async () => {
+  for (;;) {
+    const page = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+    if (!page.items.length) break;
+    for (const row of page.items) await fetch(`${base}/api/providers/codebuddy-cn/accounts/${row.id}`, { method: 'DELETE' });
+  }
+  const create = async (label, token) => {
+    const res = await fetch(`${base}/api/providers/codebuddy-cn/accounts`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label, access_token: token }),
+    });
+    assert.equal(res.status, 201);
+    return (await res.json()).items.find((row) => row.label === label);
+  };
+  const parked = await create('Restart parked', 'good-token');
+  const paused = await create('Restart paused', 'high-quota-token');
+
+  markFailure(parked.id, { message: 'temporary error', cooldownMs: 60_000 });
+  await fetch(`${base}/api/providers/codebuddy-cn/accounts/${paused.id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ enabled: false }),
+  });
+  let pool = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+  assert.equal(pool.items.find((row) => row.id === parked.id).status, 'cooldown');
+  assert.equal(pool.items.find((row) => row.id === paused.id).status, 'disabled');
+
+  const before = quotaCalls.length;
+  for (const account of [parked, paused]) {
+    const response = await fetch(`${base}/api/providers/codebuddy-cn/accounts/${account.id}/restart`, { method: 'POST' });
+    const body = await response.json();
+    assert.equal(response.status, 200, JSON.stringify(body));
+    assert.equal(body.account.status, 'active');
+    assert.equal(body.account.enabled, true);
+    assert.equal(body.account.lastError, '');
+    assert.ok(!JSON.stringify(body).includes(account === parked ? 'good-token' : 'high-quota-token'));
+  }
+  assert.equal(quotaCalls.length, before, 'restart must not probe the upstream');
+
+  pool = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+  assert.equal(pool.items.find((row) => row.id === parked.id).status, 'active');
+  assert.equal(pool.items.find((row) => row.id === paused.id).status, 'active');
+
+  const missing = await fetch(`${base}/api/providers/codebuddy-cn/accounts/missing-account/restart`, { method: 'POST' });
+  assert.equal(missing.status, 404);
+
+  for (const account of [parked, paused]) {
     await fetch(`${base}/api/providers/codebuddy-cn/accounts/${account.id}`, { method: 'DELETE' });
   }
 });
@@ -7002,7 +7057,7 @@ await test('maintenance settings validate and a manual run records its result', 
   assert.equal(initial.settings.enabled, true);
   assert.equal(initial.settings.intervalMinutes, 15);
   assert.equal(initial.running, false, 'the scheduler starts only from the server entry point');
-  assert.deepEqual(initial.tasks.map((task) => task.id), ['tokens', 'quota', 'catalog']);
+  assert.deepEqual(initial.tasks.map((task) => task.id), ['tokens', 'quota', 'catalog', 'proxy']);
   assert.ok(initial.tasks.every((task) => task.due === true && task.lastRunAt === null));
 
   const bad = [
@@ -7077,6 +7132,756 @@ await test('maintenance settings validate and a manual run records its result', 
   });
   assert.equal(reset.status, 200);
 });
+
+// ---------------------------------------------------------------- proxy ----
+// Local target and tunnel fixtures keep every proxy assertion hermetic: no
+// public proxy, no gstatic probe, and no credential leaves the process.
+const pxNet = await import('node:net');
+const pxHttp = await import('node:http');
+const pxZlib = await import('node:zlib');
+
+function pxListen(server) {
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+}
+
+async function pxUnusedPort() {
+  const server = pxNet.createServer();
+  await pxListen(server);
+  const port = server.address().port;
+  await new Promise((resolve) => server.close(resolve));
+  return port;
+}
+
+async function pxCall(path, { method = 'GET', body } = {}) {
+  const init = { method, headers: {} };
+  if (body !== undefined) {
+    init.headers['content-type'] = 'application/json';
+    init.body = JSON.stringify(body);
+  }
+  const response = await fetch(`${base}${path}`, init);
+  const text = await response.text();
+  let parsed = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    // An empty or non-JSON response keeps parsed null; callers assert status.
+  }
+  return { status: response.status, body: parsed, text };
+}
+
+const pxSeen = [];
+const pxTargetSockets = new Set();
+const pxTarget = pxHttp.createServer((req, res) => {
+  const chunks = [];
+  req.on('data', (chunk) => chunks.push(chunk));
+  req.on('end', () => {
+    const body = Buffer.concat(chunks).toString('utf8');
+    const path = req.url.split('?')[0];
+    pxSeen.push({ method: req.method, path, headers: req.headers, body });
+    if (path === '/slow') return;
+    if (path === '/redir') {
+      res.writeHead(302, { location: '/final' });
+      return res.end();
+    }
+    if (path === '/gzip') {
+      const gz = pxZlib.gzipSync('compressed-body');
+      res.writeHead(200, { 'content-type': 'text/plain', 'content-encoding': 'gzip', 'content-length': gz.length });
+      return res.end(gz);
+    }
+    if (path === '/stream') {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('data: {"choices":[{"index":0,"delta":{"content":"one"}}]}\n\n');
+      setTimeout(() => {
+        res.write('data: {"choices":[{"index":0,"delta":{"content":"two"},"finish_reason":"stop"}]}\n\n');
+        res.end('data: [DONE]\n\n');
+      }, 5);
+      return;
+    }
+    let model = '';
+    try {
+      model = JSON.parse(body).model || '';
+    } catch {
+      // Echo routes carry non-JSON bodies; only chat needs the model name.
+    }
+    if (path === '/chat/completions' && model === 'stream-model') {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write(`data: ${JSON.stringify({ id: 'pxs', object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: { role: 'assistant', content: 'streamed' } }] })}\n\n`);
+      res.write(`data: ${JSON.stringify({ id: 'pxs', object: 'chat.completion.chunk', model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1 } })}\n\n`);
+      return res.end('data: [DONE]\n\n');
+    }
+    if (path === '/chat/completions') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({
+        id: 'px',
+        object: 'chat.completion',
+        created: 1,
+        model,
+        choices: [{ index: 0, message: { role: 'assistant', content: `through:${model}` }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }));
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true, path, method: req.method, body }));
+  });
+});
+pxTarget.on('connection', (socket) => {
+  pxTargetSockets.add(socket);
+  socket.on('close', () => pxTargetSockets.delete(socket));
+});
+await pxListen(pxTarget);
+const pxTargetPort = pxTarget.address().port;
+const pxTargetBase = `http://127.0.0.1:${pxTargetPort}`;
+
+async function pxConnectFixture({ username = '', password = '' } = {}) {
+  const tunnels = [];
+  const sockets = new Set();
+  const server = pxHttp.createServer((req, res) => {
+    res.writeHead(405);
+    res.end();
+  });
+  server.on('connect', (req, clientSocket, head) => {
+    const target = String(req.url || '');
+    tunnels.push({ method: 'CONNECT', target, headers: req.headers });
+    sockets.add(clientSocket);
+    clientSocket.on('close', () => sockets.delete(clientSocket));
+    clientSocket.on('error', () => {});
+    const expected = username || password
+      ? `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`
+      : '';
+    if (expected && req.headers['proxy-authorization'] !== expected) {
+      clientSocket.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="test"\r\nContent-Length: 0\r\n\r\n');
+      return;
+    }
+    const [host, rawPort] = target.split(':');
+    const upstream = pxNet.connect(Number(rawPort), host === 'localhost' ? '127.0.0.1' : host, () => {
+      clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+      if (head?.length) upstream.write(head);
+      clientSocket.pipe(upstream);
+      upstream.pipe(clientSocket);
+    });
+    sockets.add(upstream);
+    upstream.on('close', () => sockets.delete(upstream));
+    upstream.on('error', () => clientSocket.destroy());
+    clientSocket.on('close', () => upstream.destroy());
+  });
+  await pxListen(server);
+  return {
+    tunnels,
+    port: server.address().port,
+    close() {
+      for (const socket of sockets) socket.destroy();
+      server.close();
+    },
+  };
+}
+
+async function pxSocks5Fixture({ username = '', password = '' } = {}) {
+  const tunnels = [];
+  const sockets = new Set();
+  const server = pxNet.createServer((client) => {
+    sockets.add(client);
+    client.on('close', () => sockets.delete(client));
+    client.on('error', () => {});
+    let buffer = Buffer.alloc(0);
+    let stage = 'greeting';
+
+    const pump = () => {
+      if (stage === 'greeting') {
+        if (buffer.length < 2) return;
+        const count = buffer[1];
+        if (buffer.length < 2 + count) return;
+        const methods = [...buffer.subarray(2, 2 + count)];
+        buffer = buffer.subarray(2 + count);
+        const needAuth = Boolean(username || password);
+        if (needAuth) {
+          if (!methods.includes(2)) {
+            client.end(Buffer.from([5, 0xff]));
+            return;
+          }
+          stage = 'auth';
+          client.write(Buffer.from([5, 2]));
+        } else {
+          if (!methods.includes(0)) {
+            client.end(Buffer.from([5, 0xff]));
+            return;
+          }
+          stage = 'request';
+          client.write(Buffer.from([5, 0]));
+        }
+        pump();
+        return;
+      }
+      if (stage === 'auth') {
+        if (buffer.length < 2) return;
+        const userLength = buffer[1];
+        if (buffer.length < 3 + userLength) return;
+        const passLength = buffer[2 + userLength];
+        if (buffer.length < 3 + userLength + passLength) return;
+        const user = buffer.subarray(2, 2 + userLength).toString('utf8');
+        const pass = buffer.subarray(3 + userLength, 3 + userLength + passLength).toString('utf8');
+        buffer = buffer.subarray(3 + userLength + passLength);
+        if (user !== username || pass !== password) {
+          client.end(Buffer.from([1, 1]));
+          return;
+        }
+        stage = 'request';
+        client.write(Buffer.from([1, 0]));
+        pump();
+        return;
+      }
+      if (stage !== 'request') return;
+      if (buffer.length < 4) return;
+      const atyp = buffer[3];
+      let host;
+      let offset;
+      if (atyp === 1) {
+        if (buffer.length < 10) return;
+        host = [...buffer.subarray(4, 8)].join('.');
+        offset = 8;
+      } else if (atyp === 3) {
+        if (buffer.length < 5) return;
+        const length = buffer[4];
+        if (buffer.length < 7 + length) return;
+        host = buffer.subarray(5, 5 + length).toString('utf8');
+        offset = 5 + length;
+      } else if (atyp === 4) {
+        if (buffer.length < 22) return;
+        host = '::1';
+        offset = 20;
+      } else {
+        client.end(Buffer.from([5, 8, 0, 1, 0, 0, 0, 0, 0, 0]));
+        return;
+      }
+      const port = buffer.readUInt16BE(offset);
+      buffer = buffer.subarray(offset + 2);
+      tunnels.push({ atyp, host, port, auth: Boolean(username || password) });
+      stage = 'tunnel';
+      client.off('data', onData);
+      client.pause();
+      const upstream = pxNet.connect(port, host === 'localhost' ? '127.0.0.1' : host, () => {
+        client.write(Buffer.from([5, 0, 0, 1, 127, 0, 0, 1, (port >> 8) & 0xff, port & 0xff]));
+        if (buffer.length) upstream.write(buffer);
+        client.pipe(upstream);
+        upstream.pipe(client);
+      });
+      sockets.add(upstream);
+      upstream.on('close', () => sockets.delete(upstream));
+      upstream.on('error', () => client.destroy());
+      client.on('close', () => upstream.destroy());
+    };
+    const onData = (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      pump();
+    };
+    client.on('data', onData);
+  });
+  await pxListen(server);
+  return {
+    tunnels,
+    port: server.address().port,
+    close() {
+      for (const socket of sockets) socket.destroy();
+      server.close();
+    },
+  };
+}
+
+async function pxSocks4Fixture() {
+  const tunnels = [];
+  const sockets = new Set();
+  const server = pxNet.createServer((client) => {
+    sockets.add(client);
+    client.on('close', () => sockets.delete(client));
+    client.on('error', () => {});
+    let buffer = Buffer.alloc(0);
+    const pump = () => {
+      if (buffer.length < 9) return;
+      if (buffer[0] !== 4 || buffer[1] !== 1) {
+        client.end(Buffer.from([0, 0x5b, 0, 0, 0, 0, 0, 0]));
+        return;
+      }
+      const port = buffer.readUInt16BE(2);
+      const ip = [...buffer.subarray(4, 8)].join('.');
+      const userEnd = buffer.indexOf(0, 8);
+      if (userEnd < 0) return;
+      const user = buffer.subarray(8, userEnd).toString('utf8');
+      // Both forms end with a NUL-terminated host field; 4a fills it with the
+      // name and plain 4 leaves it empty, so always consume the second NUL.
+      const hostEnd = buffer.indexOf(0, userEnd + 1);
+      if (hostEnd < 0) return;
+      const host = ip === '0.0.0.1' ? buffer.subarray(userEnd + 1, hostEnd).toString('utf8') : ip;
+      const early = buffer.subarray(hostEnd + 1);
+      tunnels.push({ version: ip === '0.0.0.1' ? '4a' : '4', host, port, user });
+      client.off('data', onData);
+      client.pause();
+      const upstream = pxNet.connect(port, host === 'localhost' ? '127.0.0.1' : host, () => {
+        client.write(Buffer.from([0, 0x5a, 0, 0, 0, 0, 0, 0]));
+        if (early.length) upstream.write(early);
+        client.pipe(upstream);
+        upstream.pipe(client);
+      });
+      sockets.add(upstream);
+      upstream.on('close', () => sockets.delete(upstream));
+      upstream.on('error', () => client.destroy());
+      client.on('close', () => upstream.destroy());
+    };
+    const onData = (chunk) => {
+      buffer = Buffer.concat([buffer, chunk]);
+      pump();
+    };
+    client.on('data', onData);
+  });
+  await pxListen(server);
+  return {
+    tunnels,
+    port: server.address().port,
+    close() {
+      for (const socket of sockets) socket.destroy();
+      server.close();
+    },
+  };
+}
+
+const pxAuth = await pxConnectFixture({ username: 'alpha', password: 's3cret' });
+const pxOpen = await pxConnectFixture();
+const pxSocks5 = await pxSocks5Fixture({ username: 'alpha', password: 's3cret' });
+const pxSocks4 = await pxSocks4Fixture();
+const pxAuthUrl = `http://alpha:s3cret@127.0.0.1:${pxAuth.port}`;
+const pxAuthMasked = `http://•••@127.0.0.1:${pxAuth.port}`;
+const pxOpenUrl = `http://127.0.0.1:${pxOpen.port}`;
+
+async function pxFind(maskedUrl) {
+  const snapshot = await pxCall('/api/proxy');
+  return snapshot.body.proxies.find((row) => row.maskedUrl === maskedUrl) || null;
+}
+
+await test('proxy URL parsing, masking and import counts are strict', async () => {
+  const { parseProxyImport, parseProxyUrl, maskProxyUrl, proxyLabel } = await import('../noroute_src/lib/proxy-url.js');
+  const plain = parseProxyUrl('HTTPS://proxy.example:3128');
+  assert.equal(plain.url, 'https://proxy.example:3128');
+  assert.equal(maskProxyUrl(plain), 'https://proxy.example:3128');
+  const auth = parseProxyUrl(pxAuthUrl);
+  assert.equal(auth.url, pxAuthUrl);
+  assert.equal(auth.username, 'alpha');
+  assert.equal(maskProxyUrl(auth), pxAuthMasked);
+  assert.equal(proxyLabel('', auth), '127.0.0.1:' + pxAuth.port);
+  assert.throws(() => parseProxyUrl('socks4://user:pass@127.0.0.1:1080'), /SOCKS4/);
+  assert.throws(() => parseProxyUrl('http://127.0.0.1'), /port/);
+  assert.throws(() => parseProxyUrl('ftp://127.0.0.1:21'), /Unsupported/);
+  assert.throws(() => parseProxyUrl('http://127.0.0.1:8080/path'), /path/);
+  const parsed = parseProxyImport([
+    '127.0.0.1:8080',
+    'http://127.0.0.1:8080',
+    '# comment',
+    'socks5://127.0.0.1:1080',
+    'not a proxy',
+  ].join('\n'));
+  assert.equal(parsed.total, 4);
+  assert.equal(parsed.entries.length, 2);
+  assert.equal(parsed.invalid, 1);
+  assert.equal(parsed.duplicates, 1);
+});
+
+await test('proxy API creates, masks, updates and deletes rows', async () => {
+  const initial = await pxCall('/api/proxy');
+  assert.equal(initial.status, 200);
+  assert.ok(Array.isArray(initial.body.proxies));
+  assert.ok(Array.isArray(initial.body.providers) && initial.body.providers.length > 0);
+  assert.equal(initial.body.testing.running, false);
+  assert.equal(initial.body.scrape.running, false);
+
+  const created = await pxCall('/api/proxies', { method: 'POST', body: { url: pxAuthUrl, label: 'Auth tunnel', test: false } });
+  assert.equal(created.status, 201, created.text);
+  const authId = created.body.proxy.id;
+  assert.equal(created.body.test, null, 'test:false skips the probe');
+  assert.equal(created.body.proxy.maskedUrl, pxAuthMasked);
+  assert.equal(created.body.proxy.hasAuth, true);
+  assert.equal(created.body.proxy.label, 'Auth tunnel');
+  assert.equal(created.body.proxy.status, 'unchecked');
+  assert.ok(!created.text.includes('s3cret'), 'credentials never leave the API');
+
+  const duplicate = await pxCall('/api/proxies', { method: 'POST', body: { url: pxAuthUrl, test: false } });
+  assert.equal(duplicate.status, 409);
+  assert.match(duplicate.body.error.message, /already exists/);
+  assert.ok(!duplicate.text.includes('s3cret'));
+
+  const fields = await pxCall('/api/proxies', {
+    method: 'POST',
+    body: { protocol: 'socks5', host: '127.0.0.1', port: pxSocks5.port, test: false },
+  });
+  assert.equal(fields.status, 201);
+  assert.equal(fields.body.proxy.protocol, 'socks5');
+  assert.equal(fields.body.proxy.maskedUrl, `socks5://127.0.0.1:${pxSocks5.port}`);
+
+  const patched = await pxCall(`/api/proxies/${authId}`, { method: 'PATCH', body: { label: 'Auth tunnel 2', enabled: false } });
+  assert.equal(patched.status, 200);
+  assert.equal(patched.body.proxy.label, 'Auth tunnel 2');
+  assert.equal(patched.body.proxy.enabled, false);
+  const badPatch = await pxCall(`/api/proxies/${authId}`, { method: 'PATCH', body: { url: pxOpenUrl } });
+  assert.equal(badPatch.status, 400);
+  const reenabled = await pxCall(`/api/proxies/${authId}`, { method: 'PATCH', body: { enabled: true } });
+  assert.equal(reenabled.status, 200);
+
+  const deleted = await pxCall(`/api/proxies/${fields.body.proxy.id}`, { method: 'DELETE' });
+  assert.equal(deleted.status, 200);
+  assert.equal(deleted.body.deleted, true);
+  assert.equal((await pxCall(`/api/proxies/${fields.body.proxy.id}`, { method: 'DELETE' })).status, 404);
+});
+
+await test('proxy settings and assignments validate their inputs', async () => {
+  assert.equal((await pxCall('/api/proxy', { method: 'PATCH', body: { enabled: 'yes' } })).status, 400);
+  assert.equal((await pxCall('/api/proxy', { method: 'PATCH', body: { strategy: 'fastest' } })).status, 400);
+  assert.equal((await pxCall('/api/proxy', { method: 'PATCH', body: { autoDisableAfter: 101 } })).status, 400);
+  assert.equal((await pxCall('/api/proxy', { method: 'PATCH', body: { scrape: { limit: 2 } } })).status, 400);
+  const enabled = await pxCall('/api/proxy', {
+    method: 'PATCH',
+    body: { enabled: true, strategy: 'random', autoDisableAfter: 0, scrape: { auto: false, limit: 50 } },
+  });
+  assert.equal(enabled.status, 200);
+  assert.equal(enabled.body.settings.enabled, true);
+  assert.equal(enabled.body.settings.strategy, 'random');
+  assert.equal(enabled.body.settings.autoDisableAfter, 0);
+  assert.equal(enabled.body.settings.scrape.limit, 50);
+  assert.equal(enabled.body.settings.scrape.intervalMinutes, 360);
+
+  const snapshot = await pxCall('/api/proxy');
+  const providerId = snapshot.body.providers[0].id;
+  assert.equal((await pxCall('/api/proxy/providers/nope', { method: 'PUT', body: { mode: 'global' } })).status, 404);
+  assert.equal((await pxCall(`/api/proxy/providers/${providerId}`, { method: 'PUT', body: { mode: 'nope' } })).status, 400);
+  assert.equal((await pxCall(`/api/proxy/providers/${providerId}`, { method: 'PUT', body: { mode: 'pinned' } })).status, 400);
+
+  const authRow = await pxFind(pxAuthMasked);
+  assert.ok(authRow);
+  const pinned = await pxCall(`/api/proxy/providers/${providerId}`, { method: 'PUT', body: { mode: 'pinned', proxyId: authRow.id } });
+  assert.equal(pinned.status, 200);
+  assert.equal(pinned.body.assignments[providerId].mode, 'pinned');
+
+  const direct = await pxCall(`/api/proxy/providers/${providerId}`, { method: 'PUT', body: { mode: 'direct' } });
+  assert.equal(direct.status, 200);
+  assert.equal(direct.body.assignments[providerId].mode, 'direct');
+  assert.equal((await pxCall(`/api/proxy/providers/${providerId}`, { method: 'PUT', body: { mode: 'global' } })).status, 200);
+
+  const disabled = await pxCall('/api/proxies', { method: 'POST', body: { url: 'http://127.0.0.1:9', test: false } });
+  assert.equal(disabled.status, 201);
+  await pxCall(`/api/proxies/${disabled.body.proxy.id}`, { method: 'PATCH', body: { enabled: false } });
+  const refused = await pxCall(`/api/proxy/providers/${providerId}`, {
+    method: 'PUT',
+    body: { mode: 'pinned', proxyId: disabled.body.proxy.id },
+  });
+  assert.equal(refused.status, 400);
+  await pxCall(`/api/proxies/${disabled.body.proxy.id}`, { method: 'DELETE' });
+});
+
+await test('proxy test endpoint records health and the job covers the pool', async () => {
+  const authRow = await pxFind(pxAuthMasked);
+  assert.ok(authRow);
+  const tested = await pxCall(`/api/proxies/${authRow.id}/test`, { method: 'POST' });
+  assert.equal(tested.status, 200);
+  assert.equal(tested.body.ok, true, JSON.stringify(tested.body));
+  assert.ok(Number.isInteger(tested.body.latencyMs));
+  assert.ok(tested.body.status >= 200);
+  const after = await pxFind(pxAuthMasked);
+  assert.equal(after.status, 'ok');
+  assert.ok(after.lastChecked);
+  assert.equal(after.failCount, 0);
+  assert.equal(after.lastError, null);
+
+  const deadPort = await pxUnusedPort();
+  const dead = await pxCall('/api/proxies', { method: 'POST', body: { url: `http://127.0.0.1:${deadPort}`, test: false } });
+  const failed = await pxCall(`/api/proxies/${dead.body.proxy.id}/test`, { method: 'POST' });
+  assert.equal(failed.body.ok, false);
+  assert.equal(failed.body.status, null);
+  assert.ok(['connect_failed', 'timeout'].includes(failed.body.error), failed.body.error);
+  const deadRow = await pxFind(`http://127.0.0.1:${deadPort}`);
+  assert.equal(deadRow.status, 'fail');
+  assert.equal(deadRow.failCount, 1);
+  assert.ok(deadRow.lastError);
+  await pxCall(`/api/proxies/${dead.body.proxy.id}`, { method: 'DELETE' });
+
+  const started = await pxCall('/api/proxies/test', { method: 'POST' });
+  assert.equal(started.status, 202);
+  assert.equal(started.body.testing.running, true);
+  let finished = null;
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const poll = await pxCall('/api/proxy');
+    if (!poll.body.testing.running) {
+      finished = poll.body.testing;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  assert.ok(finished, 'the test job must finish');
+  assert.ok(finished.tested >= 1);
+  assert.equal(finished.failed, 0);
+});
+
+await test('proxy import and scrape endpoints validate their inputs', async () => {
+  assert.equal((await pxCall('/api/proxies/import', { method: 'POST', body: {} })).status, 400);
+  const tooMany = Array.from({ length: 1001 }, (_, index) => `127.0.0.1:${10000 + index}`).join('\n');
+  assert.equal((await pxCall('/api/proxies/import', { method: 'POST', body: { text: tooMany } })).status, 400);
+
+  const before = new Set((await pxCall('/api/proxy')).body.proxies.map((row) => row.id));
+  const imported = await pxCall('/api/proxies/import', {
+    method: 'POST',
+    body: {
+      text: [
+        `127.0.0.1:${pxOpen.port}`,
+        `http://127.0.0.1:${pxOpen.port}`,
+        'http://203.0.113.5:3128',
+        'socks5://127.0.0.1:1080',
+        'this is not a proxy',
+      ].join('\n'),
+    },
+  });
+  assert.equal(imported.status, 201);
+  assert.equal(imported.body.added, 3);
+  assert.equal(imported.body.duplicates, 1);
+  assert.equal(imported.body.invalid, 1);
+  assert.equal(imported.body.total, 5);
+  const after = await pxCall('/api/proxy');
+  const added = after.body.proxies.filter((row) => !before.has(row.id));
+  assert.equal(added.length, 3);
+  assert.ok(added.every((row) => row.source === 'import'));
+  for (const row of added) await pxCall(`/api/proxies/${row.id}`, { method: 'DELETE' });
+
+  const arrayImport = await pxCall('/api/proxies/import', { method: 'POST', body: { urls: ['127.0.0.1:8081'] } });
+  assert.equal(arrayImport.status, 201);
+  assert.equal(arrayImport.body.added, 1);
+  const arrayRow = await pxFind('http://127.0.0.1:8081');
+  await pxCall(`/api/proxies/${arrayRow.id}`, { method: 'DELETE' });
+
+  assert.equal((await pxCall('/api/proxy/scrape', { method: 'POST', body: { sources: ['nope'] } })).status, 400);
+  assert.equal((await pxCall('/api/proxy/scrape', { method: 'POST', body: { limit: 5 } })).status, 400);
+  assert.equal((await pxCall('/api/proxy/scrape', { method: 'POST', body: { limit: '10' } })).status, 400);
+});
+
+await test('proxy transport handles auth, gzip, redirects, aborts and SSE', async () => {
+  const { proxyFetch } = await import('../noroute_src/lib/proxy-fetch.js');
+  const via = { protocol: 'http', host: '127.0.0.1', port: pxAuth.port, username: 'alpha', password: 's3cret' };
+
+  const gz = await proxyFetch(via, `${pxTargetBase}/gzip`);
+  assert.equal(gz.status, 200);
+  assert.equal(gz.headers.get('content-encoding'), null, 'the decoder strips the encoding header');
+  assert.equal(await gz.text(), 'compressed-body');
+
+  const redirect = await proxyFetch(via, `${pxTargetBase}/redir`);
+  assert.equal(redirect.status, 200);
+  assert.equal((await redirect.json()).path, '/final');
+
+  const posted = await proxyFetch(via, `${pxTargetBase}/echo`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{"hello":"tunnel"}',
+  });
+  assert.equal(posted.status, 200, 'POST bodies replay through the tunnel');
+  assert.equal((await posted.json()).body, '{"hello":"tunnel"}');
+
+  const sse = await proxyFetch(via, `${pxTargetBase}/stream`);
+  const sseText = await sse.text();
+  assert.match(sseText, /"one"/);
+  assert.match(sseText, /"two"/);
+  assert.match(sseText, /\[DONE\]/);
+
+  const controller = new AbortController();
+  const pending = assert.rejects(
+    proxyFetch(via, `${pxTargetBase}/slow`, { signal: controller.signal }),
+    (err) => err.name === 'AbortError',
+  );
+  controller.abort();
+  await pending;
+
+  await assert.rejects(
+    proxyFetch({ ...via, password: 'wrong' }, `${pxTargetBase}/echo`),
+    (err) => err.code === 'auth_failed',
+  );
+  await assert.rejects(
+    proxyFetch({ protocol: 'http', host: '127.0.0.1', port: await pxUnusedPort() }, `${pxTargetBase}/echo`),
+    (err) => err.code === 'connect_failed',
+  );
+
+  const expectedAuth = `Basic ${Buffer.from('alpha:s3cret').toString('base64')}`;
+  assert.ok(pxAuth.tunnels.some((tunnel) => tunnel.headers['proxy-authorization'] === expectedAuth), 'CONNECT carries Basic auth');
+  assert.ok(pxAuth.tunnels.some((tunnel) => tunnel.target === `127.0.0.1:${pxTargetPort}`), 'CONNECT targets the request host');
+  assert.equal(pxAuth.tunnels.at(-1).method, 'CONNECT');
+});
+
+await test('SOCKS5 tunnel authenticates and refuses a bad password', async () => {
+  const { proxyFetch } = await import('../noroute_src/lib/proxy-fetch.js');
+  const five = await proxyFetch(
+    { protocol: 'socks5', host: '127.0.0.1', port: pxSocks5.port, username: 'alpha', password: 's3cret' },
+    `${pxTargetBase}/echo`,
+  );
+  assert.equal(five.status, 200);
+  assert.deepEqual(pxSocks5.tunnels.at(-1), { atyp: 1, host: '127.0.0.1', port: pxTargetPort, auth: true });
+  await assert.rejects(
+    proxyFetch(
+      { protocol: 'socks5', host: '127.0.0.1', port: pxSocks5.port, username: 'alpha', password: 'wrong' },
+      `${pxTargetBase}/echo`,
+    ),
+    (err) => err.code === 'auth_failed',
+  );
+});
+
+await test('SOCKS5h sends the hostname to the proxy', async () => {
+  const { proxyFetch } = await import('../noroute_src/lib/proxy-fetch.js');
+  const named = await proxyFetch(
+    { protocol: 'socks5h', host: '127.0.0.1', port: pxSocks5.port, username: 'alpha', password: 's3cret' },
+    `http://localhost:${pxTargetPort}/echo`,
+  );
+  assert.equal(named.status, 200);
+  assert.equal(pxSocks5.tunnels.at(-1).atyp, 3, 'SOCKS5h sends the hostname');
+  assert.equal(pxSocks5.tunnels.at(-1).host, 'localhost');
+});
+
+await test('SOCKS4 resolves the target and carries the user ID', async () => {
+  const { proxyFetch } = await import('../noroute_src/lib/proxy-fetch.js');
+  const four = await proxyFetch(
+    { protocol: 'socks4', host: '127.0.0.1', port: pxSocks4.port, username: 'user-1' },
+    `${pxTargetBase}/echo`,
+  );
+  assert.equal(four.status, 200);
+  assert.deepEqual(pxSocks4.tunnels.at(-1), { version: '4', host: '127.0.0.1', port: pxTargetPort, user: 'user-1' });
+});
+
+await test('SOCKS4a sends the hostname and user ID', async () => {
+  const { proxyFetch } = await import('../noroute_src/lib/proxy-fetch.js');
+  const fourA = await proxyFetch(
+    { protocol: 'socks4a', host: '127.0.0.1', port: pxSocks4.port, username: 'user-2' },
+    `http://localhost:${pxTargetPort}/echo`,
+  );
+  assert.equal(fourA.status, 200);
+  assert.equal(pxSocks4.tunnels.at(-1).version, '4a', 'SOCKS4a sends the hostname');
+  assert.equal(pxSocks4.tunnels.at(-1).host, 'localhost');
+  assert.equal(pxSocks4.tunnels.at(-1).user, 'user-2');
+});
+
+await test('data-plane chat follows proxy off, global, direct, pinned, strict and fallback', async () => {
+  const providerId = `px-target-${Date.now()}`;
+  const created = await pxCall('/api/providers', {
+    method: 'POST',
+    body: { name: `Proxy Target ${providerId}`, id: providerId, baseUrl: pxTargetBase, models: 'proxied-model, stream-model' },
+  });
+  assert.equal(created.status, 201, created.text);
+
+  const chat = async (model, extra = {}) => {
+    const response = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: `${providerId}/${model}`,
+        messages: [{ role: 'user', content: 'hello' }],
+        ...extra,
+      }),
+    });
+    const text = await response.text();
+    let body = null;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      // SSE responses stay raw text.
+    }
+    return { status: response.status, body, text };
+  };
+
+  try {
+    const authRow = await pxFind(pxAuthMasked);
+    assert.ok(authRow);
+
+    await pxCall('/api/proxy', { method: 'PATCH', body: { enabled: false, strict: false } });
+    const tunnelsBefore = pxAuth.tunnels.length;
+    const direct = await chat('proxied-model');
+    assert.equal(direct.status, 200, direct.text);
+    assert.equal(direct.body.choices[0].message.content, 'through:proxied-model');
+    assert.equal(pxAuth.tunnels.length, tunnelsBefore, 'proxy off means no tunnel');
+
+    await pxCall('/api/proxy', { method: 'PATCH', body: { enabled: true, strict: false, strategy: 'round-robin' } });
+    await pxCall(`/api/proxy/providers/${providerId}`, { method: 'PUT', body: { mode: 'global' } });
+    const globalBefore = pxAuth.tunnels.length;
+    const proxied = await chat('proxied-model');
+    assert.equal(proxied.status, 200, proxied.text);
+    assert.equal(proxied.body.choices[0].message.content, 'through:proxied-model');
+    assert.equal(pxAuth.tunnels.length, globalBefore + 1, 'global mode opens one tunnel');
+    assert.ok(pxSeen.some((entry) => entry.path === '/chat/completions' && entry.body.includes('"model":"proxied-model"')));
+
+    await pxCall(`/api/proxy/providers/${providerId}`, { method: 'PUT', body: { mode: 'direct' } });
+    const directBefore = pxAuth.tunnels.length;
+    assert.equal((await chat('proxied-model')).status, 200);
+    assert.equal(pxAuth.tunnels.length, directBefore, 'a direct assignment skips the pool');
+
+    await pxCall(`/api/proxy/providers/${providerId}`, { method: 'PUT', body: { mode: 'pinned', proxyId: authRow.id } });
+    const pinnedBefore = pxAuth.tunnels.length;
+    assert.equal((await chat('proxied-model')).status, 200);
+    assert.equal(pxAuth.tunnels.length, pinnedBefore + 1, 'a pinned assignment uses that proxy');
+
+    const second = await pxCall('/api/proxies', { method: 'POST', body: { url: pxOpenUrl, test: false } });
+    assert.equal(second.status, 201);
+    await pxCall(`/api/proxy/providers/${providerId}`, { method: 'PUT', body: { mode: 'global' } });
+    const authBefore = pxAuth.tunnels.length;
+    const openBefore = pxOpen.tunnels.length;
+    assert.equal((await chat('proxied-model')).status, 200);
+    assert.equal((await chat('proxied-model')).status, 200);
+    assert.equal(pxAuth.tunnels.length - authBefore, 1, 'round-robin uses each proxy once');
+    assert.equal(pxOpen.tunnels.length - openBefore, 1);
+
+    await pxCall(`/api/proxies/${authRow.id}`, { method: 'PATCH', body: { enabled: false } });
+    await pxCall(`/api/proxies/${second.body.proxy.id}`, { method: 'PATCH', body: { enabled: false } });
+    await pxCall('/api/proxy', { method: 'PATCH', body: { strict: true } });
+    const seenBefore = pxSeen.length;
+    const strict = await chat('proxied-model');
+    assert.equal(strict.status, 502, strict.text);
+    assert.equal(strict.body.error.type, 'proxy_error');
+    assert.equal(strict.body.error.code, 'proxy_unavailable');
+    assert.ok(!strict.text.includes('s3cret'));
+    assert.ok(!strict.text.includes('127.0.0.1'), 'the failure never names a proxy');
+    assert.equal(pxSeen.length, seenBefore, 'strict failure never reaches the target');
+
+    await pxCall('/api/proxy', { method: 'PATCH', body: { strict: false } });
+    const deadPort = await pxUnusedPort();
+    const dead = await pxCall('/api/proxies', { method: 'POST', body: { url: `http://127.0.0.1:${deadPort}`, test: false } });
+    const fallback = await chat('proxied-model');
+    assert.equal(fallback.status, 200, fallback.text);
+    assert.equal(fallback.body.choices[0].message.content, 'through:proxied-model');
+    const deadRow = await pxFind(`http://127.0.0.1:${deadPort}`);
+    assert.ok(deadRow.failCount >= 1, 'a failed tunnel benches the row');
+    assert.equal(deadRow.status, 'fail');
+    assert.ok(deadRow.lastError);
+    await pxCall(`/api/proxies/${dead.body.proxy.id}`, { method: 'DELETE' });
+
+    await pxCall(`/api/proxies/${authRow.id}`, { method: 'PATCH', body: { enabled: true } });
+    const streamBefore = pxAuth.tunnels.length;
+    const stream = await chat('stream-model', { stream: true });
+    assert.equal(stream.status, 200, stream.text);
+    assert.match(stream.text, /streamed/);
+    assert.match(stream.text, /"finish_reason":"stop"/);
+    assert.match(stream.text, /\[DONE\]/);
+    assert.equal(pxAuth.tunnels.length, streamBefore + 1, 'streaming also egresses through the proxy');
+  } finally {
+    await pxCall(`/api/providers/${providerId}`, { method: 'DELETE' });
+  }
+});
+
+await test('proxy maintenance task reports on the enabled pool', async () => {
+  const run = await pxCall('/api/maintenance/run', { method: 'POST', body: { tasks: ['proxy'] } });
+  assert.equal(run.status, 200, run.text);
+  assert.equal(run.body.results.length, 1);
+  assert.equal(run.body.results[0].id, 'proxy');
+  assert.equal(run.body.results[0].ok, true);
+  assert.match(run.body.results[0].summary, /prox/i);
+});
+
+const pxCleanup = await pxCall('/api/proxy');
+for (const row of pxCleanup.body.proxies) await pxCall(`/api/proxies/${row.id}`, { method: 'DELETE' });
+await pxCall('/api/proxy', {
+  method: 'PATCH',
+  body: { enabled: false, strict: false, strategy: 'round-robin', autoDisableAfter: 3, scrape: { auto: false, intervalMinutes: 360, limit: 120 } },
+});
+
+for (const socket of pxTargetSockets) socket.destroy();
+await new Promise((resolve) => pxTarget.close(resolve));
+pxAuth.close();
+pxOpen.close();
+pxSocks5.close();
+pxSocks4.close();
 
 server.close();
 stub.close();

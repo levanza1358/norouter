@@ -18,6 +18,7 @@ import {
 import { recordRequest, recordError } from '../lib/stats.js';
 import { recordRequestLog, redact } from '../lib/request-log.js';
 import { notifyWebhook } from '../lib/webhook.js';
+import { dataPlaneFetch, isProxyError, proxyErrorPayload } from '../lib/proxy-fetch.js';
 
 const AUTH_COOLDOWN_MS = 5 * 60_000;
 const DEFAULT_COOLDOWN_MS = 60_000;
@@ -66,6 +67,20 @@ function normalize(provider, payload) {
   });
   const created = payload?.data?.created || payload?.created || Math.floor(Date.now() / 1000);
   return { created, data };
+}
+
+function proxyFailure(res, liveId, provider, model, message) {
+  recordError(message, { upstream: true, model, provider: provider.id });
+  publishLive({
+    phase: 'error',
+    id: liveId,
+    at: Date.now(),
+    provider: provider.id,
+    model,
+    status: 502,
+    stage: 'proxy',
+  });
+  return sendJson(res, 502, proxyErrorPayload(message));
 }
 
 export async function handleImageGeneration(req, res) {
@@ -138,7 +153,7 @@ export async function handleImageGeneration(req, res) {
 
       let response;
       try {
-        response = await fetch(imageUrl(provider), {
+        response = await dataPlaneFetch(provider.id, imageUrl(provider), {
           method: 'POST',
           headers: { ...buildHeaders(provider, credential.token), accept: 'application/json' },
           body: JSON.stringify(payload),
@@ -158,6 +173,8 @@ export async function handleImageGeneration(req, res) {
           });
           return sendError(res, 502, 'Image generation timed out.');
         }
+        // The account was never reached, so an egress failure must not park it.
+        if (isProxyError(err)) return proxyFailure(res, liveId, provider, model, err.message);
         markFailure(credential.row.id, { message: err.message, cooldownMs: DEFAULT_COOLDOWN_MS });
         lastStatus = 502;
         lastError = err.message;
@@ -208,12 +225,19 @@ export async function handleImageGeneration(req, res) {
       if ((response.status === 401 || response.status === 403) && credential.row) {
         const fresh = await refreshAccountNow(provider, credential.row);
         if (fresh?.accessToken) {
-          const retry = await fetch(imageUrl(provider), {
-            method: 'POST',
-            headers: { ...buildHeaders(provider, fresh.accessToken), accept: 'application/json' },
-            body: JSON.stringify(payload),
-            signal: controller.signal,
-          });
+          let retry;
+          try {
+            retry = await dataPlaneFetch(provider.id, imageUrl(provider), {
+              method: 'POST',
+              headers: { ...buildHeaders(provider, fresh.accessToken), accept: 'application/json' },
+              body: JSON.stringify(payload),
+              signal: controller.signal,
+            });
+          } catch (err) {
+            if (err.name === 'AbortError') return sendError(res, 502, 'Image generation timed out.');
+            if (isProxyError(err)) return proxyFailure(res, liveId, provider, model, err.message);
+            throw err;
+          }
           if (retry.ok) {
             markSuccess(credential.row.id, { tokensIn: 0, tokensOut: 0 });
             const parsed = await retry.json().catch(() => ({}));

@@ -735,6 +735,25 @@ export function normalizeAutoAccountLabels(knownProviders = []) {
   return renamed;
 }
 
+// Restart is the manual pause/resume pair: the pause leaves nothing behind and
+// the resume clears the cooldown and the last error. Both writes share one
+// transaction so no request can observe the account as paused between them.
+export function restartAccount(id) {
+  const row = getAccountRow(id);
+  if (!row) return { status: 404, error: 'Account not found.' };
+  const db = getDb();
+  const time = now();
+  transaction(() => {
+    db.prepare('UPDATE accounts SET enabled = 0, updated_at = ? WHERE id = ?').run(time, id);
+    db.prepare(
+      "UPDATE accounts SET enabled = 1, cooldown_until = 0, last_error = '', updated_at = ? WHERE id = ?",
+    ).run(time, id);
+  });
+  quotaOrderByAccount.delete(id);
+  invalidate(row.provider);
+  return { account: getAccount(id) };
+}
+
 export function updateAccount(id, patch = {}) {
   const row = getAccountRow(id);
   if (!row) return { status: 404, error: 'Account not found.' };
