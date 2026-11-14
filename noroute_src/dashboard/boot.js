@@ -46,18 +46,15 @@ window.addEventListener('resize', () => {
 
 // The log card's height depends on the tallest sibling column, so it can settle
 // after render. Re-trim whenever its own box changes.
-const eventCard = $('eventList')?.closest('.card');
 const recentCard = $('recentTable')?.closest('.card');
 if ('ResizeObserver' in window) {
   const observer = new ResizeObserver(() => {
     if (currentPath !== '/') return;
     requestAnimationFrame(() => {
-      trimEventsToColumn();
       trimModelsToCard();
       trimRecentToCard();
     });
   });
-  if (eventCard) observer.observe(eventCard);
   if (recentCard) observer.observe(recentCard);
 }
 

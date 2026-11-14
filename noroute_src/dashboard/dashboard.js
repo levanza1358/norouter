@@ -218,39 +218,4 @@ function trimModelsToCard() {
   }
 }
 
-function renderEvents(data, report = dashboardUsageData) {
-  const persisted = (report?.activity || []).map((item) => ({
-    at: item.at,
-    type: item.ok ? 'request' : 'error',
-    message: item.ok
-      ? `${item.model || 'unknown'} · ${item.tokensIn + item.tokensOut} tok · ${item.ms ?? '?'} ms`
-      : `${item.model || 'unknown'} · request failed${item.error ? ` · ${item.error}` : ''}`,
-  }));
-  const active = (data.active || []).map((item) => ({
-    at: item.at,
-    type: 'request',
-    message: `${item.model || 'unknown'} · ${item.tokensIn + item.tokensOut} tok · ${item.ms ?? '?'} ms · streaming`,
-  }));
-  const rows = [...active, ...persisted];
-  $('eventCount').textContent = `${rows.length}`;
-
-  if (!rows.length) {
-    eventSource = [];
-    eventPage = 1;
-    if ($('eventPager')) $('eventPager').hidden = true;
-    if (!dashboardSignature('dashboard.events', [])) return;
-    $('eventList').innerHTML = `<div class="list-empty">
-      <strong>No activity yet</strong>
-      <span>Every request and error is logged here. Point a client at /v1 to begin.</span>
-    </div>`;
-    return;
-  }
-
-  const eventSignature = rows.map((event) => [event.at, event.type, event.message]);
-  // Include the layout mode and page: a resize or pager click re-renders with
-  // the same rows but a different slice.
-  if (!dashboardSignature('dashboard.events', [dashPaged(), eventPage, eventSignature])) return;
-  eventSource = rows;
-  paintEvents();
-}
 

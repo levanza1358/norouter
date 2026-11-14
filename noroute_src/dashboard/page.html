@@ -374,18 +374,6 @@
         </div>
 
         <div class="dash-side">
-          <article class="card dashboard-primary">
-            <div class="card-head">
-              <h2 class="card-title">Activity</h2>
-              <span class="chip chip-quiet" id="eventCount">0</span>
-            </div>
-            <div class="evlist" id="eventList"></div>
-            <nav class="usage-pager" id="eventPager" aria-label="Activity pages" hidden>
-              <span class="usage-pager-info" id="eventPageInfo">0 events</span>
-              <div class="usage-pager-btns" id="eventPageBtns"></div>
-            </nav>
-          </article>
-
           <article class="card">
             <div class="card-head">
               <h2 class="card-title">Models</h2>
@@ -569,7 +557,7 @@
         </div>
       </div>
       <div class="settings-panel" data-settings-panel="debug" id="settingsPanelDebug" role="tabpanel" aria-labelledby="settingsTabDebug" hidden>
-        <div class="sgrid"><div class="scol"><article class="card"><div class="card-head"><div><h2 class="card-title">Request log</h2><p class="desc">Last chat requests, redacted — no keys, credentials, or message bodies. Names the model that served, why routing moved it, and the chain tried. In-memory only; clears on restart.</p></div><button class="btn btn-ghost btn-xs" id="clearRequestLog" type="button">Clear</button></div><div class="table-wrap"><table class="tbl reqlog"><thead><tr><th>Time</th><th class="r">Status</th><th>Route</th><th>Provider</th><th>Model</th><th class="r">In</th><th class="r">Out</th><th class="r">Latency</th></tr></thead><tbody id="requestLogTable"></tbody></table></div><p class="toolnote" id="requestLogNote" role="status" aria-live="polite"></p></article></div></div>
+        <div class="sgrid"><div class="scol"><article class="card"><div class="card-head"><div><h2 class="card-title">Request log</h2><p class="desc">Last chat requests, redacted — no keys, credentials, or message bodies. Names the model that served, why routing moved it, and the chain tried. In-memory only; clears on restart.</p></div><button class="btn btn-ghost btn-xs" id="clearRequestLog" type="button">Clear</button></div><div class="table-wrap"><table class="tbl reqlog"><thead><tr><th>Time</th><th class="r">Status</th><th>Route</th><th>Provider</th><th>Model</th><th class="r">In</th><th class="r">Out</th><th class="r">Latency</th></tr></thead><tbody id="requestLogTable"></tbody></table></div><nav class="usage-pager" id="requestLogPager" aria-label="Request log pages" hidden><span class="usage-pager-info" id="requestLogPageInfo">0 requests</span><div class="usage-pager-btns" id="requestLogPageBtns"></div></nav><p class="toolnote" id="requestLogNote" role="status" aria-live="polite"></p></article></div></div>
       </div>
     </section>
 

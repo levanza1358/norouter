@@ -100,11 +100,8 @@ function density() {
   return { models: step === 2 ? 11 : step === 1 ? 9 : 6 };
 }
 
-// The log card has a fixed height on wide screens, so rows are trimmed to the
-// space it actually has. Trimming re-reads layout on the next frame because the
-// card's final height is only known once the rest of the board has settled.
-let eventSource = [];
-let eventPage = 1;
+// The dashboard's request table leaves its rows to the card's own scroller on
+// wide screens, so nothing is trimmed by hand.
 
 // Phones have no fixed card height to fill, so the dashboard cards paginate
 // instead of trimming: five rows per page, with the usual pager underneath.
@@ -114,74 +111,6 @@ function dashPaged() {
   return window.matchMedia?.('(max-width: 760px)')?.matches || false;
 }
 
-function trimEventsToColumn() {
-  if (dashPaged()) return;
-  const list = $('eventList');
-  if (!list) return;
-
-  // Re-read the budget on every iteration: the card can still be settling, and
-  // a stale budget leaves rows hanging past the card edge.
-  const rows = [...list.children].filter((row) => !row.classList.contains('ghost'));
-  const overflow = () => {
-    const last = list.lastElementChild;
-    if (!last) return 0;
-    return last.getBoundingClientRect().bottom - list.getBoundingClientRect().bottom;
-  };
-
-  let guard = rows.length + 4;
-  while (rows.length > 1 && guard-- > 0) {
-    if (!list.clientHeight || list.clientHeight < 60) return;
-    if (overflow() <= 1) return;
-    rows.pop().remove();
-  }
-}
-
-function paintEvents() {
-  const list = $('eventList');
-  if (!list) return;
-
-  const pager = $('eventPager');
-  let visible = eventSource;
-  if (dashPaged()) {
-    eventPage = paintUsagePager({
-      pager,
-      info: $('eventPageInfo'),
-      btns: $('eventPageBtns'),
-      items: eventSource,
-      page: eventPage,
-      pageSize: DASH_MOBILE_PAGE_SIZE,
-      noun: 'events',
-      onSelect: (page) => { eventPage = page; paintEvents(); },
-    });
-    visible = usagePageSlice(eventSource, eventPage, DASH_MOBILE_PAGE_SIZE).items;
-  } else if (pager) {
-    pager.hidden = true;
-    eventPage = 1;
-  }
-
-  list.innerHTML = visible.map(rowHtml).join('');
-  if (dashPaged()) return;
-
-  // Synchronous pass (the loop forces layout), then two more on later frames
-  // for the case where the card shrinks once its sibling columns settle.
-  trimEventsToColumn();
-  requestAnimationFrame(() => {
-    trimEventsToColumn();
-    requestAnimationFrame(trimEventsToColumn);
-  });
-}
-
-function rowHtml(ev) {
-  const isErr = ev.type === 'error';
-  const msg = ev.message.length > 90 ? ev.message.slice(0, 90) + '…' : ev.message;
-  return `<div class="evrow">
-      <span class="evdot ${isErr ? 'err' : ''}"></span>
-      <div class="evbody">
-        <div class="evmsg">${escapeHtml(msg)}</div>
-        <div class="evtime">${relTime(ev.at)}</div>
-      </div>
-    </div>`;
-}
 
 
 // A switch already shows its state; the word beside it has to agree, or a card

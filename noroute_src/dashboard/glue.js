@@ -2,23 +2,40 @@
 
 let recentPage = 1;
 
+// One card replaces the old Activity list: the same rows, in one table, with
+// the live in-flight requests pinned on top. Two lists of the same requests was
+// just the same data drawn twice.
+function recentRows(data, report) {
+  const live = (data?.active || []).map((item) => ({
+    at: item.at,
+    model: item.model,
+    tokensIn: item.tokensIn || 0,
+    tokensOut: item.tokensOut || 0,
+    ms: item.ms,
+    status: null,
+    ok: true,
+    live: true,
+  }));
+  return [...live, ...(report?.activity || [])];
+}
+
 function renderRecent(data, report = dashboardUsageData) {
   const table = $('recentTable');
   if (!table) return;
 
-  const rows = report?.activity || [];
+  const rows = recentRows(data, report);
   $('recentCount').textContent = `${rows.length}`;
   const pager = $('recentPager');
   if (!rows.length) {
     if (pager) pager.hidden = true;
     recentPage = 1;
     if (dashboardSignature('dashboard.recent', [])) table.innerHTML = `<tr><td colspan="4" class="empty-cell">
-      <div class="list-empty"><strong>No requests yet</strong><span>Recent calls appear here with model, tokens, latency and status.</span></div>
+      <div class="list-empty"><strong>No requests yet</strong><span>Every request and error is logged here. Point a client at /v1 to begin.</span></div>
     </td></tr>`;
     return;
   }
 
-  const recentSignature = rows.map((r) => [r.at, r.model, r.tokensIn, r.tokensOut, r.ms, r.ok, r.status]);
+  const recentSignature = rows.map((r) => [r.at, r.model, r.tokensIn, r.tokensOut, r.ms, r.ok, r.status, r.live]);
   // Paging and the mobile/desktop switch both re-run this with identical data,
   // so the signature has to carry them or the redraw is skipped.
   if (!dashboardSignature('dashboard.recent', [dashPaged(), recentPage, recentSignature])) return;
@@ -44,11 +61,15 @@ function renderRecent(data, report = dashboardUsageData) {
 
   table.innerHTML = visible.map((r) => {
     const tokens = r.tokensIn + r.tokensOut;
+    // A request whose upstream never reported usage has no token count to show;
+    // "—" says unknown instead of a misleading zero.
+    const tokenCell = !r.ok ? '—' : tokens ? fmtFull(tokens) : '—';
+    const status = r.live ? 'live' : r.ok ? (r.status || 'ok') : 'error';
     return `<tr>
-      <td class="model">${escapeHtml(r.model || 'unknown')}</td>
-      <td class="r">${r.ok ? fmtFull(tokens) : '—'}</td>
+      <td class="model">${escapeHtml(r.model || 'unknown')}<span class="evtime">${relTime(r.at)}</span></td>
+      <td class="r">${tokenCell}</td>
       <td class="r">${r.ms == null ? '—' : r.ms + ' ms'}</td>
-      <td class="r"><span class="pill ${r.ok ? 'ok' : 'bad'}">${r.ok ? (r.status || 'ok') : 'error'}</span></td>
+      <td class="r"><span class="pill ${r.ok ? 'ok' : 'bad'}">${status}</span></td>
     </tr>`;
   }).join('');
 
@@ -113,7 +134,6 @@ async function loadDashboardUsage() {
     renderRequests(latest || {}, report);
     renderModels(latest || {}, report);
     renderRecent(latest || {}, report);
-    renderEvents(latest || {}, report);
     renderDashboardHistorical(report);
   } catch (err) {
     if (requestId !== dashboardUsageRequestId || requestedRange !== dashboardUsageRange) return;
@@ -158,9 +178,8 @@ function renderCurrent() {
     renderStatistics(latest, dashboardUsageData);
     renderRequests(latest, dashboardUsageData);
     renderModels(latest, dashboardUsageData);
+    // Last: it measures the finished columns to size itself.
     renderRecent(latest, dashboardUsageData);
-    // Last: it measures the finished middle column to size itself.
-    renderEvents(latest, dashboardUsageData);
     paintDashboardRangeTabs();
     if (!dashboardUsageData || dashboardUsageData.range !== dashboardUsageRange) loadDashboardUsage();
     else renderDashboardHistorical(dashboardUsageData);

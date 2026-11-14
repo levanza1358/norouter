@@ -524,11 +524,29 @@ function requestModelCell(r) {
   return `<div class="req-served">${served}</div>${asked}${tried}`;
 }
 
+const REQUEST_LOG_PAGE_SIZE = 10;
+let requestLogSource = [];
+let requestLogPage = 1;
+
 function renderRequestLog(rows) {
   const table = $('requestLogTable');
   if (!table) return;
-  table.innerHTML = rows.length
-    ? rows.map((r) => `<tr>
+  // The log keeps 200 entries in memory; the table pages through them ten at a
+  // time so the tab stays readable instead of dumping the whole buffer.
+  requestLogSource = Array.isArray(rows) ? rows : [];
+  requestLogPage = paintUsagePager({
+    pager: $('requestLogPager'),
+    info: $('requestLogPageInfo'),
+    btns: $('requestLogPageBtns'),
+    items: requestLogSource,
+    page: requestLogPage,
+    pageSize: REQUEST_LOG_PAGE_SIZE,
+    noun: 'requests',
+    onSelect: (page) => { requestLogPage = page; renderRequestLog(requestLogSource); },
+  });
+  const slice = usagePageSlice(requestLogSource, requestLogPage, REQUEST_LOG_PAGE_SIZE);
+  table.innerHTML = slice.items.length
+    ? slice.items.map((r) => `<tr>
         <td class="mono">${fmtTime(r.at)}</td>
         <td class="r">${r.status == null ? '—' : r.status}</td>
         <td>${requestRouteCell(r)}</td>

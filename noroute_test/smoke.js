@@ -792,6 +792,9 @@ await test('chat stream emits incremental content and handles in-stream errors',
   const content = events.map((event) => event.choices?.[0]?.delta?.content || '').join('');
   assert.match(content, /stub reply for glm-5\.3/);
   assert.ok(events.length > 2, 'stream must arrive in multiple frames');
+  // A streamed client turn still has to ask for the usage chunk; without it the
+  // activity row is a 200 with zero tokens.
+  assert.equal(chatBodies.at(-1).stream_options?.include_usage, true);
   const historicalAfterChat = await (await fetch(`${base}/api/usage?range=day`)).json();
   assert.ok(historicalAfterChat.totals.requests >= 1, 'historical request total must persist');
   assert.ok(historicalAfterChat.totals.tokensIn > 0, 'historical input tokens must persist');
@@ -931,6 +934,9 @@ await test('settings exposes accessible tabs and Token Saver controls', async ()
   assert.match(html, /id="webhookToggle"[^>]*type="checkbox"/);
   assert.match(html, /id="webhookUrl"[^>]*type="url"/);
   assert.match(html, /id="requestLogTable"/);
+  // The request log pages at ten rows so the 200-entry buffer stays readable.
+  assert.match(html, /id="requestLogPager"[^>]*aria-label="Request log pages"/);
+  assert.match(html, /id="requestLogPageBtns"/);
   const js = await fetchDashboardSources();
   assert.match(js, /ArrowRight/);
   assert.match(js, /settingsTab/);
@@ -1120,7 +1126,8 @@ await test('dashboard cards use persisted SQLite usage data', async () => {
   assert.match(js, /renderStatistics\(latest \|\| \{\}, report\)/);
   assert.match(js, /renderRequests\(latest \|\| \{\}, report\)/);
   assert.match(js, /renderModels\(latest \|\| \{\}, report\)/);
-  assert.match(js, /const rows = report\?\.activity \|\| \[\]/);
+  assert.match(js, /const rows = recentRows\(data, report\);/);
+  assert.match(js, /\.\.\.\(report\?\.activity \|\| \[\]\)/);
   assert.match(js, /totals\.tokensIn/);
 });
 
@@ -1181,11 +1188,11 @@ await test('dashboard declares its data ranges and chart summary', async () => {
   assert.match(html, /id="uModelPageBtns"/);
   assert.match(html, /id="uActivityPager"[^>]*aria-label="Activity pages"/);
   assert.match(html, /id="uActivityPageBtns"/);
-  // Dashboard cards paginate at five rows on phones.
+  // The dashboard has one request card: paged at five rows on phones.
   assert.match(html, /id="recentPager"[^>]*aria-label="Recent requests pages"/);
   assert.match(html, /id="recentPageBtns"/);
-  assert.match(html, /id="eventPager"[^>]*aria-label="Activity pages"/);
-  assert.match(html, /id="eventPageBtns"/);
+  // Activity was folded into that table, so the old list is gone for good.
+  assert.equal(/id="eventList"/.test(html), false);
   assert.match(html, /id="uChartTypes"[^>]*role="tablist"/);
   assert.equal((html.match(/data-usage-chart=/g) || []).length, 4);
   assert.equal((html.match(/role="tab"[^>]*data-usage-chart=/g) || []).length, 4);

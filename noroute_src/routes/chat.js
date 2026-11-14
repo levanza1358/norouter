@@ -806,7 +806,9 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
   if (provider.forceStream) upstreamBody.stream = true;
   // include_usage only means anything when the upstream is actually streaming;
   // adding it to a non-streamed body is a spec violation some gateways reject.
-  if (provider.forceStream && !wantsStream && wireFormat === 'openai') {
+  // A streamed client turn is asked too: without it the final usage chunk never
+  // arrives and the activity log records a 200 with zero tokens.
+  if ((provider.forceStream || wantsStream) && wireFormat === 'openai') {
     upstreamBody.stream_options = {
       ...(body.stream_options || {}),
       include_usage: true,
@@ -877,8 +879,10 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
       }
 
       // Some gateways reject stream_options outright. Drop it and retry once
-      // rather than failing a request that would otherwise work.
-      if (!response.ok && !wantsStream) {
+      // rather than failing a request that would otherwise work. The body is
+      // read here only when that field was sent, so the failure text below is
+      // still read exactly once.
+      if (!response.ok && upstreamBody.stream_options) {
         const text = await response.text();
         if (response.status === 400 && /stream_options/i.test(text)) {
           const retryBody = { ...upstreamBody };

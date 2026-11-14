@@ -110,6 +110,8 @@ Upstage and some other OpenAI-compatible upstreams name the reasoning field `rea
 
 Without `stream: true`, the router buffers SSE and returns one OpenAI-shaped completion. For upstreams that are always streamed (`forceStream`, shipped or custom), it requests usage with `stream_options.include_usage=true`; if the upstream rejects `stream_options`, it retries once without that property. A buffered stream that ends before any terminal frame, a plain JSON body carrying `error`, or an in-stream error frame becomes a 502 with an `error` object instead of a 200 with a partial completion. Plain JSON upstream responses are passed through after the same reasoning-alias normalization.
 
+A `stream: true` request on the OpenAI wire asks for the same usage chunk: without it the last frame carries no token counts and the request is recorded with none at all.
+
 The accumulator preserves content, reasoning content, tool calls, finish reason, and usage when present.
 
 ### Reasoning compatibility

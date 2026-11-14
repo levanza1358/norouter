@@ -49,7 +49,7 @@ A per-key daily budget is checked once, immediately after the body is parsed and
 5. Reject missing credential unless provider is explicitly open.
 6. Force CodeBuddy upstream stream.
 7. For client stream: relay SSE frames and tap accumulator for usage/counters. Empty `tool_calls` arrays from any upstream delta are dropped so SDKs do not split reasoning into one block per token. A non-canonical `reasoning` field is mirrored onto `reasoning_content` before the frame is relayed and accumulated.
-8. For client non-stream: accumulate SSE into one OpenAI-shaped completion. Add `stream_options.include_usage`; retry once without it if upstream rejects that field.
+8. For a non-streamed client turn, accumulate SSE into one OpenAI-shaped completion. Add `stream_options.include_usage`; retry once without it if upstream rejects that field. A `stream: true` client turn asks for the same usage chunk, because that is the only frame carrying token counts for a streamed reply.
 9. On 401/403, refresh account once and retry. On 429, mark account cooldown using `Retry-After`, timestamp, or default. Other 400/404/500 errors relay without pointless account rotation.
 10. Record process stats and account counters, and add token/cost counters to the limited budget scopes. Successful calls and errors are also written to `usage_hourly` in SQLite through `noroute_src/lib/usage.js`; the in-memory snapshot stays the fast path for `/api/status`.
 
