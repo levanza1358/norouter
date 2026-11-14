@@ -36,28 +36,23 @@ function renderRecent(data, report = dashboardUsageData) {
   }
 
   const recentSignature = rows.map((r) => [r.at, r.model, r.tokensIn, r.tokensOut, r.ms, r.ok, r.status, r.live]);
-  // Paging and the mobile/desktop switch both re-run this with identical data,
-  // so the signature has to carry them or the redraw is skipped.
-  if (!dashboardSignature('dashboard.recent', [dashPaged(), recentPage, recentSignature])) return;
+  // Paging re-runs this with identical data, so the signature has to carry the
+  // page or the redraw is skipped.
+  if (!dashboardSignature('dashboard.recent', [recentPage, recentSignature])) return;
 
-  // Phones get five rows per page; wider screens keep filling the card.
-  let visible = rows;
-  if (dashPaged()) {
-    recentPage = paintUsagePager({
-      pager,
-      info: $('recentPageInfo'),
-      btns: $('recentPageBtns'),
-      items: rows,
-      page: recentPage,
-      pageSize: DASH_MOBILE_PAGE_SIZE,
-      noun: 'requests',
-      onSelect: (page) => { recentPage = page; renderRecent(data, report); },
-    });
-    visible = usagePageSlice(rows, recentPage, DASH_MOBILE_PAGE_SIZE).items;
-  } else if (pager) {
-    pager.hidden = true;
-    recentPage = 1;
-  }
+  // Five rows per page on every screen; the pager turns up as soon as there is
+  // a sixth request to show.
+  recentPage = paintUsagePager({
+    pager,
+    info: $('recentPageInfo'),
+    btns: $('recentPageBtns'),
+    items: rows,
+    page: recentPage,
+    pageSize: DASH_RECENT_PAGE_SIZE,
+    noun: 'requests',
+    onSelect: (page) => { recentPage = page; renderRecent(data, report); },
+  });
+  const visible = usagePageSlice(rows, recentPage, DASH_RECENT_PAGE_SIZE).items;
 
   table.innerHTML = visible.map((r) => {
     const tokens = r.tokensIn + r.tokensOut;
@@ -72,30 +67,6 @@ function renderRecent(data, report = dashboardUsageData) {
       <td class="r"><span class="pill ${r.ok ? 'ok' : 'bad'}">${status}</span></td>
     </tr>`;
   }).join('');
-
-  if (dashPaged()) return;
-  trimRecentToCard();
-  requestAnimationFrame(trimRecentToCard);
-}
-
-// Rows are dropped from the bottom until the table fits its card, so a tall
-// screen shows more history and a short one shows less, never a half row.
-function trimRecentToCard() {
-  if (dashPaged()) return;
-  const body = $('recentTable');
-  const wrap = body?.closest('.table-wrap');
-  const table = wrap?.querySelector('table');
-  if (!wrap || !table) return;
-
-  const rows = [...body.children].filter((row) => !row.classList.contains('rghost'));
-  let guard = rows.length + 4;
-  while (rows.length > 1 && guard-- > 0) {
-    const available = wrap.clientHeight;
-    if (!available || available < 60) return;
-    // Measure the whole table: the header row is part of what has to fit.
-    if (table.getBoundingClientRect().height <= available + 1) return;
-    rows.pop().remove();
-  }
 }
 
 // A short history leaves the bottom of the card blank on purpose: an empty

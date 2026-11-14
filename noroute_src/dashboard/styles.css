@@ -4829,10 +4829,11 @@ h1 {
 
 .dash-recent { display: flex; min-width: 0; flex-direction: column; }
 
+/* A page is five rows, so the table sets the card's height instead of the card
+   stretching to fill a slot and cutting the fifth row off. */
 .dash-recent .table-wrap {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
+  min-width: 0;
+  overflow-x: auto;
 }
 
 .dash-recent .tbl { margin: 0; }
@@ -4853,23 +4854,26 @@ h1 {
 
 .dash-side .mrow { flex: 0 0 auto; }
 
-/* Bounded board only when there is room for it. Short windows keep the
-   normal document flow so nothing is clipped behind the fold. */
-@media (min-width: 1100px) and (min-height: 720px) {
+/* Bounded board only when there is room for the full five-row request card.
+   Short windows keep the normal document flow so nothing is clipped behind the
+   fold. */
+@media (min-width: 1100px) and (min-height: 900px) {
   body:has(.dashboard-page:not([hidden])) { height: 100dvh; overflow: hidden; }
   body:has(.dashboard-page:not([hidden])) .main {
     display: flex;
     flex-direction: column;
     height: 100dvh;
     min-height: 0;
-    overflow: hidden;
+    /* A window just over the threshold can be shorter than the board's content;
+       scrolling keeps the fifth row reachable instead of hiding it. */
+    overflow: auto;
   }
   body:has(.dashboard-page:not([hidden])) .topbar { flex: 0 0 auto; }
 
   .dashboard-page { flex: 1 1 auto; min-height: 0; }
   .dash-layout { flex: 1 1 auto; min-height: 0; }
   .dash-chart { flex: 1 1 auto; min-height: 0; }
-  .dash-recent { flex: 0 0 42%; min-height: 0; }
+  .dash-recent { flex: 0 0 auto; }
   .dash-chart .spark { flex: 1 1 auto; height: auto; min-height: 100px; }
   .dash-side > .card { flex: 1 1 0; min-height: 0; }
   .dash-side .card-head { margin-bottom: 10px; }
@@ -4879,7 +4883,6 @@ h1 {
   .dash-layout { grid-template-columns: minmax(0, 1fr); }
   .dash-side { display: grid; grid-template-columns: minmax(0, 1fr); align-items: start; }
   .dash-side > .card { min-height: 260px; }
-  .dash-recent .table-wrap { overflow-x: auto; }
 }
 
 @media (max-width: 760px) {

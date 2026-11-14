@@ -1188,7 +1188,7 @@ await test('dashboard declares its data ranges and chart summary', async () => {
   assert.match(html, /id="uModelPageBtns"/);
   assert.match(html, /id="uActivityPager"[^>]*aria-label="Activity pages"/);
   assert.match(html, /id="uActivityPageBtns"/);
-  // The dashboard has one request card: paged at five rows on phones.
+  // The dashboard has one request card: one page of five rows at every width.
   assert.match(html, /id="recentPager"[^>]*aria-label="Recent requests pages"/);
   assert.match(html, /id="recentPageBtns"/);
   // Activity was folded into that table, so the old list is gone for good.
@@ -1201,7 +1201,10 @@ await test('dashboard declares its data ranges and chart summary', async () => {
   assert.match(js, /\/api\/usage\?range=/);
   assert.match(js, /data-dashboard-range/);
   assert.match(js, /const USAGE_PAGE_SIZE = 10;/);
-  assert.match(js, /const DASH_MOBILE_PAGE_SIZE = 5;/);
+  assert.match(js, /const DASH_RECENT_PAGE_SIZE = 5;/);
+  assert.match(js, /pageSize: DASH_RECENT_PAGE_SIZE/);
+  // No height-based trimming left: the card always shows exactly one page.
+  assert.equal(/trimRecentToCard/.test(js), false);
   assert.match(js, /usage-page-btn/);
   assert.match(js, /aria-current/);
   assert.match(js, /is-streaming/);

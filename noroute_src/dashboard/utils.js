@@ -100,16 +100,10 @@ function density() {
   return { models: step === 2 ? 11 : step === 1 ? 9 : 6 };
 }
 
-// The dashboard's request table leaves its rows to the card's own scroller on
-// wide screens, so nothing is trimmed by hand.
-
-// Phones have no fixed card height to fill, so the dashboard cards paginate
-// instead of trimming: five rows per page, with the usual pager underneath.
-const DASH_MOBILE_PAGE_SIZE = 5;
-
-function dashPaged() {
-  return window.matchMedia?.('(max-width: 760px)')?.matches || false;
-}
+// The dashboard's request table is always one page of five rows. It used to
+// fill whatever height the card had, so shrinking the window showed a different
+// amount of history; a fixed page keeps every screen on the same five rows.
+const DASH_RECENT_PAGE_SIZE = 5;
 
 
 

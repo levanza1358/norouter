@@ -44,16 +44,13 @@ window.addEventListener('resize', () => {
   resizeTimer = setTimeout(renderCurrent, 180);
 });
 
-// The log card's height depends on the tallest sibling column, so it can settle
-// after render. Re-trim whenever its own box changes.
+// The Models card is sized by its column, which the request card's pager can
+// change, so re-trim whenever that card's own box changes.
 const recentCard = $('recentTable')?.closest('.card');
 if ('ResizeObserver' in window) {
   const observer = new ResizeObserver(() => {
     if (currentPath !== '/') return;
-    requestAnimationFrame(() => {
-      trimModelsToCard();
-      trimRecentToCard();
-    });
+    requestAnimationFrame(trimModelsToCard);
   });
   if (recentCard) observer.observe(recentCard);
 }
