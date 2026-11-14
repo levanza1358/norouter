@@ -58,7 +58,7 @@ The Combos page also carries one global rule for image requests. When it is on, 
 
 The rule is stored in the SQLite `meta` table under `vision_routing` and edited through `GET/PATCH /api/vision-routing`; a PATCH merges, so omitted fields keep their value. Entries are validated through the normal model resolver and stored canonically as `prefix/model`, with duplicates rejected. The server refuses to enable a rule with no targets.
 
-Two strategies: Order tries the chain top to bottom every request; Round robin rotates the first target by one per image request and resets on save. Routing reuses combo semantics: one credential attempt per target, fallback only for target-shaped failures, nothing written to the response before a target succeeds, and a total failure names the attempted targets with `error.vision = true`.
+Two strategies: Order tries the chain top to bottom every request; Round robin rotates the first target by one per image request and resets on save. Routing uses the strict chain rules: one credential attempt per target, fallback only for target-shaped failures, nothing written to the response before a target succeeds, and a total failure names the attempted targets with `error.vision = true`.
 
 A saved target that no longer resolves is skipped at request time and marked `Unavailable` in the card; if every target is gone, the request keeps the model it asked for. Removing the last model in the UI also switches the rule off, mirroring the server guard.
 
@@ -73,7 +73,7 @@ Routing rules reroute a request when it matches. Each rule has a name, an on/off
 - a minimum estimated context size, counted from the message content and tool definitions;
 - whether the request carries tools.
 
-Rules run top to bottom and the first match wins. A match replaces the request's model with the rule's chain, using combo semantics; the request log traces it as `rule` and names the rule. Aliases apply first, so a rule sees the rewritten model. Precedence overall is vision routing, then the key's default model (only when the client sent no model), then alias, then the first matching rule, then combo, then a single model.
+Rules run top to bottom and the first match wins. A match replaces the request's model with the rule's chain, using the strict chain rules; the request log traces it as `rule` and names the rule. Aliases apply first, so a rule sees the rewritten model. Precedence overall is vision routing, then the key's default model (only when the client sent no model), then alias, then the first matching rule, then combo, then a single model.
 
 Settings live in the `meta` table under `routing_rules` and are edited through `GET/PATCH /api/routing-rules`. The GET also returns the model catalog, the combo names, and `{id,name}` for each managed key so the card can fill its pickers. Limits are 50 aliases, 20 rules, 20 models per chain, 120 characters per alias name, and 60 per rule name. A chain target that no longer resolves is skipped at request time, and a rule whose whole chain is gone leaves the request on the model it asked for.
 

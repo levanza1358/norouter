@@ -138,8 +138,9 @@ function relayFailure(res, status, text, provider, model, account = '', trace = 
 
 // Statuses that mean "this target cannot serve the request", not "the request is
 // wrong". A combo may move to the next model for these. A 400 is deliberately
-// excluded: malformed bodies, context overflow and unsupported parameters would
-// fail identically on every model and only bill another quota for the same bug.
+// excluded here: malformed bodies, context overflow and unsupported parameters
+// usually fail identically on every model. A combo still walks its whole list
+// (see handleModelChain `exhaustive`); rules and vision keep the stricter rule.
 function isFallbackStatus(status) {
   return status === 401
     || status === 402
@@ -405,6 +406,31 @@ function flushSSE(res, acc, decoder, bufferRef) {
   if (out) res.write(out);
 }
 
+// A streamed combo step only owns the response once it produces an answer. Until
+// the first content frame, everything it sends is parked here while the client
+// keeps receiving keep-alive comments, so a target that dies without content can
+// be replaced by the next combo model on the same open stream. Anything that
+// carries real output commits the buffer first; from then on no retry is allowed.
+function createStreamSink(res, acc, park) {
+  const sink = { committed: !park, pending: [] };
+  sink.commit = () => {
+    if (sink.committed) return;
+    sink.committed = true;
+    for (const part of sink.pending.splice(0)) res.write(part);
+  };
+  sink.write = (text) => {
+    if (!text) return;
+    if (sink.committed) {
+      res.write(text);
+      return;
+    }
+    sink.pending.push(text);
+    const { state } = acc;
+    if (state.content || state.reasoning || state.toolCalls.length || state.finishReason) sink.commit();
+  };
+  return sink;
+}
+
 // A streamed client only understands SSE, so a mid-stream failure has to take
 // the shape of an error frame; a bare close reads as a finished, empty answer.
 function writeStreamErrorFrame(res, code, message, type = 'upstream_error') {
@@ -413,18 +439,20 @@ function writeStreamErrorFrame(res, code, message, type = 'upstream_error') {
   res.end();
 }
 
-// A streamed turn that already sent headers cannot fall back to another model,
+// A streamed turn that already sent content cannot fall back to another model,
 // so the only honest ending is one OpenAI-shaped error frame and no synthetic
 // [DONE]. Nothing is marked successful: a cut connection must not look like a
-// finished answer, and it must not park the account either.
-function failStreamedTurn(res, acc, { code, provider, model, account, liveId, trace = null }) {
-  const message = code === 'stream_error'
+// finished answer, and it must not park the account either. A turn that failed
+// before content commits (`retry`) records the failure but leaves the stream
+// open for the next combo step.
+function failStreamedTurn(res, acc, { code, provider, model, account, liveId, trace = null, retry = false, message = null }) {
+  const text = message || (code === 'stream_error'
     ? (typeof acc.state.error === 'string'
       ? acc.state.error
       : acc.state.error?.message || 'Upstream reported an error')
-    : `Upstream stream ended before completion (${provider.id}/${model}).`;
-  writeStreamErrorFrame(res, code, message);
-  noteError(message, { upstream: true, provider: provider.id, model, account, status: 502, trace });
+    : `Upstream stream ended before completion (${provider.id}/${model}).`);
+  if (!retry) writeStreamErrorFrame(res, code, text);
+  noteError(text, { upstream: true, provider: provider.id, model, account, status: 502, trace });
   publishLive({
     phase: 'error',
     id: liveId,
@@ -434,7 +462,15 @@ function failStreamedTurn(res, acc, { code, provider, model, account, liveId, tr
     status: 502,
     stage: 'upstream',
   });
-  return { ok: false, status: 502, message, model, provider: provider.id, fallback: false };
+  return {
+    ok: false,
+    status: 502,
+    message: text,
+    model,
+    provider: provider.id,
+    fallback: retry,
+    streamRetry: retry,
+  };
 }
 
 // A successful turn with no text and no tool call is the signature of a client
@@ -668,6 +704,9 @@ export async function handleChat(req, res, settings, auth = { managedId: null })
       started,
       liveId,
       trace,
+      // A combo is the one chain the operator composes by hand, so every step is
+      // tried even when an earlier one rejects the body or dies mid-stream.
+      exhaustive: true,
     });
   }
 
@@ -687,7 +726,7 @@ function antigravityBody(provider, body, model, row) {
 // One model, end to end. Returns a plain result object instead of always writing
 // to `res`, so the chain loop can decide whether to fall through to the next
 // model. `res` is only touched once the outcome is known.
-async function handleSingleChat(req, res, settings, auth, { body, started, modelName, deferHeaders = false, chained = false, liveId = null, trace = null }) {
+async function handleSingleChat(req, res, settings, auth, { body, started, modelName, deferHeaders = false, chained = false, liveId = null, trace = null, deadline = 0, allowStreamRetry = false }) {
   // Every target the relay actually reaches is appended here, so a failed chain
   // reports the same walk the client saw in the error message.
   if (trace && modelName) trace.attempted.push(String(modelName));
@@ -825,8 +864,17 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
     }
   };
   res.on('close', onClose);
-  const timer = setTimeout(() => controller.abort(), settings.timeoutMs);
+  // One attempt never outlives the chain budget it was given, and never exceeds
+  // its own deadline either.
+  const budget = deadline ? Math.max(1, deadline - Date.now()) : settings.timeoutMs;
+  const timer = setTimeout(() => controller.abort(), Math.max(1, Math.min(settings.timeoutMs, budget)));
   let activeId = null;
+  // Set only once a streamed response owns the socket; cleared in `finally` so
+  // a heartbeat can never outlive its turn.
+  let heartbeat = null;
+  // Set once a chained stream parks its frames; the catch paths use it to tell
+  // "failed before any output" from "died after the client saw content".
+  let streamSink = null;
 
   const callUpstream = (payload, token) =>
     dataPlaneFetch(provider.id, wireUrl, {
@@ -1155,19 +1203,35 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
     }
 
     if (wantsStream) {
-      // A combo may only move on BEFORE the first byte reaches the client. The
-      // upstream is already OK here, so from this point the model is locked.
-      res.writeHead(200, {
-        ...CORS_HEADERS,
-        'content-type': 'text/event-stream; charset=utf-8',
-        'cache-control': 'no-cache, no-transform',
-        connection: 'keep-alive',
-        'x-accel-buffering': 'no',
-      });
+      // A combo may only move on before real content reaches the client. The
+      // upstream is already OK here, but a chained attempt parks its frames
+      // until it proves it can answer, so the stream can still be replaced.
+      if (!res.headersSent) {
+        res.writeHead(200, {
+          ...CORS_HEADERS,
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache, no-transform',
+          connection: 'keep-alive',
+          'x-accel-buffering': 'no',
+        });
+      }
+      // The turn is accepted, so prove the stream is alive before upstream
+      // produces anything. A silent socket is indistinguishable from a dead one
+      // for a client, and some gateways only forward bytes once a body exists.
+      res.flushHeaders?.();
+      const ping = () => {
+        if (!res.writableEnded && !res.destroyed) res.write(': keep-alive\n\n');
+      };
+      ping();
+      heartbeat = setInterval(ping, settings.heartbeatMs > 0 ? settings.heartbeatMs : 20000);
+      heartbeat.unref?.();
 
       const acc = createAccumulator();
       const decoder = new TextDecoder();
       const bufferRef = { value: '' };
+      // Taps write through the sink, never straight to `res`: that is what lets
+      // a content-free failure hand the still-open stream to the next model.
+      streamSink = createStreamSink(res, acc, allowStreamRetry);
       // Tools are known only on the request, so opt the relay into native
       // token recovery here; without declared tools a leaked block stays text.
       if (nativeRecovery) acc.nativeToolStream = createNativeToolStream(body.tools);
@@ -1180,9 +1244,9 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
         account: attempt.row?.label || '',
       });
       for await (const chunk of upstream.body) {
-        if (wireFormat === 'responses') tapResponsesSSE(chunk, res, acc, decoder, bufferRef);
-        else if (translator) tapTranslatedSSE(chunk, res, acc, decoder, bufferRef, translator);
-        else tapSSE(chunk, res, acc, decoder, bufferRef);
+        if (wireFormat === 'responses') tapResponsesSSE(chunk, streamSink, acc, decoder, bufferRef);
+        else if (translator) tapTranslatedSSE(chunk, streamSink, acc, decoder, bufferRef, translator);
+        else tapSSE(chunk, streamSink, acc, decoder, bufferRef);
         if (acc.state.usage) {
           updateActiveRequest(activeId, {
             tokensIn: acc.state.usage.prompt_tokens || 0,
@@ -1191,16 +1255,16 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
         }
       }
       if (wireFormat === 'openai') {
-        flushSSE(res, acc, decoder, bufferRef);
+        flushSSE(streamSink, acc, decoder, bufferRef);
       } else if (wireFormat === 'responses') {
-        flushResponsesSSE(res, acc, decoder, bufferRef);
+        flushResponsesSSE(streamSink, acc, decoder, bufferRef);
       } else {
-        flushTranslatedSSE(res, acc, decoder, bufferRef, translator);
+        flushTranslatedSSE(streamSink, acc, decoder, bufferRef, translator);
       }
 
-      // Headers are gone, so this turn owns the response: a stream that ended
-      // without a finish signal (or carried an error frame) is reported as an
-      // error instead of a fake [DONE] and a successful empty completion.
+      // This attempt owns the response only once content left; a stream that
+      // ended without a finish signal (or carried an error frame) is a failure.
+      // Before content it can still be handed to the next combo step.
       const failureCode = acc.state.error ? 'stream_error' : !acc.isTerminal() ? 'stream_truncated' : null;
       if (failureCode) {
         return failStreamedTurn(res, acc, {
@@ -1210,6 +1274,27 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
           account: attempt.row?.label || '',
           liveId,
           trace,
+          retry: !streamSink.committed,
+        });
+      }
+
+      // A combo step can also "succeed" with nothing: 200, a finish frame and no
+      // text. Nothing reached the client yet, so let the next step answer instead
+      // of closing the turn empty (the signature of a model that just stopped).
+      const answeredEmpty = !acc.state.content
+        && !acc.state.reasoning
+        && acc.state.toolCalls.length === 0
+        && (acc.state.finishReason === null || acc.state.finishReason === 'stop');
+      if (allowStreamRetry && !streamSink.committed && answeredEmpty) {
+        return failStreamedTurn(res, acc, {
+          code: 'stream_truncated',
+          provider,
+          model,
+          account: attempt.row?.label || '',
+          liveId,
+          trace,
+          retry: true,
+          message: `Upstream stream ended without an answer (${provider.id}/${model}).`,
         });
       }
 
@@ -1225,7 +1310,7 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
             choices: [frame],
           };
           acc.feed(chunk);
-          res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+          streamSink.write(`data: ${JSON.stringify(chunk)}\n\n`);
         }
       }
       noteCompletionHealth({
@@ -1237,6 +1322,7 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
         stream: true,
         recovery: nativeRecovery,
       });
+      streamSink.commit();
       res.write('data: [DONE]\n\n');
       res.end();
       noteRequest({
@@ -1377,8 +1463,11 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
     if (!deferHeaders) sendJson(res, 200, completion);
     return { ok: true, status: 200, payload: completion, model, provider: provider.id };
   } catch (err) {
-    if (clientGone || err.name === 'AbortError') {
-      noteError(err.name === 'AbortError' ? 'Upstream timed out' : 'Client disconnected', {
+    // A parked stream that never produced content can still change hands; a
+    // committed one cannot, no matter what failed afterwards.
+    const canRetryStream = allowStreamRetry && streamSink !== null && !streamSink.committed;
+    if (clientGone) {
+      noteError('Client disconnected', {
         provider: provider.id,
         model,
         account: attempt.row?.label || '',
@@ -1392,17 +1481,52 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
         provider: provider.id,
         model,
         status: 499,
-        stage: clientGone ? 'client' : 'upstream',
+        stage: 'client',
       });
       if (!res.headersSent) {
         if (deferHeaders) return { ok: false, status: 499, message: 'Request aborted', model, fallback: false, aborted: true };
         sendError(res, 499, 'Request aborted');
       } else {
-        // The client is gone on disconnect, so only a timeout can be reported.
-        if (!clientGone) writeStreamErrorFrame(res, 'stream_timeout', 'Upstream timed out');
-        else res.end();
+        res.end();
       }
       return { ok: false, status: 499, message: 'Request aborted', model, fallback: false, aborted: true };
+    }
+    if (err.name === 'AbortError') {
+      // The deadline passed with no complete answer. Until headers leave, the
+      // caller still gets a real 504 body; afterwards the stream carries the
+      // failure frame, so the socket is never left silent.
+      const message = 'Upstream timed out';
+      noteError(message, {
+        provider: provider.id,
+        model,
+        account: attempt.row?.label || '',
+        status: 504,
+        trace,
+      });
+      publishLive({
+        phase: 'error',
+        id: liveId,
+        at: Date.now(),
+        provider: provider.id,
+        model,
+        status: 504,
+        stage: 'upstream',
+      });
+      if (canRetryStream) {
+        // Nothing visible left the relay, so a slow target is just another failed
+        // step: the chain may spend its remaining budget on the next model.
+        return { ok: false, status: 504, message, model, fallback: true, timedOut: true, streamRetry: true };
+      }
+      if (allowStreamRetry && !res.headersSent) {
+        return { ok: false, status: 504, message, model, fallback: true, timedOut: true, streamRetry: false };
+      }
+      if (!res.headersSent) {
+        if (deferHeaders) return { ok: false, status: 504, message, model, fallback: false, aborted: true };
+        sendError(res, 504, message, { code: 'stream_timeout' });
+      } else {
+        writeStreamErrorFrame(res, 'stream_timeout', message);
+      }
+      return { ok: false, status: 504, message, model, fallback: false, aborted: true };
     }
     // A proxy retry can escape the inner catch (the 401 refresh path), so the
     // same egress rule applies here: no account penalty, no model fallback.
@@ -1422,6 +1546,11 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
         if (deferHeaders) return { ok: false, status: 502, message, model, provider: provider.id, fallback: false };
         sendJson(res, 502, { error: { message, type: 'proxy_error', code: 'proxy_unavailable' } });
         return { ok: false, status: 502, message, model, provider: provider.id, fallback: false };
+      }
+      // A combo step that has not shown anything yet can be replaced even though
+      // this attempt already opened the stream.
+      if (canRetryStream) {
+        return { ok: false, status: 502, message, model, provider: provider.id, fallback: true, streamRetry: true };
       }
       writeStreamErrorFrame(res, 'proxy_unavailable', message, 'proxy_error');
       return { ok: false, status: 502, message, model, provider: provider.id, fallback: false };
@@ -1455,12 +1584,16 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
       return { ok: false, status: 502, message: err.message, model, provider: provider.id, fallback: true };
     }
     // Mid-stream failure: headers are gone, so report it in the stream instead
-    // of a bare close. A chain retry would append a second model's bytes to a
-    // response that already started, so the failure stays here.
+    // of a bare close. A combo step that produced no content can still be
+    // replaced on the same open response.
+    if (canRetryStream) {
+      return { ok: false, status: 502, message: err.message, model, provider: provider.id, fallback: true, streamRetry: true };
+    }
     writeStreamErrorFrame(res, 'stream_error', `Upstream request failed: ${err.message}`);
     return { ok: false, status: 502, message: err.message, model, provider: provider.id, fallback: false };
   } finally {
     if (activeId != null) endActiveRequest(activeId);
+    if (heartbeat) clearInterval(heartbeat);
     clearTimeout(timer);
     res.off('close', onClose);
   }
@@ -1488,23 +1621,28 @@ function feedResponsesEvent(acc, data) {
   }
 }
 
-// A fallback chain (combo or vision routing) tries each real model in order.
-// Only failures that describe the target (401/402/403/404/429/5xx) move to the
-// next one; a request-shaped 400 stops immediately so the same bad request is
-// not billed to every model. Nothing is written to `res` until a model succeeds,
+// A fallback chain (combo, rule, or vision routing) tries each real model in
+// order. Normally only failures that describe the target (401/402/403/404/429/
+// 5xx) move to the next one; a request-shaped 400 stops immediately so the same
+// bad request is not billed to every model. A combo passes `exhaustive`: the
+// operator composed that list by hand, so every step is tried within a shared
+// budget, and a streamed step that has not produced content yet can hand the open
+// stream to the next model. Nothing is written to `res` until a model succeeds,
 // so streaming clients never see bytes from a model that was abandoned.
-async function handleModelChain(req, res, settings, auth, { chain, failureLabel, errorFields = {}, body, started, liveId = null, trace = null }) {
+async function handleModelChain(req, res, settings, auth, { chain, failureLabel, errorFields = {}, body, started, liveId = null, trace = null, exhaustive = false }) {
   const attempts = [];
   let firstFallbackFailure = null;
   let lastFailure = null;
+  const deadline = exhaustive && settings.chainTimeoutMs > 0 ? started + settings.chainTimeoutMs : 0;
+  // True while a streamed step is parked: its headers left, but no content has,
+  // so the response can still be served by the next model.
+  let openStream = false;
 
   for (const modelName of chain) {
-    // A streamed attempt owns the response once its headers leave; never append
+    // A streamed attempt owns the response once content left; never append
     // another model's bytes behind a response that has already started.
-    if (res.headersSent) {
-      if (!res.writableEnded) res.end();
-      return undefined;
-    }
+    if (res.headersSent && !openStream) break;
+    if (deadline && Date.now() >= deadline) break;
     const result = await handleSingleChat(req, res, settings, auth, {
       body,
       started,
@@ -1513,7 +1651,10 @@ async function handleModelChain(req, res, settings, auth, { chain, failureLabel,
       chained: true,
       liveId,
       trace,
+      deadline,
+      allowStreamRetry: exhaustive,
     });
+    openStream = result.streamRetry === true;
     if (result.ok) {
       // The winning attempt returned instead of writing, so the chain loop is
       // responsible for the single response the client receives.
@@ -1528,24 +1669,29 @@ async function handleModelChain(req, res, settings, auth, { chain, failureLabel,
 
     attempts.push(modelName);
 
-    if (result.aborted) {
-      // The client went away or the request timed out; retrying another model
-      // would only waste quota.
-      if (!res.headersSent) {
-        sendError(res, result.status, result.message);
-      } else {
-        res.end();
-      }
-      return undefined;
-    }
-
     lastFailure = { status: result.status, message: result.message };
     if (!firstFallbackFailure) firstFallbackFailure = { status: result.status, message: result.message };
-    if (!result.fallback) break;
+
+    if (result.aborted) {
+      // The client went away; retrying another model would only waste quota. A
+      // combo step that spent its own deadline is different: it is just a slow
+      // target, and the chain budget decides whether another step may run.
+      const budgetLeft = exhaustive && result.timedOut && deadline && Date.now() < deadline;
+      if (!budgetLeft) {
+        if (!res.headersSent) {
+          sendError(res, result.status, result.message);
+        } else if (!res.writableEnded) {
+          res.end();
+        }
+        return undefined;
+      }
+      continue;
+    }
+    if (!exhaustive && !result.fallback) break;
   }
 
   // A non-fallback failure (request-shaped 400) is relayed as-is; a chain where
-  // every model hit a fallback status reports the first such status.
+  // every model failed reports the first such failure.
   const primary = firstFallbackFailure || lastFailure
     || { status: 502, message: 'No chain model could serve this request.' };
   const message = `${failureLabel} failed. Tried: ${attempts.join(' → ')}. ${primary.message}`;
@@ -1554,7 +1700,11 @@ async function handleModelChain(req, res, settings, auth, { chain, failureLabel,
   // promote to upstream_error when the failure really came from the server.
   const status = primary.status >= 400 && primary.status < 600 ? primary.status : 502;
   if (res.headersSent) {
-    if (!res.writableEnded) res.end();
+    if (!res.writableEnded) {
+      // Reaching here means a step opened the stream but its failure is still
+      // unsaid: close it with the chain failure, never as an empty answer.
+      writeStreamErrorFrame(res, 'stream_error', message);
+    }
     return undefined;
   }
   sendJson(res, status, {

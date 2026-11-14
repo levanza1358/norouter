@@ -43,6 +43,8 @@ Use only fake fixture values. Never point a production `.env` at test overrides.
 - Proxy URL parsing, canonicalisation, masking, and import parsing.
 - Proxy CONNECT/SOCKS tunnels against local fixtures, including authentication, target TLS, redirects, abort, and SSE passthrough.
 - Proxy selection precedence, strict/unavailable behaviour, benching, and proxy-off parity.
+- Combo walking: request-shaped 400, empty and silent streams, stream splicing, and mid-answer truncation.
+- Stream keep-alive cadence and the upstream deadline before and after headers, using a short-timer in-process server.
 
 ## Manual production checklist
 
@@ -59,4 +61,4 @@ Use only fake fixture values. Never point a production `.env` at test overrides.
 
 ## Known gaps
 
-Automated tests do not fully cover API-key gate scope, CORS, timeout/disconnect, admin exposure, SSRF policy, database concurrency/migration failure, accessibility/visual layout, or production CodeBuddy compatibility. Treat these as release review items.
+Automated tests do not fully cover API-key gate scope, CORS, client-disconnect races, admin exposure, SSRF policy, database concurrency/migration failure, accessibility/visual layout, or production CodeBuddy compatibility. Treat these as release review items.

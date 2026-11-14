@@ -42,6 +42,7 @@
 - 401/403 may trigger one refresh/retry for a pooled account.
 - 429 parks account using upstream retry hint, reset timestamp, or default 60 seconds.
 - 400/404/500 do not rotate through other accounts by default.
+- A combo walks every entry in order, including after a request-shaped 400, until one serves or the chain budget runs out. Rules and vision chains keep the stricter status-gated fallback.
 
 ## Import
 
@@ -73,6 +74,8 @@
 ## Limits
 
 - Account list default page size 20, max 200.
-- Upstream chat timeout defaults to 300 seconds.
+- Upstream chat deadline defaults to 240 seconds; streamed turns send a `: keep-alive` comment immediately and every 20 seconds until real frames arrive.
+- Combo chain budget defaults to 600 seconds; each step is still capped by the upstream deadline or the remaining budget.
+- Streams are spliced: a combo step that produced no content may be replaced on the same open response; a step that already sent content ends with one error frame and no `[DONE]`.
 - CodeBuddy refresh/quota helper timeout defaults to 15 seconds.
 - Model test timeout defaults to 30 seconds.

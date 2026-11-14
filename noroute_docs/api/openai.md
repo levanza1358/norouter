@@ -44,11 +44,11 @@ A combo is a named virtual model whose value is an ordered list of real models:
 
 Resolution checks the combo name **before** normal model resolution. A name containing `/` is always treated as `provider/model` and never as a combo. Models are tried in array order; the first one that answers serves the request.
 
-Fallback only moves to the next model for statuses that describe the target: `401`, `402`, `403`, `404`, `429`, and `5xx`. A `400` caused by the request itself (malformed body, context overflow, unsupported parameter) is returned immediately — retrying it on another model would bill another quota for the same client bug.
+Fallback is exhaustive: every model in the list is tried, in order, until one answers. A `400` caused by the request itself (malformed body, context overflow, unsupported parameter) does not end the walk — the operator built this list by hand, so the next model may still accept the body. Only a client disconnect stops the chain early. The whole walk shares `CHAIN_TIMEOUT_MS` (default 600 s); each step still gets at most `UPSTREAM_TIMEOUT_MS`, or whatever is left of the chain budget.
 
-Streaming is safe: no SSE headers or bytes reach the client until one model returns a successful response, so a stream never mixes two models. Once bytes start flowing the model is locked.
+Streaming is safe to splice: headers and the first `: keep-alive` reach the client as soon as a step is accepted, but frames are parked until that step produces content, reasoning, a tool call, or a finish reason. A step that ends without any of those (empty answer, cut connection, timeout, error frame) is discarded and the next model continues on the same open response. Once content has been sent the model is locked, and a later cut ends the stream with one `stream_truncated`/`stream_error` frame and no `[DONE]`.
 
-If every model fails, the response status comes from the first fallback-triggering failure, and the message names the combo and the models attempted:
+If every model fails, the response status comes from the first failure, and the message names the combo and the models attempted:
 
 ```json
 {
@@ -92,6 +92,8 @@ Cache-Control: no-cache, no-transform
 
 CodeBuddy is always called as a stream. The router relays bytes and records usage when available.
 
+The stream opens as soon as the upstream accepts the turn: headers plus one `: keep-alive` comment go out immediately, and the comment repeats every `STREAM_HEARTBEAT_MS` (default 20 s) until real frames arrive. Silence therefore means "still working", not a dead socket, and a buffering layer cannot hold a body that already has bytes. An upstream that misses `UPSTREAM_TIMEOUT_MS` (default 240 s) before headers ends the request with HTTP 504 and a JSON error carrying `code: "stream_timeout"`; after headers the same code arrives as one error frame. The connection is never left open without data.
+
 A stream counts as success only when the upstream proves the turn ended: a `finish_reason`, a `[DONE]` sentinel, or the wire's own terminal event (`response.completed` for Responses, `message_delta`/`message_stop` for Anthropic, `finishReason` for Antigravity). If the connection closes before that, or the upstream sends an error frame, the relay stops and writes one final error frame instead of a synthetic `[DONE]`:
 
 ```json
@@ -126,7 +128,7 @@ One global rule on the Combos page can force image requests onto a fixed model c
 
 On a request that brings no new image — a later text-only turn or a tool-loop continuation — replayed image parts are replaced with a short text placeholder before the request goes to its own model. Some upstreams refuse image input outright (Upstaged answers `400 Image input is not allowed for this model`); the vision chain already answered the image, so the placeholder keeps the conversation usable without pretending the original model saw the pixels.
 
-The forced chain runs with combo semantics: one credential attempt per target, fallback only for target-shaped failures, streaming-safe, and usage attributed to the model that actually served. If no configured target resolves, the request keeps its original model. A total failure returns the attempted list:
+The forced chain runs with the strict chain rules: one credential attempt per target, fallback only for target-shaped failures (a request-shaped 400 stops it), streaming-safe, and usage attributed to the model that actually served. If no configured target resolves, the request keeps its original model. A total failure returns the attempted list:
 
 ```json
 {
@@ -161,7 +163,7 @@ A request for `chat-alias` is resolved as `cbcn/glm-5.3`, and an alias may point
 }
 ```
 
-Conditions are ANDed and at least one is required: `header` (case-insensitive substring of the named request header), `apiKeyId` (the managed key that authenticated the call; only meaningful while `REQUIRE_API_KEY` is on), `minContextTokens` (rough `characters/4` plus 1,000 tokens per image), and `hasTools`. Rules run in order; the first enabled match wins, and a rule whose targets all fail to resolve is skipped so a later rule can answer. The chain uses combo semantics — same fallback statuses, streaming safety, and serving-model attribution — and a total failure names the rule:
+Conditions are ANDed and at least one is required: `header` (case-insensitive substring of the named request header), `apiKeyId` (the managed key that authenticated the call; only meaningful while `REQUIRE_API_KEY` is on), `minContextTokens` (rough `characters/4` plus 1,000 tokens per image), and `hasTools`. Rules run in order; the first enabled match wins, and a rule whose targets all fail to resolve is skipped so a later rule can answer. The chain uses the strict chain rules — target-shaped fallback statuses only, streaming safety, and serving-model attribution — and a total failure names the rule:
 
 ```json
 {
@@ -219,9 +221,11 @@ Without streaming the reply is a single `message` object with a `content` array 
 ## Request limits and timeout
 
 - Chat JSON body limit: 10 MiB.
-- Default upstream timeout: `UPSTREAM_TIMEOUT_MS=300000`.
+- Default upstream deadline: `UPSTREAM_TIMEOUT_MS=240000`, deliberately under five minutes so a client's own stall timer fires after the relay's.
+- Combo budget: `CHAIN_TIMEOUT_MS=600000` for the whole walk; each step is still capped by the upstream deadline or the remaining budget, whichever is smaller.
+- Stream keep-alive cadence: `STREAM_HEARTBEAT_MS=20000`.
 - Malformed JSON/model errors return 400.
-- Client disconnect or timeout may return 499 if headers were not sent.
+- Client disconnect returns 499; an upstream deadline returns 504 JSON before headers and a `stream_timeout` error frame mid-stream.
 - Network/upstream failures return 502 unless an upstream status is relayed.
 
 ### Daily budget

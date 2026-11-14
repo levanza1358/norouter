@@ -11,7 +11,9 @@
 | `REQUIRE_API_KEY` | `false` | Gate `/v1` and `/v1/*` only |
 | `ROUTER_API_KEY` | empty | Exact Bearer value when gate enabled |
 | `ENABLE_REQUEST_LOGS` | enabled | Only exact `false` disables request logs |
-| `UPSTREAM_TIMEOUT_MS` | `300000` | Chat upstream timeout |
+| `UPSTREAM_TIMEOUT_MS` | `240000` | Chat upstream deadline; kept under five minutes so a client stall timer outlives it |
+| `STREAM_HEARTBEAT_MS` | `20000` | `: keep-alive` SSE comment interval while a streamed turn waits for upstream bytes |
+| `CHAIN_TIMEOUT_MS` | `600000` | Total budget a combo may spend walking its whole list; each step is still capped by `UPSTREAM_TIMEOUT_MS` or the time left |
 | `NOROUTER_DB` | `data/norouter.db` | SQLite file path |
 | `config.local.json` | `port: 5555` | Ignored local Settings override; created when the dashboard port or autostart setting changes |
 | `autostart` in `config.local.json` | `false` | Desired local autostart state; actual registration is checked against the OS |

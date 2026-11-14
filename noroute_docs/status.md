@@ -37,6 +37,11 @@
   size, tools), and per-key default models. One settings snapshot drives both
   lookup steps, targets are canonicalised on save, and the request log records
   the requested model, route reason, via name, and attempted chain.
+- Named combos: ordered, cross-provider chains resolved before normal model
+  resolution. A combo walks every step, including after a request-shaped 400 or
+  a content-free stream, shares `CHAIN_TIMEOUT_MS`, and splices a streamed step
+  that produced nothing into the next model on the same open response. Rules and
+  vision chains keep the stricter status-gated fallback.
 - Managed API keys with custom/automatic secrets, expiry, request/token limits, and daily usage history.
 - Daily token/cost budgets per managed API key and per provider, stored in `meta` with counters in `budget_usage` (local-day reset, 90-day retention). A capped key gets 429 `budget_exhausted`; a capped provider is skipped by failover chains; a `budget` webhook event fires once per scope per day.
 - Background maintenance scheduler: token refresh (10 min), quota refresh (6 h), and Codex model catalog (12 h), with a configurable 15-minute default tick, a 5–1440 minute interval, per-task last result, and a manual **Run all now** that works while the scheduler is off. State persists in `meta`; task throws surface as `error` webhook events with `scope: "maintenance"`.
@@ -51,7 +56,7 @@
 - Subscription credential reuse outside the provider's own OAuth login.
 - Translation to upstreams other than the supported wires (OpenAI Chat,
   OpenAI Responses, Anthropic Messages, Antigravity Cloud Code/Gemini).
-- Multi-provider fallback.
+- Automatic multi-provider fallback for a bare model; cross-provider failover exists only through hand-composed combos, routing rules, or the vision chain.
 - Admin API authentication/RBAC/audit log; dashboard page password is not admin API authentication.
 - TLS, rate limiting, CSRF protection, SSRF allowlist.
 - Persistent global request history.
@@ -67,7 +72,7 @@
 - CodeBuddy quota body/host/fields are upstream-dependent.
 - Dashboard visual/accessibility behavior is not fully automated.
 - Free proxy sources are public and unreliable; validation drops most candidates, and a proxy can still block, delay, or inspect data-plane traffic. Treat the pool as untrusted.
-- Failed streams end with one error frame (`code: "stream_truncated"` / `"stream_error"`) and no `[DONE]`; the message text still comes from the upstream and differs per provider.
+- A chain that no model could serve ends with one error frame (`code: "stream_truncated"` / `"stream_error"`) and no `[DONE]`; the message text still comes from the upstream and differs per provider. A step that produced no content is retried with the next step instead of surfacing.
 - Daily budget cost is a local estimate from list prices, not provider billing. Unpriced models add tokens but zero cost, counters exist only for traffic routed through norouter, and they start when a limit is first configured.
 
 ## Research confidence

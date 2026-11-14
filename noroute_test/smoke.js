@@ -4365,7 +4365,7 @@ await test('combo falls back to the next model and records the serving model', a
   }
 });
 
-await test('a request-shaped 400 does not trigger combo fallback', async () => {
+await test('a combo walks past a request-shaped 400 to the next model', async () => {
   const create = await fetch(`${base}/api/combos`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -4380,10 +4380,14 @@ await test('a request-shaped 400 does not trigger combo fallback', async () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model: 'client-bug-combo', messages: [{ role: 'user', content: 'halo' }] }),
     });
-    assert.equal(res.status, 400, 'the client error must be relayed as-is');
     const body = await res.json();
-    assert.match(body.error.message, /context overflow/);
-    assert.deepEqual(stubCalls, ['combo-always-400'], 'the second model must never be called');
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.match(body.choices[0].message.content, /stub reply for glm-5\.3/);
+    assert.deepEqual(stubCalls, ['combo-always-400', 'glm-5.3'], 'a combo is exhaustive even on 400');
+
+    const log = (await (await fetch(`${base}/api/request-log`)).json()).requests.at(-1);
+    assert.equal(log.model, 'glm-5.3');
+    assert.deepEqual(log.attempted, ['cbcn/combo-always-400', 'cbcn/glm-5.3']);
   } finally {
     await fetch(`${base}/api/combos/${encodeURIComponent(created.combo.id)}`, { method: 'DELETE' });
   }
@@ -4442,6 +4446,153 @@ await test('a combo whose models all vanished resolves to a clear 400, not 500',
   assert.match(failed.error.message, /combo|Unknown model/i);
 
   await fetch(`${base}/api/combos/${encodeURIComponent(body.combo.id)}`, { method: 'DELETE' });
+});
+
+// Fixture models that only exist to exercise combo walking. Registered once,
+// like the combo-always-* models above; duplicates are fine.
+async function ensureStubModels(models) {
+  for (const model of models) {
+    const res = await fetch(`${base}/api/providers/codebuddy-cn/models`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model }),
+    });
+    assert.ok([201, 409].includes(res.status), await res.text());
+  }
+}
+
+// The earlier 429 tests park both pooled accounts, so a streamed combo test
+// needs one healthy credential of its own.
+async function withFreshComboAccount(fn) {
+  const label = `Combo stream ${Date.now()}`;
+  const create = await fetch(`${base}/api/providers/codebuddy-cn/accounts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label, access_token: `combo-stream-${Date.now()}` }),
+  });
+  assert.equal(create.status, 201, await create.text());
+  try {
+    await fn();
+  } finally {
+    const page = await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json();
+    for (const account of page.items.filter((row) => row.label === label)) {
+      await fetch(`${base}/api/providers/codebuddy-cn/accounts/${account.id}`, { method: 'DELETE' });
+    }
+  }
+}
+
+async function streamComboText(model) {
+  const res = await fetch(`${base}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model, stream: true, messages: [{ role: 'user', content: 'halo' }] }),
+  });
+  return { res, text: await res.text() };
+}
+
+// Content is relayed one delta per frame, so the answer has to be rebuilt
+// before matching it as a phrase.
+function sseContent(text) {
+  let answer = '';
+  for (const line of text.split('\n')) {
+    if (!line.startsWith('data: ')) continue;
+    const data = line.slice(6);
+    if (data === '[DONE]') continue;
+    try {
+      answer += JSON.parse(data).choices?.[0]?.delta?.content || '';
+    } catch {
+      // Keep-alive comments and torn frames are not part of the answer.
+    }
+  }
+  return answer;
+}
+
+await test('a streamed combo splices the next model into the same open stream', async () => {
+  await ensureStubModels(['empty-stream-openai', 'silent-stream-openai']);
+  await withFreshComboAccount(async () => {
+    for (const [name, first] of [['empty-stream-combo', 'empty-stream-openai'], ['silent-stream-combo', 'silent-stream-openai']]) {
+      const create = await fetch(`${base}/api/combos`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name, models: [`cbcn/${first}`, 'cbcn/glm-5.3'] }),
+      });
+      const created = await create.json();
+      assert.equal(create.status, 201, JSON.stringify(created));
+      try {
+        stubCalls.length = 0;
+        const { res, text } = await streamComboText(name);
+        assert.equal(res.status, 200, text.slice(0, 200));
+        assert.match(res.headers.get('content-type') || '', /text\/event-stream/);
+        assert.match(text, /^: keep-alive\n\n/, 'the first step already opened the stream');
+        assert.match(sseContent(text), /stub reply for glm-5\.3/);
+        assert.ok(!/"error"/.test(text), 'a recoverable step must not surface an error frame');
+        assert.ok(text.endsWith('data: [DONE]\n\n'));
+        assert.deepEqual(stubCalls, [first, 'glm-5.3'], 'the empty step must be handed to the next model');
+
+        const log = (await (await fetch(`${base}/api/request-log`)).json()).requests.at(-1);
+        assert.equal(log.model, 'glm-5.3');
+        assert.equal(log.status, 200);
+        assert.deepEqual(log.attempted, [`cbcn/${first}`, 'cbcn/glm-5.3']);
+      } finally {
+        await fetch(`${base}/api/combos/${encodeURIComponent(created.combo.id)}`, { method: 'DELETE' });
+      }
+    }
+  });
+});
+
+await test('a streamed combo keeps partial content when a step dies mid-answer', async () => {
+  await ensureStubModels(['truncated-openai']);
+  await withFreshComboAccount(async () => {
+    const create = await fetch(`${base}/api/combos`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'truncated-combo', models: ['cbcn/truncated-openai', 'cbcn/glm-5.3'] }),
+    });
+    const created = await create.json();
+    assert.equal(create.status, 201, JSON.stringify(created));
+    try {
+      stubCalls.length = 0;
+      const { res, text } = await streamComboText('truncated-combo');
+      assert.equal(res.status, 200);
+      assert.match(text, /half an ans/, 'bytes already sent must not be replayed');
+      assert.match(text, /"code":"stream_truncated"/);
+      assert.ok(!text.includes('glm-5.3'), 'a committed stream must not switch models');
+      assert.ok(!text.includes('data: [DONE]'), 'a cut stream must not end with the success sentinel');
+      assert.deepEqual(stubCalls, ['truncated-openai']);
+    } finally {
+      await fetch(`${base}/api/combos/${encodeURIComponent(created.combo.id)}`, { method: 'DELETE' });
+    }
+  });
+});
+
+await test('a combo steps past a stream that misses the deadline before headers', async () => {
+  await ensureStubModels(['slow-headers']);
+  await withFreshComboAccount(async () => {
+    await withServer({ heartbeatMs: 60, timeoutMs: 400, chainTimeoutMs: 8000 }, async (origin) => {
+      const create = await fetch(`${origin}/api/combos`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'slow-step-combo', models: ['cbcn/slow-headers', 'cbcn/glm-5.3'] }),
+      });
+      const created = await create.json();
+      assert.equal(create.status, 201, JSON.stringify(created));
+      try {
+        stubCalls.length = 0;
+        const res = await fetch(`${origin}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ model: 'slow-step-combo', stream: true, messages: [{ role: 'user', content: 'halo' }] }),
+        });
+        const text = await res.text();
+        assert.equal(res.status, 200, text.slice(0, 200));
+        assert.match(sseContent(text), /stub reply for glm-5\.3/);
+        assert.ok(!/"code":"stream_timeout"/.test(text), 'the deadline is per step, not per combo');
+        assert.deepEqual(stubCalls, ['slow-headers', 'glm-5.3']);
+      } finally {
+        await fetch(`${origin}/api/combos/${encodeURIComponent(created.combo.id)}`, { method: 'DELETE' });
+      }
+    });
+  });
 });
 
 await test('vision routing validates, stores canonical targets and persists', async () => {
@@ -5660,8 +5811,8 @@ await test('a leaked native tool call is recovered end to end', async () => {
 // The relay is shared by every wire, so each wire gets a provider that points
 // at a stub fixture which cuts the stream. A cut turn must surface as an error
 // frame (or a 502 when nothing was sent yet), never as a fake success.
-async function createWireProvider({ id, format = 'openai', forceStream = false, models }) {
-  const created = await fetch(`${base}/api/providers`, {
+async function createWireProvider({ id, format = 'openai', forceStream = false, models, origin = base }) {
+  const created = await fetch(`${origin}/api/providers`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -5677,7 +5828,7 @@ async function createWireProvider({ id, format = 'openai', forceStream = false, 
   assert.equal(created.status, 201, body);
   // The stub rejects unauthenticated upstreams, so the provider needs one
   // pooled account even though it is otherwise open.
-  const account = await fetch(`${base}/api/providers/${id}/accounts`, {
+  const account = await fetch(`${origin}/api/providers/${id}/accounts`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ accessToken: `stub-${id}-token`, label: 'stub' }),
@@ -5685,9 +5836,22 @@ async function createWireProvider({ id, format = 'openai', forceStream = false, 
   assert.equal(account.status, 201, await account.text());
 }
 
-async function dropWireProvider(id) {
-  const res = await fetch(`${base}/api/providers/${id}`, { method: 'DELETE' });
+async function dropWireProvider(id, origin = base) {
+  const res = await fetch(`${origin}/api/providers/${id}`, { method: 'DELETE' });
   assert.equal(res.status, 200);
+}
+
+// Timing behavior (heartbeat cadence, deadline) is only observable with a
+// server whose settings are small enough to wait out inside a test.
+async function withServer(overrides, fn) {
+  const { server } = createServer({ port: 0, host: '127.0.0.1', logRequests: false, ...overrides });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  try {
+    return await fn(`http://127.0.0.1:${server.address().port}`);
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise((resolve) => server.close(resolve));
+  }
 }
 
 async function wireTotals(id) {
@@ -5796,6 +5960,58 @@ await test('a force-stream upstream that cuts off fails the buffered turn', asyn
   } finally {
     await dropWireProvider(id);
   }
+});
+
+await test('a streamed turn keeps the socket alive while upstream is silent', async () => {
+  const id = `wire-heartbeat-${Date.now()}`;
+  await withServer({ heartbeatMs: 40, timeoutMs: 8000 }, async (origin) => {
+    await createWireProvider({ id, models: 'slow-body', origin });
+    try {
+      const before = await wireTotals(id);
+      const res = await fetch(`${origin}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: `${id}/slow-body`, stream: true, messages: [{ role: 'user', content: 'halo' }] }),
+      });
+      const text = await res.text();
+      assert.equal(res.status, 200);
+      assert.match(res.headers.get('content-type') || '', /text\/event-stream/);
+      assert.match(text, /^: keep-alive\n\n/, 'the first bytes are a heartbeat, not silence');
+      const preamble = text.slice(0, text.indexOf('data:'));
+      assert.ok((preamble.match(/: keep-alive/g) || []).length >= 2, 'the comment repeats while upstream is silent');
+      assert.match(text, /slow-body-answer/);
+      assert.ok(text.endsWith('data: [DONE]\n\n'), 'a normal finish still ends with the sentinel');
+      const after = await wireTotals(id);
+      assert.equal(after.requests, before.requests + 1);
+    } finally {
+      await dropWireProvider(id, origin);
+    }
+  });
+});
+
+await test('an upstream that misses the deadline answers 504 JSON', async () => {
+  const id = `wire-timeout-${Date.now()}`;
+  await withServer({ heartbeatMs: 40, timeoutMs: 250 }, async (origin) => {
+    await createWireProvider({ id, models: 'slow-headers', origin });
+    try {
+      const before = await wireTotals(id);
+      const res = await fetch(`${origin}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: `${id}/slow-headers`, stream: true, messages: [{ role: 'user', content: 'halo' }] }),
+      });
+      assert.equal(res.status, 504, 'the client gets a status, not a dropped socket');
+      assert.match(res.headers.get('content-type') || '', /application\/json/);
+      const body = await res.json();
+      assert.match(body.error.message, /timed out/i);
+      assert.equal(body.error.code, 'stream_timeout');
+      const after = await wireTotals(id);
+      assert.equal(after.errors, before.errors + 1);
+      assert.equal(after.requests, before.requests, 'a timed-out turn is not a served request');
+    } finally {
+      await dropWireProvider(id, origin);
+    }
+  });
 });
 
 await test('the Responses wire reports truncation and keeps intentional endings', async () => {

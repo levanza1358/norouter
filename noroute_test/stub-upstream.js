@@ -45,12 +45,18 @@ function quotaPayload(token) {
   return payload;
 }
 
-function sse(res, model, text, { fail = false } = {}) {
+async function sse(res, model, text, { fail = false, delayMs = 0 } = {}) {
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache',
     connection: 'keep-alive',
   });
+  // Real streamed gateways send their headers before the first token, which is
+  // what opens the client stream while the model is still thinking.
+  res.flushHeaders();
+  // Headers are already out; the silence before the first frame is the window a
+  // heartbeat has to cover.
+  if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
 
   const id = `chatcmpl-stub-${Date.now()}`;
   const send = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -603,7 +609,7 @@ const handler = async (req, res) => {
 
   // Combo tests need models whose failure mode is deterministic and countable.
   // `combo-always-429` never succeeds; `combo-always-400` fails with a
-  // request-shaped error that must NOT trigger a combo fallback.
+  // request-shaped error, which a combo must still walk past.
   if (body.model === 'combo-always-429') {
     calls.push(body.model);
     res.writeHead(429, { 'content-type': 'application/json', 'retry-after': '1' });
@@ -620,6 +626,50 @@ const handler = async (req, res) => {
 
   if (body.model === 'idle') {
     await new Promise((r) => setTimeout(r, 450));
+  }
+
+  // Headers held back: nothing reaches the relay, so only its own deadline can
+  // end the wait. Must surface as a status code, not a dropped socket.
+  if (body.model === 'slow-headers') {
+    await new Promise((r) => setTimeout(r, 600));
+    return sse(res, body.model, 'slow headers answer');
+  }
+
+  // Headers immediately, body after a pause: the relay must keep the client
+  // stream alive (SSE comment) while it waits for the first real frame.
+  if (body.model === 'slow-body') {
+    return sse(res, body.model, 'slow-body-answer', { delayMs: 400 });
+  }
+
+  // A well-formed stream that carries no answer at all: the combo must treat it
+  // as a failed step and splice the next model into the same open response.
+  if (body.model === 'empty-stream-openai') {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+    });
+    res.flushHeaders();
+    res.write(`data: ${JSON.stringify({
+      id: `chatcmpl-stub-empty-${Date.now()}`,
+      object: 'chat.completion.chunk',
+      created: Math.floor(Date.now() / 1000),
+      model: body.model,
+      choices: [{ index: 0, delta: { role: 'assistant', content: '' } }],
+    })}\n\n`);
+    res.write('data: [DONE]\n\n');
+    return res.end();
+  }
+
+  // Headers, then immediate EOF with not a single frame.
+  if (body.model === 'silent-stream-openai') {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+    });
+    res.flushHeaders();
+    return res.end();
   }
 
   // Echo the received reasoning fields so the smoke suite can assert what the
