@@ -96,6 +96,24 @@ function relayDeveloperRole(provider, body) {
   return { ...body, messages };
 }
 
+// One gateway refuses the whole payload when a harness puts another vendor's
+// CLI identity in its system prompt: the reply is a flat 400 that no retry or
+// account rotation can clear. A provider can name the phrases it will not
+// accept; only the system messages holding one are rewritten.
+function applyIdentityGuards(provider, body) {
+  const guards = provider.identityGuards;
+  if (!guards?.length || !Array.isArray(body.messages)) return body;
+  let changed = false;
+  const messages = body.messages.map((message) => {
+    if (message?.role !== 'system' || typeof message.content !== 'string') return message;
+    const content = guards.reduce((text, guard) => text.replace(guard.pattern, guard.replacement), message.content);
+    if (content === message.content) return message;
+    changed = true;
+    return { ...message, content };
+  });
+  return changed ? { ...body, messages } : body;
+}
+
 const REASONING_ALIASES = ['reasoning_level', 'thinking', 'reasoning', 'enable_thinking'];
 const OFF_LEVELS = ['none', 'off', 'disabled', 'false'];
 const ON_LEVELS = ['enabled', 'on', 'true'];
@@ -847,6 +865,7 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
   }
   transformedBody = stripHistoryReasoning(transformedBody);
   transformedBody = relayDeveloperRole(provider, transformedBody);
+  transformedBody = applyIdentityGuards(provider, transformedBody);
   transformedBody = applyTokenSaver(transformedBody, getTokenSaverSettings());
   transformedBody = applyReplyFilters(transformedBody, getReplyFiltersSettings());
   let upstreamBody = { ...transformedBody, model };

@@ -806,6 +806,44 @@ await test('a one-off channel refusal is retried on the same account', async () 
   }
 });
 
+await test('CodeBuddy CN rewrites a foreign CLI identity instead of burning the pool', async () => {
+  const created = await fetch(`${base}/api/providers/codebuddy-cn/accounts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label: 'Identity guard account', access_token: 'identity-guard-token' }),
+  });
+  assert.equal(created.status, 201);
+  try {
+    chatBodies.length = 0;
+    const prompt = "You are Claude Code, Anthropic's official CLI for Claude. Follow the operator instructions.";
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'cbcn/glm-5.3', messages: [{ role: 'system', content: prompt }, { role: 'user', content: 'halo' }] }),
+    });
+    assert.equal(res.status, 200, await res.clone().text());
+    const upstream = chatBodies.find((item) => item.model === 'glm-5.3');
+    assert.match(upstream.messages[0].content, /a coding agent CLI/);
+    assert.doesNotMatch(upstream.messages[0].content, /official CLI/);
+    assert.match(upstream.messages[0].content, /Follow the operator instructions\./, 'the rest of the harness prompt is relayed');
+
+    const [account] = (await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json()).items
+      .filter((item) => item.label === 'Identity guard account');
+    assert.ok(!account.lastError, 'a served turn must not park the account');
+
+    // A harness prompt without that claim is relayed byte for byte.
+    chatBodies.length = 0;
+    await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'cbcn/glm-5.3', messages: [{ role: 'system', content: 'You are a helpful assistant.' }, { role: 'user', content: 'halo' }] }),
+    });
+    assert.match(chatBodies.find((item) => item.model === 'glm-5.3').messages[0].content, /^You are a helpful assistant\./);
+  } finally {
+    const account = (await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json()).items
+      .find((item) => item.label === 'Identity guard account');
+    if (account) await fetch(`${base}/api/providers/codebuddy-cn/accounts/${account.id}`, { method: 'DELETE' });
+  }
+});
+
 await test('reply style instruction survives the Responses translation', async () => {
   const settings = { language: 'en', verbosity: 'detailed', coding: true, focus: 'Stay on backend debugging.', addressAs: 'Dimas' };
   const body = applyReplyFilters({ model: 'cx/gpt-5.3-codex', messages: [{ role: 'user', content: 'hi' }] }, settings);

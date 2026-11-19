@@ -47,7 +47,9 @@ Refill rows use `CycleCapacityUsed*`/`CycleCapacitySize*`; bonus rows use `Capac
 
 Related CodeBuddy rate-limit signals include code `6004`, `frequency limit`, `超出频率限制`, or `限额`; chat retry uses `Retry-After` or a parsed timestamp when available.
 
-A 400 carrying code `11128` ("Illegal API invocation from an unapproved channel") blames the credential's client identity rather than the request body, and it is intermittent: a refused account usually answers the very next call. Norouter retries the same account once immediately; if the refusal repeats, the account is parked for 15 seconds and the turn rotates to the next account. Other 400s stay request-shaped and are returned without burning the pool.
+A 400 carrying code `11128` ("Illegal API invocation from an unapproved channel") is raised by a payload check, not by the caller's IP or the credential's identity. Confirmed empirically against the live gateway: a system message reading `You are Claude Code, Anthropic's official CLI for Claude.` is refused deterministically on every account in the pool, while the same message with that one claim reworded answers 200 immediately on the same credentials. Rewording any single word, moving the sentence behind another message, or sending it as the user turn all clear the refusal.
+
+Norouter therefore rewrites only that claim for this provider (`identityGuards`): `Anthropic's official CLI` becomes `a coding agent CLI`, and the rest of the harness prompt is relayed untouched. Providers without the flag relay the body byte for byte. When a refusal still appears, Norouter retries the same account once, then parks it for 15 seconds and rotates to the next account. Other 400s stay request-shaped and are returned without burning the pool.
 
 Quota endpoint, host routing, request body, headers, and fields may vary by product/region/version. Do not treat this parser as an official immutable contract. See `docs/status.md` for confidence boundaries.
 

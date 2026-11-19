@@ -631,6 +631,14 @@ const handler = async (req, res) => {
     return res.end(JSON.stringify({ error: { message: 'stub: unsupported role developer', type: 'invalid_request_error' } }));
   }
 
+  // The channel check reads the payload: a harness announcing another vendor's
+  // CLI is refused on every account, so only a rewrite of that claim can serve.
+  if (body.messages?.some((message) => message?.role === 'system'
+    && /Anthropic['\u2019]s official CLI/i.test(String(message.content)))) {
+    res.writeHead(400, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ code: 11128, msg: 'Illegal API invocation from an unapproved channel' }));
+  }
+
   // One credential is refused by the channel check while the rest serve
   // normally, so account rotation can be proven to skip it.
   if (token === 'channel-refused-token') {

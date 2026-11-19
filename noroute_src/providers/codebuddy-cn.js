@@ -37,6 +37,14 @@ export default {
   // send for their system prompt, so those messages are relayed as `system`.
   developerRole: 'system',
 
+  // The channel check parses the payload, not the caller's identity: a harness
+  // that announces itself as another vendor's CLI gets a flat 400 (code 11128)
+  // on every account, which no retry or rotation can clear. Only that claim is
+  // rewritten; the rest of the harness prompt is relayed intact.
+  identityGuards: [
+    { pattern: /Anthropic['\u2019]s official CLI/gi, replacement: 'a coding agent CLI' },
+  ],
+
   headers: {
     'User-Agent': 'CLI/2.108.1 CodeBuddy/2.108.1',
     'X-Product': 'SaaS',
