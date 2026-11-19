@@ -76,9 +76,11 @@ export function publicAccount(row) {
     label: row.label,
     kind: row.kind,
     uid: row.uid,
-    // Codex tokens carry the account email in their claims, so the pool can
-    // name the person behind `cx_1` without asking OpenAI.
-    email: emailFromToken(row.access_token) || emailFromToken(row.refresh_token),
+    // Codex keeps the email inside its token claims; Antigravity already uses
+    // the Google email as the account uid. Either way the pool can name the
+    // person behind `cx_1` / `ag_1` without asking the provider.
+    email: emailFromToken(row.access_token) || emailFromToken(row.refresh_token)
+      || (String(row.uid).includes('@') ? row.uid : ''),
     masked: maskToken(row.access_token || row.refresh_token),
     hasAccessToken: Boolean(row.access_token),
     hasRefreshToken: Boolean(row.refresh_token),

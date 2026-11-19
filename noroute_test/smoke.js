@@ -5679,6 +5679,17 @@ await test('the pool row exposes the Codex account email, never the token', () =
   assert.equal(row.masked.includes(jwt), false, 'the raw token must never reach the dashboard');
 });
 
+await test('an Antigravity row exposes its Google email as the account email', () => {
+  const created = createAccount('identity-google-test', {
+    access_token: 'ag-google-access',
+    uid: 'google-user@example.com',
+  });
+  assert.equal(created.added, 1);
+  const row = getAccount(created.id);
+  assert.equal(row.email, 'google-user@example.com');
+  assert.equal(row.uid, 'google-user@example.com');
+});
+
 await test('a re-login updates its account instead of adding a twin', () => {
   const first = createAccount('identity-test', {
     access_token: 'relogin-old-access',
