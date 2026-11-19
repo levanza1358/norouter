@@ -771,6 +771,41 @@ await test('a channel rejection rotates to the next account instead of failing t
   }
 });
 
+await test('a one-off channel refusal is retried on the same account', async () => {
+  const created = await fetch(`${base}/api/providers`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      id: 'chan-flaky',
+      name: 'Chan Flaky',
+      prefix: 'chf',
+      baseUrl: `${stubBase}/v2`,
+      models: ['flaky-model'],
+      requiresAccount: true,
+      accountStrategy: 'sequential',
+    }),
+  });
+  assert.equal(created.status, 201, await created.clone().text());
+  try {
+    const res = await fetch(`${base}/api/providers/chan-flaky/accounts`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 'Flaky account', access_token: 'channel-flaky-token' }),
+    });
+    assert.equal(res.status, 201, await res.clone().text());
+
+    const chat = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'chf/flaky-model', messages: [{ role: 'user', content: 'halo' }] }),
+    });
+    assert.equal(chat.status, 200, await chat.clone().text());
+
+    const [account] = (await (await fetch(`${base}/api/providers/chan-flaky/accounts?pageSize=50`)).json()).items;
+    assert.ok(!account.lastError, 'a refusal that clears on retry must not park the account');
+  } finally {
+    await fetch(`${base}/api/providers/chan-flaky`, { method: 'DELETE' });
+  }
+});
+
 await test('reply style instruction survives the Responses translation', async () => {
   const settings = { language: 'en', verbosity: 'detailed', coding: true, focus: 'Stay on backend debugging.', addressAs: 'Dimas' };
   const body = applyReplyFilters({ model: 'cx/gpt-5.3-codex', messages: [{ role: 'user', content: 'hi' }] }, settings);

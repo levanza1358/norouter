@@ -182,6 +182,7 @@ let issued = 0;
 // combo actually reached.
 export const calls = [];
 export const chatBodies = [];
+const channelRefusals = new Map();
 export const responsesBodies = [];
 export const anthropicBodies = [];
 export const antigravityBodies = [];
@@ -635,6 +636,17 @@ const handler = async (req, res) => {
   if (token === 'channel-refused-token') {
     res.writeHead(400, { 'content-type': 'application/json' });
     return res.end(JSON.stringify({ code: 11128, msg: 'Illegal API invocation from an unapproved channel' }));
+  }
+
+  // The real check is intermittent: it refuses once and then answers. This
+  // proves the relay retries the same credential before parking it.
+  if (token === 'channel-flaky-token') {
+    const seen = channelRefusals.get(token) || 0;
+    channelRefusals.set(token, seen + 1);
+    if (seen === 0) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      return res.end(JSON.stringify({ code: 11128, msg: 'Illegal API invocation from an unapproved channel' }));
+    }
   }
 
   if (body.model === 'idle') {

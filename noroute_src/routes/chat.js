@@ -40,9 +40,11 @@ const AUTH_COOLDOWN_MS = 5 * 60_000;
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_ATTEMPTS = 4;
 // CodeBuddy answers this 400 when it refuses the caller's channel. It is tied to
-// the credential's client identity, not to the request body, so another account
-// can still serve the same turn.
+// the credential's client identity, not to the request body, and it clears on
+// its own: a refused account usually answers the very next call. Retry the same
+// account once, then park it briefly and rotate.
 const CHANNEL_REJECTION = /"code"\s*:\s*11128|unapproved channel|channel verification/i;
+const CHANNEL_COOLDOWN_MS = 15_000;
 
 function isChannelRejection(status, text) {
   return status === 400 && CHANNEL_REJECTION.test(text);
@@ -979,6 +981,21 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
         }
       }
 
+      // The channel check is intermittent: one immediate retry on the same
+      // credential usually clears it, so the account is not parked for a blip.
+      if (!response.ok && attempt.row) {
+        const peek = failure?.status === response.status ? failure.text : await response.clone().text();
+        if (isChannelRejection(response.status, peek)) {
+          const retry = await callUpstream(payloadFor(attempt.row), attempt.token);
+          if (retry.ok) {
+            upstream = retry;
+            break;
+          }
+          response = retry;
+          failure = null;
+        }
+      }
+
       if (response.ok) {
         upstream = response;
         break;
@@ -1013,13 +1030,14 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
         continue;
       }
 
-      // A channel rejection is a 400 that blames this credential's client
-      // identity, so the next account is worth trying instead of failing the
-      // turn. It is still not the request's fault, hence the short cooldown.
+      // A channel rejection that survived the immediate retry blames this
+      // credential's client identity, so the next account is worth trying
+      // instead of failing the turn. It is still not the request's fault,
+      // hence the short cooldown.
       if (attempt.row && isChannelRejection(response.status, text)) {
         markFailure(attempt.row.id, {
           message: 'Upstream refused the channel for this credential.',
-          cooldownMs: DEFAULT_COOLDOWN_MS,
+          cooldownMs: CHANNEL_COOLDOWN_MS,
         });
         continue;
       }
