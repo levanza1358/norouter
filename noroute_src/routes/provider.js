@@ -1,6 +1,7 @@
 import { accountCounts, getAccountRow, listAccounts, poolToken } from '../lib/accounts.js';
 import { readJson, sendError, sendJson } from '../lib/http.js';
 import { addCustomModel, customModels, modelEnabled, removeCustomModel, setModelEnabled } from '../lib/custom-models.js';
+import { pruneCombos } from '../lib/combos.js';
 import { providerUsage, stats } from '../lib/stats.js';
 import { testProviderModels } from '../lib/model-test.js';
 import { modelCapability } from '../providers/model-capabilities.js';
@@ -178,6 +179,7 @@ export async function handleUpdateProvider(req, res, rawId) {
   const id = decodeURIComponent(rawId);
   const result = updateProvider(id, body);
   if (result.error) return sendError(res, result.status || 400, result.error);
+  pruneCombos();
   return sendJson(res, 200, providerSnapshot(result.provider));
 }
 
@@ -188,6 +190,7 @@ export function handleDeleteProvider(req, res, rawId) {
     return sendError(res, 400, `"${provider.id}" ships with the router. Remove its file in src/providers/ instead.`);
   }
   removeProvider(provider.id);
+  pruneCombos();
   return sendJson(res, 200, { removed: provider.id });
 }
 
@@ -270,6 +273,7 @@ export function handleRemoveModel(req, res, rawId, rawModel) {
   if (!removeCustomModel(provider.id, model)) {
     return sendError(res, 404, `"${model}" is not a custom model. Catalog models ship with the provider file.`);
   }
+  pruneCombos();
   return sendJson(res, 200, providerSnapshot(provider));
 }
 

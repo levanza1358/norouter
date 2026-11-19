@@ -4449,9 +4449,9 @@ await test('a combo whose models all vanished resolves to a clear 400, not 500',
 });
 
 await test('a combo skips a vanished entry instead of failing the request', async () => {
-  // A provider or model can be removed while a combo still names it. The stored
-  // list keeps the entry (it is the operator's text), but the walk must drop it
-  // rather than count an "Unknown model" error for every request.
+  // A provider or model can be removed while a combo still names it. Deleting it
+  // prunes the combo, and the walk still guards against a race so a stale entry
+  // can never count an "Unknown model" error against a working chain.
   const model = `combo-gone-${Date.now()}`;
   await fetch(`${base}/api/providers/codebuddy-cn/models`, {
     method: 'POST',
@@ -4469,6 +4469,11 @@ await test('a combo skips a vanished entry instead of failing the request', asyn
   await fetch(`${base}/api/providers/codebuddy-cn/models/${encodeURIComponent(model)}`, { method: 'DELETE' });
 
   try {
+    // Deleting the model also drops it from every combo that named it.
+    const pruned = (await (await fetch(`${base}/api/combos`)).json()).combos
+      .find((row) => row.id === body.combo.id);
+    assert.deepEqual(pruned.models, ['cbcn/glm-5.3'], 'the deleted model must leave the combo');
+
     await withFreshComboAccount(async () => {
       const before = await (await fetch(`${base}/api/usage?range=day`)).json();
       stubCalls.length = 0;
@@ -4489,6 +4494,50 @@ await test('a combo skips a vanished entry instead of failing the request', asyn
     });
   } finally {
     await fetch(`${base}/api/combos/${encodeURIComponent(body.combo.id)}`, { method: 'DELETE' });
+  }
+});
+
+await test('a combo with no surviving model is removed with the model', async () => {
+  const model = `combo-only-${Date.now()}`;
+  await ensureStubModels([model]);
+  const created = await fetch(`${base}/api/combos`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'lonely-combo', models: [`cbcn/${model}`] }),
+  });
+  const body = await created.json();
+  assert.equal(created.status, 201, JSON.stringify(body));
+
+  await fetch(`${base}/api/providers/codebuddy-cn/models/${encodeURIComponent(model)}`, { method: 'DELETE' });
+
+  const list = (await (await fetch(`${base}/api/combos`)).json()).combos;
+  assert.equal(list.some((row) => row.id === body.combo.id), false, 'an empty combo must not linger');
+});
+
+await test('deleting a custom provider prunes it from combos', async () => {
+  const stamp = Date.now();
+  const id = `prune-${stamp}`;
+  const created = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: `Prune ${stamp}`, id, baseUrl: `${stubBase}/v2`, models: 'prune-model' }),
+  });
+  assert.equal(created.status, 201, await created.text());
+  const combo = await fetch(`${base}/api/combos`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'provider-combo', models: [`${id}/prune-model`, 'cbcn/glm-5.3'] }),
+  });
+  const comboBody = await combo.json();
+  assert.equal(combo.status, 201, JSON.stringify(comboBody));
+
+  try {
+    assert.equal((await fetch(`${base}/api/providers/${id}`, { method: 'DELETE' })).status, 200);
+    const pruned = (await (await fetch(`${base}/api/combos`)).json()).combos
+      .find((row) => row.id === comboBody.combo.id);
+    assert.deepEqual(pruned.models, ['cbcn/glm-5.3'], 'the removed provider must leave the combo');
+  } finally {
+    await fetch(`${base}/api/combos/${encodeURIComponent(comboBody.combo.id)}`, { method: 'DELETE' });
   }
 });
 

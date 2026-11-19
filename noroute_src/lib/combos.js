@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 
 import { getDb } from './db.js';
 import { resolveModel } from './model.js';
+import { catalogModels, providers } from '../providers/index.js';
 
 const NAME_MAX = 60;
 // Plain name: no slash (that form belongs to provider/model), no whitespace, and
@@ -112,6 +113,37 @@ export function comboChain(name) {
     chain.push(canonical);
   }
   return { stored, chain };
+}
+
+// Drops entries that no longer exist from every stored combo, so the list never
+// advertises a model that was deleted. A disabled model still exists, so it is
+// kept here and skipped at request time instead. A combo left with nothing is
+// removed: an empty combo could only answer 400.
+export function pruneCombos() {
+  const db = getDb();
+  const update = db.prepare('UPDATE combos SET models = ?, updated_at = ? WHERE id = ?');
+  const drop = db.prepare('DELETE FROM combos WHERE id = ?');
+  let changed = 0;
+  for (const row of db.prepare('SELECT * FROM combos').all()) {
+    const models = parseModels(row.models);
+    const kept = models.filter(modelExists);
+    if (kept.length === models.length) continue;
+    if (kept.length) update.run(JSON.stringify(kept), Date.now(), row.id);
+    else drop.run(row.id);
+    changed += 1;
+  }
+  return changed;
+}
+
+function modelExists(entry) {
+  const name = entry.trim();
+  const slash = name.indexOf('/');
+  if (slash > 0) {
+    const prefix = name.slice(0, slash);
+    const provider = providers.find((p) => p.id === prefix || p.prefix === prefix);
+    return Boolean(provider) && catalogModels(provider).includes(name.slice(slash + 1));
+  }
+  return providers.filter((provider) => catalogModels(provider).includes(name)).length === 1;
 }
 
 export function getCombo(id) {
