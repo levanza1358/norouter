@@ -630,6 +630,13 @@ const handler = async (req, res) => {
     return res.end(JSON.stringify({ error: { message: 'stub: unsupported role developer', type: 'invalid_request_error' } }));
   }
 
+  // One credential is refused by the channel check while the rest serve
+  // normally, so account rotation can be proven to skip it.
+  if (token === 'channel-refused-token') {
+    res.writeHead(400, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ code: 11128, msg: 'Illegal API invocation from an unapproved channel' }));
+  }
+
   if (body.model === 'idle') {
     await new Promise((r) => setTimeout(r, 450));
   }

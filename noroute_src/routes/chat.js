@@ -39,6 +39,14 @@ import { createAntigravityStream, fromAntigravityResponse, toAntigravityRequest 
 const AUTH_COOLDOWN_MS = 5 * 60_000;
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_ATTEMPTS = 4;
+// CodeBuddy answers this 400 when it refuses the caller's channel. It is tied to
+// the credential's client identity, not to the request body, so another account
+// can still serve the same turn.
+const CHANNEL_REJECTION = /"code"\s*:\s*11128|unapproved channel|channel verification/i;
+
+function isChannelRejection(status, text) {
+  return status === 400 && CHANNEL_REJECTION.test(text);
+}
 
 function normalizeReasoning(body, config) {
   const direct = body.reasoning_effort ?? body.reasoning_level;
@@ -1001,6 +1009,17 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
         markFailure(attempt.row.id, {
           message: text.slice(0, 200) || 'Rate limited by upstream.',
           cooldownMs: retryAfterMs(response, text),
+        });
+        continue;
+      }
+
+      // A channel rejection is a 400 that blames this credential's client
+      // identity, so the next account is worth trying instead of failing the
+      // turn. It is still not the request's fault, hence the short cooldown.
+      if (attempt.row && isChannelRejection(response.status, text)) {
+        markFailure(attempt.row.id, {
+          message: 'Upstream refused the channel for this credential.',
+          cooldownMs: DEFAULT_COOLDOWN_MS,
         });
         continue;
       }

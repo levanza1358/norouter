@@ -47,6 +47,8 @@ Refill rows use `CycleCapacityUsed*`/`CycleCapacitySize*`; bonus rows use `Capac
 
 Related CodeBuddy rate-limit signals include code `6004`, `frequency limit`, `超出频率限制`, or `限额`; chat retry uses `Retry-After` or a parsed timestamp when available.
 
+A 400 carrying code `11128` ("Illegal API invocation from an unapproved channel") blames the credential's client identity rather than the request body, so Norouter parks that account for 60 seconds and retries the same turn on the next account instead of failing it. Other 400s stay request-shaped and are returned without burning the pool.
+
 Quota endpoint, host routing, request body, headers, and fields may vary by product/region/version. Do not treat this parser as an official immutable contract. See `docs/status.md` for confidence boundaries.
 
 ## Daily check-in

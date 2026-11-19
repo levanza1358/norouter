@@ -730,6 +730,47 @@ await test('CodeBuddy CN relays a developer message as system and other provider
   }
 });
 
+await test('a channel rejection rotates to the next account instead of failing the turn', async () => {
+  const created = await fetch(`${base}/api/providers`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      id: 'chan-test',
+      name: 'Chan Test',
+      prefix: 'chan',
+      baseUrl: `${stubBase}/v2`,
+      models: ['chan-model'],
+      requiresAccount: true,
+      accountStrategy: 'sequential',
+    }),
+  });
+  assert.equal(created.status, 201, await created.clone().text());
+  try {
+    for (const token of ['channel-refused-token', 'chan-good-token']) {
+      const res = await fetch(`${base}/api/providers/chan-test/accounts`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ label: `Chan ${token}`, access_token: token }),
+      });
+      assert.equal(res.status, 201, await res.clone().text());
+    }
+
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'chan/chan-model', messages: [{ role: 'user', content: 'halo' }] }),
+    });
+    assert.equal(res.status, 200, await res.clone().text());
+
+    const accounts = (await (await fetch(`${base}/api/providers/chan-test/accounts?pageSize=50`)).json()).items;
+    const refused = accounts.find((item) => item.label === 'Chan channel-refused-token');
+    const healthy = accounts.find((item) => item.label === 'Chan chan-good-token');
+    assert.ok(refused.lastError, 'the refused credential must be parked');
+    assert.match(refused.lastError, /channel/i);
+    assert.ok(!healthy.lastError, 'the account that served the turn must stay healthy');
+  } finally {
+    await fetch(`${base}/api/providers/chan-test`, { method: 'DELETE' });
+  }
+});
+
 await test('reply style instruction survives the Responses translation', async () => {
   const settings = { language: 'en', verbosity: 'detailed', coding: true, focus: 'Stay on backend debugging.', addressAs: 'Dimas' };
   const body = applyReplyFilters({ model: 'cx/gpt-5.3-codex', messages: [{ role: 'user', content: 'hi' }] }, settings);
