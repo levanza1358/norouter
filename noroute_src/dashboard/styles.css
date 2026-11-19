@@ -4485,39 +4485,6 @@ body {
 
 .rail-btn.is-active svg { color: var(--rail-accent); }
 
-.rail-foot {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  margin-top: auto;
-  padding: 14px 8px 0;
-  border-top: 1px solid var(--rail-line);
-}
-
-.rail-foot-label {
-  color: var(--rail-muted);
-  font-family: var(--font-mono);
-  font-size: 8.5px;
-  letter-spacing: .14em;
-  text-transform: uppercase;
-}
-
-.rail-foot-value {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--rail-ink);
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-}
-
-.rail-foot-value i {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--rail-accent);
-}
-
 /* ---------- topbar ---------- */
 
 .topbar {
@@ -5283,7 +5250,7 @@ body.dashboard-locked {
   }
 
   .rail-brand { padding: 0 8px 0 2px; border-bottom: 0; }
-  .rail-brand-sub, .rail-label, .rail-foot { display: none; }
+  .rail-brand-sub, .rail-label { display: none; }
   .rail-brand-name { font-size: 13px; }
   .rail-logo { width: 30px; height: 30px; flex-basis: 30px; border-radius: 7px; }
 
