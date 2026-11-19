@@ -1,12 +1,14 @@
 import { sendJson } from '../lib/http.js';
 import { listCombos } from '../lib/combos.js';
 import { allModels, providers } from '../providers/index.js';
+import { providerEnabled } from '../lib/provider-state.js';
 
 export function handleModels(req, res) {
   const created = Math.floor(Date.now() / 1000);
   const data = [];
 
   for (const provider of providers) {
+    if (!providerEnabled(provider.id)) continue;
     for (const model of allModels(provider)) {
       data.push({
         id: `${provider.prefix}/${model}`,

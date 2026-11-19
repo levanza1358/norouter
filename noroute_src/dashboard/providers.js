@@ -36,6 +36,7 @@ function renderProviderCards(data) {
 
   const card = (p) => {
     const ready = isReady(p.credential);
+    const off = p.enabled === false;
     const prefix = p.prefix || p.id;
     const quota = p.quota || {};
     const quotaKnown = Number.isFinite(quota.percent);
@@ -43,14 +44,14 @@ function renderProviderCards(data) {
     const quotaPercent = quotaKnown ? Math.min(100, Math.max(0, quota.percent)) : 0;
     const quotaLabel = quotaLoading ? 'Reading quota…' : quotaKnown ? `${quotaPercent}% quota used` : p.quotaSupported ? 'Quota not read' : 'No quota';
     const quotaTitle = quotaKnown ? `${quota.accounts || 0} account${quota.accounts === 1 ? '' : 's'} measured` : p.quotaSupported ? 'Quota is read from provider accounts' : 'This provider has no quota endpoint';
-    return `<a class="card pcard" href="/providers/${encodeURIComponent(p.id)}">
+    return `<a class="card pcard${off ? ' is-off' : ''}" href="/providers/${encodeURIComponent(p.id)}">
       <div class="pcard-head">
         <div class="pcard-avatar">${escapeHtml(initialOf(p.name))}</div>
         <div class="pcard-id">
           <div class="pcard-title">${escapeHtml(p.name)}</div>
           <div class="pcard-sub"><code>${escapeHtml(prefix)}</code></div>
         </div>
-        <span class="status-pill ${ready ? 'ok' : 'bad'}"><span class="dot"></span>${ready ? 'Ready' : 'No account'}</span>
+        <span class="status-pill ${off ? 'quiet' : ready ? 'ok' : 'bad'}"><span class="dot"></span>${off ? 'Disabled' : ready ? 'Ready' : 'No account'}</span>
       </div>
       <div class="pcard-summary">
         <span><strong>${p.accounts || 0}</strong> ${p.accounts === 1 ? 'account' : 'accounts'}</span>

@@ -9,6 +9,7 @@ import { readJson, sendError, sendJson } from '../lib/http.js';
 import { nextLiveId, publishLive } from '../lib/live.js';
 import { resolveCredential, buildHeaders } from './chat.js';
 import { getProvider, providers } from '../providers/index.js';
+import { providerEnabled } from '../lib/provider-state.js';
 import {
   accountAttemptLimit,
   markFailure,
@@ -34,11 +35,15 @@ function resolveImageModel(raw) {
   if (slash > 0) {
     const provider = getProvider(name.slice(0, slash));
     const rest = name.slice(slash + 1);
+    if (provider && !providerEnabled(provider.id)) {
+      return { error: `Provider "${provider.id}" is disabled. Enable it in the dashboard to route to it.` };
+    }
     if (provider?.image?.models?.includes(rest)) return { provider, model: rest };
     if (provider?.image) return { error: `Provider "${provider.id}" does not generate images for model "${rest}".` };
     return { error: `Unknown provider "${name.slice(0, slash)}".` };
   }
   for (const provider of providers) {
+    if (!providerEnabled(provider.id)) continue;
     if (provider.image?.models?.includes(name)) return { provider, model: name };
   }
   return { error: `Unknown image model "${name}".` };

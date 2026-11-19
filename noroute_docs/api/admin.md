@@ -191,6 +191,7 @@ The usage report returns a `cost` field on `totals` and on each model row, an es
 | GET | `/api/providers/:id` | Provider snapshot, pool counts, local quota, models |
 | POST | `/api/providers` | Create custom provider; returns 201 |
 | PATCH | `/api/providers/:id` | Persist provider configuration; ID changes migrate accounts/models atomically |
+| PATCH | `/api/providers/:id/enabled` | `{"enabled": true\|false}`. A disabled provider keeps its card, config, accounts and model catalog, but its models leave `/v1/models`, combos, rules and chat routing. 404 for an unknown provider, 400 for a non-boolean value |
 | DELETE | `/api/providers/:id` | Delete custom provider only |
 
 Create and PATCH bodies accept `id`, `aliases`, `name`, `website`, `baseUrl`, `chatPath`, `headers`, `models`, `format`, `forceStream`, `requiresAccount`, `baseUrlEnv`, `refresh`, `quota`, `checkin`, and `accountStrategy`. GET snapshots expose the editable stored/catalog fields at `provider.config`. PATCH merges omitted fields with the current configuration; all resulting fields are persisted for both shipped and custom providers. A provider's `source_id` remains stable across ID changes and restarts.

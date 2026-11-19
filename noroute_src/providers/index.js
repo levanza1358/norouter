@@ -4,6 +4,7 @@ import antigravity from './antigravity.js';
 import { invalidateProvider, normalizeStrategy } from '../lib/accounts.js';
 import { customModels, modelEnabled } from '../lib/custom-models.js';
 import { codexCatalog } from '../lib/codex-account.js';
+import { providerEnabled } from '../lib/provider-state.js';
 import {
   createCustomProvider,
   deleteCustomProvider,
@@ -70,6 +71,9 @@ export function getProvider(name) {
 }
 
 export function allModels(provider) {
+  // A disabled provider keeps its catalog for the dashboard but offers nothing
+  // to routing, so /v1/models, combos, rules and chat agree that it is gone.
+  if (!providerEnabled(provider.id)) return [];
   // Codex custom ids are local dashboard labels, so they stay out of the
   // routable catalog; everything else adds its custom models. Disabled models
   // are filtered here so /v1/models, combos and chat routing agree.

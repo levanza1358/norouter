@@ -60,6 +60,7 @@ function paintDetailMeta() {
   const showPrefix = prefix.toLowerCase() !== String(provider.name || '').toLowerCase();
   const meta = [
     showPrefix ? prefix : '',
+    provider.enabled === false ? 'disabled' : '',
     provider.format ? `${provider.format} compatible` : '',
     `${provider.models || 0} models`,
     `${detail.pool?.total || 0} accounts`,
@@ -91,6 +92,15 @@ function renderDetailPage() {
   const editProvider = $('editProvider');
   if (editProvider) editProvider.onclick = () => openEditProvider(editProvider);
 
+  const toggleProvider = $('toggleProvider');
+  if (toggleProvider) {
+    const enabled = detail.provider.enabled !== false;
+    toggleProvider.textContent = enabled ? 'Disable' : 'Enable';
+    toggleProvider.classList.toggle('danger', enabled);
+    toggleProvider.setAttribute('aria-pressed', String(!enabled));
+    toggleProvider.onclick = () => setProviderEnabled(!enabled);
+  }
+
   const removeProvider = $('removeProvider');
   if (removeProvider) {
     removeProvider.hidden = !detail.provider.customProvider;
@@ -106,6 +116,27 @@ function renderDetailPage() {
   renderDetailAccounts();
   renderDetailModels();
   setDetailTab(detailTab, { silent: true });
+}
+
+async function setProviderEnabled(enabled) {
+  if (!currentDetailId) return;
+  try {
+    const res = await fetch(`/api/providers/${encodeURIComponent(currentDetailId)}/enabled`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error?.message || `Request failed (${res.status})`);
+    detail = body;
+    renderDetailPage();
+    await refresh();
+    detailNote($('dNote'), enabled
+      ? 'Provider enabled. Its models are routable again.'
+      : 'Provider disabled. Its models are hidden from routing until you enable it.', 'ok');
+  } catch (err) {
+    detailNote($('dNote'), err.message, 'bad');
+  }
 }
 
 async function removeCurrentProvider(opener = document.activeElement) {

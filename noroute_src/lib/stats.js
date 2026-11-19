@@ -2,6 +2,7 @@ import { config } from '../config.js';
 import { getRequireApiKey } from './api-keys.js';
 import { accountCounts, providerQuotaSummary } from './accounts.js';
 import { hasQuotaEndpoint } from './codebuddy.js';
+import { providerEnabled } from './provider-state.js';
 import { allModels, providers } from '../providers/index.js';
 
 const started = Date.now();
@@ -198,6 +199,7 @@ export function statusSnapshot() {
         website: provider.display.website,
         format: provider.format,
         credential,
+        enabled: providerEnabled(provider.id),
         accounts: pool.total,
         activeAccounts: pool.active,
         models: allModels(provider).length,

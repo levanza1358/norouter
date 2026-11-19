@@ -4541,6 +4541,80 @@ await test('deleting a custom provider prunes it from combos', async () => {
   }
 });
 
+await test('a disabled provider leaves routing but keeps its catalog', async () => {
+  const stamp = Date.now();
+  const id = `toggle-${stamp}`;
+  const created = await fetch(`${base}/api/providers`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      name: `Toggle ${stamp}`,
+      id,
+      baseUrl: `${stubBase}/v2`,
+      models: 'toggle-model',
+      requiresAccount: true,
+    }),
+  });
+  assert.equal(created.status, 201, await created.text());
+  const account = await fetch(`${base}/api/providers/${id}/accounts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label: 'Toggle account', access_token: 'toggle-token' }),
+  });
+  assert.equal(account.status, 201, await account.text());
+  const chat = (model) => fetch(`${base}/v1/chat/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: 'halo' }] }),
+  });
+  const catalog = async () => (await (await fetch(`${base}/v1/models`)).json()).data.map((row) => row.id);
+  const toggle = (enabled) => fetch(`${base}/api/providers/${id}/enabled`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+
+  try {
+    assert.equal((await chat(`${id}/toggle-model`)).status, 200);
+    assert.ok((await catalog()).includes(`${id}/toggle-model`), 'an enabled provider is routable');
+
+    const off = await toggle(false);
+    const offBody = await off.json();
+    assert.equal(off.status, 200, JSON.stringify(offBody));
+    assert.equal(offBody.provider.enabled, false);
+    assert.deepEqual(offBody.provider.config.models, ['toggle-model'], 'the catalog survives disabling');
+    assert.equal((await catalog()).includes(`${id}/toggle-model`), false, 'a disabled provider leaves /v1/models');
+
+    const blocked = await chat(`${id}/toggle-model`);
+    assert.equal(blocked.status, 400, 'a disabled provider must not serve');
+    assert.match((await blocked.json()).error.message, /is disabled/);
+    const status = (await (await fetch(`${base}/api/status`)).json()).providers.find((row) => row.id === id);
+    assert.equal(status.enabled, false);
+
+    const combo = await fetch(`${base}/api/combos`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: `toggle-combo-${stamp}`, models: [`${id}/toggle-model`] }),
+    });
+    assert.equal(combo.status, 400, 'a disabled model cannot be saved into a combo');
+
+    assert.equal((await toggle('yes')).status, 400, 'enabled must be a boolean');
+    assert.equal((await fetch(`${base}/api/providers/nope-${stamp}/enabled`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    })).status, 404);
+
+    const on = await toggle(true);
+    assert.equal(on.status, 200);
+    assert.equal((await on.json()).provider.enabled, true);
+    assert.equal((await chat(`${id}/toggle-model`)).status, 200, 'enabling restores routing');
+    assert.ok((await catalog()).includes(`${id}/toggle-model`));
+  } finally {
+    await fetch(`${base}/api/providers/${id}`, { method: 'DELETE' });
+  }
+});
+
 // Fixture models that only exist to exercise combo walking. Registered once,
 // like the combo-always-* models above; duplicates are fine.
 async function ensureStubModels(models) {

@@ -1,4 +1,5 @@
 import { allModels, providers } from '../providers/index.js';
+import { providerEnabled } from './provider-state.js';
 
 // Accepts "cbcn/deepseek-v4.1-flash" and the bare "deepseek-v4.1-flash".
 // Returns { provider, model } or { error }.
@@ -14,6 +15,11 @@ export function resolveModel(raw) {
     const rest = name.slice(slash + 1);
     const provider = providers.find((p) => p.id === prefix || p.prefix === prefix);
     if (provider) {
+      // A disabled provider is still a known id, so say why the model is not
+      // available instead of claiming it never existed.
+      if (!providerEnabled(provider.id)) {
+        return { error: `Provider "${provider.id}" is disabled. Enable it in the dashboard to route to it.` };
+      }
       const available = allModels(provider);
       if (!available.includes(rest)) {
         return { error: `Unknown model "${rest}" for provider "${provider.id}"` };

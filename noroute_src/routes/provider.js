@@ -2,6 +2,7 @@ import { accountCounts, getAccountRow, listAccounts, poolToken } from '../lib/ac
 import { readJson, sendError, sendJson } from '../lib/http.js';
 import { addCustomModel, customModels, modelEnabled, removeCustomModel, setModelEnabled } from '../lib/custom-models.js';
 import { pruneCombos } from '../lib/combos.js';
+import { providerEnabled, setProviderEnabled } from '../lib/provider-state.js';
 import { providerUsage, stats } from '../lib/stats.js';
 import { testProviderModels } from '../lib/model-test.js';
 import { modelCapability } from '../providers/model-capabilities.js';
@@ -66,6 +67,7 @@ export function providerSnapshot(provider) {
       customProvider: Boolean(provider.custom),
       oauth: Boolean(provider.oauth),
       baseUrlEnv: provider.baseUrlEnv,
+      enabled: providerEnabled(provider.id),
       config: {
         id: provider.id,
         prefix: provider.prefix,
@@ -192,6 +194,22 @@ export function handleDeleteProvider(req, res, rawId) {
   removeProvider(provider.id);
   pruneCombos();
   return sendJson(res, 200, { removed: provider.id });
+}
+
+export async function handleSetProviderEnabled(req, res, rawId) {
+  const provider = resolveProvider(res, rawId);
+  if (!provider) return undefined;
+
+  let body;
+  try {
+    body = await readJson(req, 16 * 1024);
+  } catch (err) {
+    return sendError(res, err.status || 400, err.message);
+  }
+  if (typeof body?.enabled !== 'boolean') return sendError(res, 400, 'enabled must be boolean.');
+
+  setProviderEnabled(provider.id, body.enabled);
+  return sendJson(res, 200, providerSnapshot(provider));
 }
 
 export async function handleAddModel(req, res, rawId) {

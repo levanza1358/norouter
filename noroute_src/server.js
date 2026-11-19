@@ -76,7 +76,7 @@ import {
 } from './routes/proxy.js';
 import { startMaintenance, stopMaintenance } from './lib/maintenance.js';
 import { handleModels } from './routes/models.js';
-import { handleAddModel, handleCreateProvider, handleDeleteProvider, handleFetchModels, handleProviderDetail, handleRemoveModel, handleSetModelEnabled, handleTestModels, handleUpdateProvider } from './routes/provider.js';
+import { handleAddModel, handleCreateProvider, handleDeleteProvider, handleFetchModels, handleProviderDetail, handleRemoveModel, handleSetModelEnabled, handleSetProviderEnabled, handleTestModels, handleUpdateProvider } from './routes/provider.js';
 import { handleStatus } from './routes/status.js';
 import { handleLive } from './routes/live.js';
 import { closeLiveStreams } from './lib/live.js';
@@ -325,6 +325,11 @@ export function createServer(overrides = {}) {
       const providerUsageMatch = path.match(/^\/api\/providers\/([^/]+)\/usage$/);
       if (providerUsageMatch && req.method === 'GET') {
         return handleProviderUsage(req, res, providerUsageMatch[1], url);
+      }
+
+      const providerEnabledMatch = path.match(/^\/api\/providers\/([^/]+)\/enabled$/);
+      if (providerEnabledMatch && req.method === 'PATCH') {
+        return await handleSetProviderEnabled(req, res, providerEnabledMatch[1]);
       }
 
       const detailMatch = path.match(/^\/api\/providers\/([^/]+)$/);

@@ -1239,6 +1239,11 @@ code.url {
   padding: 17px 18px;
 }
 
+/* A disabled provider keeps its card so it can be switched back on, but it no
+   longer competes for attention with the providers that are serving. */
+.pcard.is-off .pcard-avatar,
+.pcard.is-off .pcard-quota { opacity: .55; }
+
 .pcard-summary {
   display: flex;
   align-items: baseline;
