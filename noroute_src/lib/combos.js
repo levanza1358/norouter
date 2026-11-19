@@ -95,6 +95,25 @@ export function comboModels(name) {
   return models.length ? models : null;
 }
 
+// Runtime chain: entries that no longer resolve are skipped, like the rule and
+// vision chains, so deleting a provider or model cannot fail a request whose
+// other steps still work (and cannot inflate the error counters).
+export function comboChain(name) {
+  const stored = comboModels(name);
+  if (!stored) return null;
+  const chain = [];
+  const seen = new Set();
+  for (const entry of stored) {
+    const resolved = resolveModel(entry);
+    if (resolved.error) continue;
+    const canonical = `${resolved.provider.prefix}/${resolved.model}`;
+    if (seen.has(canonical)) continue;
+    seen.add(canonical);
+    chain.push(canonical);
+  }
+  return { stored, chain };
+}
+
 export function getCombo(id) {
   const row = rowById(id);
   return row ? publicCombo(row) : null;

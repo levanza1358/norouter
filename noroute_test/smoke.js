@@ -4448,6 +4448,50 @@ await test('a combo whose models all vanished resolves to a clear 400, not 500',
   await fetch(`${base}/api/combos/${encodeURIComponent(body.combo.id)}`, { method: 'DELETE' });
 });
 
+await test('a combo skips a vanished entry instead of failing the request', async () => {
+  // A provider or model can be removed while a combo still names it. The stored
+  // list keeps the entry (it is the operator's text), but the walk must drop it
+  // rather than count an "Unknown model" error for every request.
+  const model = `combo-gone-${Date.now()}`;
+  await fetch(`${base}/api/providers/codebuddy-cn/models`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model }),
+  });
+  const created = await fetch(`${base}/api/combos`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'partial-combo', models: [`cbcn/${model}`, 'cbcn/glm-5.3'] }),
+  });
+  const body = await created.json();
+  assert.equal(created.status, 201, JSON.stringify(body));
+
+  await fetch(`${base}/api/providers/codebuddy-cn/models/${encodeURIComponent(model)}`, { method: 'DELETE' });
+
+  try {
+    await withFreshComboAccount(async () => {
+      const before = await (await fetch(`${base}/api/usage?range=day`)).json();
+      stubCalls.length = 0;
+      const res = await fetch(`${base}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'partial-combo', messages: [{ role: 'user', content: 'x' }] }),
+      });
+      const served = await res.json();
+      assert.equal(res.status, 200, JSON.stringify(served));
+      assert.match(served.choices[0].message.content, /stub reply for glm-5\.3/);
+      assert.deepEqual(stubCalls, ['glm-5.3'], 'the vanished entry must not be attempted');
+
+      const log = (await (await fetch(`${base}/api/request-log`)).json()).requests.at(-1);
+      assert.deepEqual(log.attempted, ['cbcn/glm-5.3']);
+      const after = await (await fetch(`${base}/api/usage?range=day`)).json();
+      assert.equal(after.totals.errors, before.totals.errors, 'skipping a stale entry is not an error');
+    });
+  } finally {
+    await fetch(`${base}/api/combos/${encodeURIComponent(body.combo.id)}`, { method: 'DELETE' });
+  }
+});
+
 // Fixture models that only exist to exercise combo walking. Registered once,
 // like the combo-always-* models above; duplicates are fine.
 async function ensureStubModels(models) {

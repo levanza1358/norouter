@@ -11,7 +11,7 @@ import {
 } from '../lib/accounts.js';
 import { CORS_HEADERS, readJson, sendError, sendJson } from '../lib/http.js';
 import { resolveModel } from '../lib/model.js';
-import { comboModels } from '../lib/combos.js';
+import { comboChain } from '../lib/combos.js';
 import { hasNewImageInput, stripHistoryImages, visionRouteFor } from '../lib/vision-routing.js';
 import { getRoutingRules, matchRoutingRule, resolveAlias } from '../lib/routing-rules.js';
 import { createAccumulator, mirrorReasoningAlias, readSSEEvents, stripEmptyToolCalls } from '../lib/sse.js';
@@ -687,17 +687,23 @@ export async function handleChat(req, res, settings, auth = { managedId: null })
   }
 
   // A combo name is checked before model resolution and is never a combo when it
-  // contains "/". Array order is the fallback priority.
-  const combo = comboModels(body.model);
-  if (Array.isArray(combo) && combo.length) {
+  // contains "/". Array order is the fallback priority; entries that no longer
+  // resolve are dropped so a removed provider cannot fail the whole request.
+  const combo = comboChain(body.model);
+  if (combo) {
     const comboName = String(body.model).trim();
+    if (!combo.chain.length) {
+      const message = `Combo "${comboName}" has no resolvable model. Remove the missing entries: ${combo.stored.join(' → ')}.`;
+      noteError(message, { status: 400, trace });
+      return sendError(res, 400, message);
+    }
     // An alias that resolved to this combo stays the stated reason.
     if (trace.route === 'direct') {
       trace.route = 'combo';
       trace.via = comboName;
     }
     return handleModelChain(req, res, settings, auth, {
-      chain: combo,
+      chain: combo.chain,
       failureLabel: `Combo "${comboName}"`,
       errorFields: { combo: comboName },
       body,
@@ -732,7 +738,7 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
   if (trace && modelName) trace.attempted.push(String(modelName));
   const resolved = resolveModel(modelName);
   if (resolved.error) {
-    noteError(resolved.error, { trace });
+    noteError(resolved.error, { status: 400, trace });
     publishLive({ phase: 'error', id: liveId, at: Date.now(), model: modelName || null, status: 400, stage: 'model' });
     // A single-model request owns the response; only a combo attempt defers it.
     if (!deferHeaders) sendError(res, 400, resolved.error);
