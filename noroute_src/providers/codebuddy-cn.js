@@ -33,6 +33,10 @@ export default {
   // buffering the SSE upstream and collapsing it into one completion.
   forceStream: true,
 
+  // The gateway rejects the Responses-era `developer` role that newer harnesses
+  // send for their system prompt, so those messages are relayed as `system`.
+  developerRole: 'system',
+
   headers: {
     'User-Agent': 'CLI/2.108.1 CodeBuddy/2.108.1',
     'X-Product': 'SaaS',

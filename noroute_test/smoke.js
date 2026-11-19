@@ -677,6 +677,59 @@ await test('reply style instructions reach the upstream and no-op leaves the bod
   }
 });
 
+await test('CodeBuddy CN relays a developer message as system and other providers keep it', async () => {
+  const created = await fetch(`${base}/api/providers/codebuddy-cn/accounts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label: 'Developer role account', access_token: 'developer-role-token' }),
+  });
+  assert.equal(created.status, 201);
+  try {
+    chatBodies.length = 0;
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'cbcn/glm-5.3',
+        messages: [
+          { role: 'developer', content: 'You are the harness prompt.' },
+          { role: 'user', content: 'halo' },
+        ],
+      }),
+    });
+    assert.equal(res.status, 200, await res.clone().text());
+    const upstream = chatBodies.find((item) => item.model === 'glm-5.3');
+    assert.deepEqual(upstream.messages.map((message) => message.role), ['system', 'user']);
+    assert.match(upstream.messages[0].content, /^You are the harness prompt\./);
+
+    // A custom OpenAI provider has no such flag, so the role passes through.
+    chatBodies.length = 0;
+    const custom = await fetch(`${base}/api/providers`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'devrole-test', name: 'Devrole', prefix: 'dvr', baseUrl: `${stubBase}/v2`, models: ['devrole-model'], requiresAccount: true }),
+    });
+    assert.equal(custom.status, 201, await custom.clone().text());
+    const customAccount = await fetch(`${base}/api/providers/devrole-test/accounts`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label: 'Devrole account', access_token: 'devrole-token' }),
+    });
+    assert.equal(customAccount.status, 201, await customAccount.clone().text());
+    await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'dvr/devrole-model',
+        messages: [{ role: 'developer', content: 'keep me' }, { role: 'user', content: 'hi' }],
+      }),
+    });
+    const untouched = chatBodies.find((item) => item.model === 'devrole-model');
+    assert.equal(untouched.messages.find((message) => message.content === 'keep me').role, 'developer', 'only a provider that asks for it rewrites the role');
+  } finally {
+    await fetch(`${base}/api/providers/devrole-test`, { method: 'DELETE' });
+    const account = (await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json()).items
+      .find((item) => item.label === 'Developer role account');
+    if (account) await fetch(`${base}/api/providers/codebuddy-cn/accounts/${account.id}`, { method: 'DELETE' });
+  }
+});
+
 await test('reply style instruction survives the Responses translation', async () => {
   const settings = { language: 'en', verbosity: 'detailed', coding: true, focus: 'Stay on backend debugging.', addressAs: 'Dimas' };
   const body = applyReplyFilters({ model: 'cx/gpt-5.3-codex', messages: [{ role: 'user', content: 'hi' }] }, settings);

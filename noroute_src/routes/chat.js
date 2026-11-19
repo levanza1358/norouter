@@ -74,6 +74,18 @@ function stripHistoryReasoning(body) {
   return changed ? { ...body, messages } : body;
 }
 
+// Some gateways reject the Responses-era `developer` role, which newer harnesses
+// use for their system prompt. A provider can name the role it accepts instead.
+function relayDeveloperRole(provider, body) {
+  const role = provider.developerRole;
+  if (!role || !Array.isArray(body.messages)) return body;
+  if (!body.messages.some((message) => message?.role === 'developer')) return body;
+  const messages = body.messages.map((message) => (
+    message?.role === 'developer' ? { ...message, role } : message
+  ));
+  return { ...body, messages };
+}
+
 const REASONING_ALIASES = ['reasoning_level', 'thinking', 'reasoning', 'enable_thinking'];
 const OFF_LEVELS = ['none', 'off', 'disabled', 'false'];
 const ON_LEVELS = ['enabled', 'on', 'true'];
@@ -824,6 +836,7 @@ async function handleSingleChat(req, res, settings, auth, { body, started, model
     return { ok: false, status: err.status || 400, message: err.message, model, fallback: false };
   }
   transformedBody = stripHistoryReasoning(transformedBody);
+  transformedBody = relayDeveloperRole(provider, transformedBody);
   transformedBody = applyTokenSaver(transformedBody, getTokenSaverSettings());
   transformedBody = applyReplyFilters(transformedBody, getReplyFiltersSettings());
   let upstreamBody = { ...transformedBody, model };

@@ -624,6 +624,12 @@ const handler = async (req, res) => {
   calls.push(body.model);
   chatBodies.push(structuredClone(body));
 
+  // Real gateways that predate the Responses wire reject `developer` outright.
+  if (body.messages?.some((message) => message?.role === 'developer')) {
+    res.writeHead(400, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ error: { message: 'stub: unsupported role developer', type: 'invalid_request_error' } }));
+  }
+
   if (body.model === 'idle') {
     await new Promise((r) => setTimeout(r, 450));
   }

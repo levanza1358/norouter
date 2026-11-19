@@ -11,6 +11,8 @@
 
 Fixed headers include CLI-style `User-Agent`, `X-Product: SaaS`, `X-IDE-Type: CLI`, `X-IDE-Name: CLI`, `x-requested-with`, and `x-codebuddy-request`.
 
+The gateway rejects the Responses-era `developer` role that newer agent harnesses send for their system prompt. Norouter relays those messages as `system` for this provider only (`developerRole: 'system'`); other providers receive the body untouched.
+
 ## Credential forms
 
 - Access token/API key: stored manually in the SQLite account pool and sent as `Authorization: Bearer <operator-supplied-value>`.
