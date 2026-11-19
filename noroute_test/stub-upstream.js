@@ -634,7 +634,9 @@ const handler = async (req, res) => {
   // The channel check reads the payload: a harness announcing another vendor's
   // CLI is refused on every account, so only a rewrite of that claim can serve.
   if (body.messages?.some((message) => message?.role === 'system'
-    && /Anthropic['\u2019]s official CLI/i.test(String(message.content)))) {
+    && /Anthropic['\u2019]s official CLI/i.test(Array.isArray(message.content)
+      ? message.content.map((block) => block?.text ?? '').join('\n')
+      : String(message.content)))) {
     res.writeHead(400, { 'content-type': 'application/json' });
     return res.end(JSON.stringify({ code: 11128, msg: 'Illegal API invocation from an unapproved channel' }));
   }

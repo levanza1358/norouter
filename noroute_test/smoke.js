@@ -837,6 +837,15 @@ await test('CodeBuddy CN rewrites a foreign CLI identity instead of burning the 
       body: JSON.stringify({ model: 'cbcn/glm-5.3', messages: [{ role: 'system', content: 'You are a helpful assistant.' }, { role: 'user', content: 'halo' }] }),
     });
     assert.match(chatBodies.find((item) => item.model === 'glm-5.3').messages[0].content, /^You are a helpful assistant\./);
+
+    // Harnesses send the prompt as text blocks too; that shape must be guarded as well.
+    chatBodies.length = 0;
+    const blocked = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'cbcn/glm-5.3', messages: [{ role: 'system', content: [{ type: 'text', text: prompt }] }, { role: 'user', content: 'halo' }] }),
+    });
+    assert.equal(blocked.status, 200, await blocked.clone().text());
+    assert.match(chatBodies.find((item) => item.model === 'glm-5.3').messages[0].content[0].text, /a coding agent CLI/);
   } finally {
     const account = (await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json()).items
       .find((item) => item.label === 'Identity guard account');

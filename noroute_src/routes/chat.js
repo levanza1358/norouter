@@ -99,15 +99,30 @@ function relayDeveloperRole(provider, body) {
 // One gateway refuses the whole payload when a harness puts another vendor's
 // CLI identity in its system prompt: the reply is a flat 400 that no retry or
 // account rotation can clear. A provider can name the phrases it will not
-// accept; only the system messages holding one are rewritten.
+// accept; only the system messages holding one are rewritten. Harnesses send
+// the prompt as a string or as text blocks, so both shapes are handled.
+function guardText(text, guards) {
+  return guards.reduce((value, guard) => value.replace(guard.pattern, guard.replacement), text);
+}
+
+function guardContent(content, guards) {
+  if (typeof content === 'string') return guardText(content, guards);
+  if (!Array.isArray(content)) return content;
+  return content.map((block) => (
+    block?.type === 'text' && typeof block.text === 'string'
+      ? { ...block, text: guardText(block.text, guards) }
+      : block
+  ));
+}
+
 function applyIdentityGuards(provider, body) {
   const guards = provider.identityGuards;
   if (!guards?.length || !Array.isArray(body.messages)) return body;
   let changed = false;
   const messages = body.messages.map((message) => {
-    if (message?.role !== 'system' || typeof message.content !== 'string') return message;
-    const content = guards.reduce((text, guard) => text.replace(guard.pattern, guard.replacement), message.content);
-    if (content === message.content) return message;
+    if (message?.role !== 'system') return message;
+    const content = guardContent(message.content, guards);
+    if (JSON.stringify(content) === JSON.stringify(message.content)) return message;
     changed = true;
     return { ...message, content };
   });
