@@ -632,11 +632,25 @@ const handler = async (req, res) => {
   }
 
   // The channel check reads the payload: a harness announcing another vendor's
-  // CLI is refused on every account, so only a rewrite of that claim can serve.
+  // CLI, or carrying blacklisted harness boilerplate, is refused on every
+  // account, so only a rewrite of those strings can serve.
   if (body.messages?.some((message) => message?.role === 'system'
-    && /Anthropic['\u2019]s official CLI/i.test(Array.isArray(message.content)
+    && /Anthropic['\u2019]s official CLI|You are an AI agent powered by DeepSeek Harness/i.test(Array.isArray(message.content)
       ? message.content.map((block) => block?.text ?? '').join('\n')
       : String(message.content)))) {
+    res.writeHead(400, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ code: 11128, msg: 'Illegal API invocation from an unapproved channel' }));
+  }
+
+  // The blacklist also fires on a harness boilerplate pair, matched only when
+  // both sentences are present.
+  if (body.messages?.some((message) => message?.role === 'system'
+    && [
+      'Tokens prefixed with @ are paths the user explicitly referenced',
+      'Relative paths resolve from the workspace root',
+    ].every((needle) => (Array.isArray(message.content)
+      ? message.content.map((block) => block?.text ?? '').join('\n')
+      : String(message.content)).includes(needle)))) {
     res.writeHead(400, { 'content-type': 'application/json' });
     return res.end(JSON.stringify({ code: 11128, msg: 'Illegal API invocation from an unapproved channel' }));
   }

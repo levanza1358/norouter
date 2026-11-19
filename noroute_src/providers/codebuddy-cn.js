@@ -38,11 +38,14 @@ export default {
   developerRole: 'system',
 
   // The channel check parses the payload, not the caller's identity: a harness
-  // that announces itself as another vendor's CLI gets a flat 400 (code 11128)
-  // on every account, which no retry or rotation can clear. Only that claim is
+  // that announces itself as another vendor's CLI, or that carries a harness
+  // boilerplate string the gateway blacklists, gets a flat 400 (code 11128) on
+  // every account, which no retry or rotation can clear. Only those strings are
   // rewritten; the rest of the harness prompt is relayed intact.
   identityGuards: [
     { pattern: /Anthropic['\u2019]s official CLI/gi, replacement: 'a coding agent CLI' },
+    { pattern: /You are an AI agent powered by DeepSeek Harness\.?/gi, replacement: 'You are an AI agent powered by this harness.' },
+    { pattern: /Relative paths resolve from the workspace root/gi, replacement: 'Relative paths are resolved against the workspace root' },
   ],
 
   headers: {

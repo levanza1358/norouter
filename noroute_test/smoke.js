@@ -846,6 +846,28 @@ await test('CodeBuddy CN rewrites a foreign CLI identity instead of burning the 
     });
     assert.equal(blocked.status, 200, await blocked.clone().text());
     assert.match(chatBodies.find((item) => item.model === 'glm-5.3').messages[0].content[0].text, /a coding agent CLI/);
+
+    // The blacklist also names a self-declared model vendor and one harness
+    // boilerplate pair; each must be rewritten before the payload leaves.
+    chatBodies.length = 0;
+    const dsh = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'cbcn/glm-5.3',
+        messages: [{
+          role: 'system',
+          content: [{
+            type: 'text',
+            text: 'You are an AI agent powered by DeepSeek Harness.\n\nTokens prefixed with @ are paths the user explicitly referenced. Relative paths resolve from the workspace root; absolute paths identify files or directories on the host.',
+          }],
+        }, { role: 'user', content: 'halo' }],
+      }),
+    });
+    assert.equal(dsh.status, 200, await dsh.clone().text());
+    const relayed = chatBodies.find((item) => item.model === 'glm-5.3').messages[0].content[0].text;
+    assert.doesNotMatch(relayed, /DeepSeek Harness/);
+    assert.doesNotMatch(relayed, /Relative paths resolve from the workspace root/);
+    assert.match(relayed, /absolute paths identify files or directories on the host\./, 'the rest of the harness prompt is relayed');
   } finally {
     const account = (await (await fetch(`${base}/api/providers/codebuddy-cn/accounts?pageSize=200`)).json()).items
       .find((item) => item.label === 'Identity guard account');
