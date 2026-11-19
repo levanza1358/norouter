@@ -8,6 +8,7 @@ import {
 import { fetchProviderQuota } from './quota.js';
 import { refreshProviderToken } from './refresh.js';
 import { getDb, transaction } from './db.js';
+import { emailFromToken } from './account-identity.js';
 import { normalizePlan } from './plan.js';
 import { notifyWebhook } from './webhook.js';
 
@@ -75,6 +76,9 @@ export function publicAccount(row) {
     label: row.label,
     kind: row.kind,
     uid: row.uid,
+    // Codex tokens carry the account email in their claims, so the pool can
+    // name the person behind `cx_1` without asking OpenAI.
+    email: emailFromToken(row.access_token) || emailFromToken(row.refresh_token),
     masked: maskToken(row.access_token || row.refresh_token),
     hasAccessToken: Boolean(row.access_token),
     hasRefreshToken: Boolean(row.refresh_token),

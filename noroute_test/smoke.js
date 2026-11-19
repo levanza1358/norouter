@@ -70,6 +70,7 @@ const {
 } = await import('../noroute_src/lib/antigravity-oauth.js');
 const {
   backfillAccountIdentity,
+  emailFromToken,
   ensureAccountIdentityIndex,
   identityFromToken,
   mergeDuplicateAccounts,
@@ -5652,6 +5653,30 @@ await test('a Codex JWT names its account and plan', () => {
     'sub-only',
   );
   assert.equal(identityFromToken('not-a-jwt'), null);
+  // Real Codex access tokens keep the email inside the profile claim; the
+  // dashboard reads it from there to name the pool row.
+  const profileJwt = testJwt({
+    'https://api.openai.com/profile': { email: 'profile@example.com' },
+    'https://api.openai.com/auth': { chatgpt_account_id: 'acct-profile' },
+  });
+  assert.equal(identityFromToken(profileJwt).email, 'profile@example.com');
+  assert.equal(emailFromToken(profileJwt), 'profile@example.com');
+  assert.equal(emailFromToken('not-a-jwt'), '');
+});
+
+await test('the pool row exposes the Codex account email, never the token', () => {
+  const jwt = testJwt({
+    'https://api.openai.com/profile': { email: 'pool-email@example.com' },
+    'https://api.openai.com/auth': { chatgpt_account_id: 'acct-pool-email' },
+  });
+  const created = createAccount('identity-email-test', {
+    access_token: jwt,
+    uid: 'acct-pool-email',
+  });
+  assert.equal(created.added, 1);
+  const row = getAccount(created.id);
+  assert.equal(row.email, 'pool-email@example.com');
+  assert.equal(row.masked.includes(jwt), false, 'the raw token must never reach the dashboard');
 });
 
 await test('a re-login updates its account instead of adding a twin', () => {

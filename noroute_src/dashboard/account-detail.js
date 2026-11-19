@@ -777,10 +777,11 @@ function accountRowMarkup(account) {
   const quota = accounts.quota.get(account.id);
   const busy = accounts.busy.has(account.id);
   const uid = account.uid ? String(account.uid) : '';
+  const email = String(account.email || '');
   const displayLabel = accountDisplayLabel(account);
   const plan = accountPlanLabel(account.plan);
-  const meta = `${account.masked} · ${kindLabel} · ${expiry}`;
-  const metaTitle = uid ? `${account.masked} · ${kindLabel} · uid ${uid} · ${expiry}` : meta;
+  const meta = [email, account.masked, kindLabel, expiry].filter(Boolean).join(' · ');
+  const metaTitle = uid ? `${meta} · uid ${uid}` : meta;
   const errorText = errorSummary(account.lastError);
   // Each row keeps one primary Check button and a "More" that opens the pool
   // menu. The pool menu is hidden until the pool is loaded (poolDetail) so the

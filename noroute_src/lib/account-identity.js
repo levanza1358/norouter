@@ -12,19 +12,31 @@ function now() {
   return Date.now();
 }
 
+// Codex access tokens carry the account email in the profile claim, not at the
+// top level. Decoding is local and cheap, so the dashboard can name the person
+// behind a token without a provider call.
+function decodePayload(token) {
+  const parts = String(token || '').split('.');
+  if (parts.length !== 3) return null;
+  try {
+    return JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+export function emailFromToken(token) {
+  const payload = decodePayload(token);
+  if (!payload) return '';
+  return String(payload.email || payload['https://api.openai.com/profile']?.email || '').trim();
+}
+
 // Codex access and refresh tokens are JWTs. The CLI reads the account id and
 // plan from the `https://api.openai.com/auth` claim, so a login can name its
 // account without another API call, and an already-stored token can backfill
 // rows that were saved before the uid was captured.
 export function identityFromToken(token) {
-  const parts = String(token || '').split('.');
-  if (parts.length !== 3) return null;
-  let payload;
-  try {
-    payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
-  } catch {
-    return null;
-  }
+  const payload = decodePayload(token);
   const auth = payload?.['https://api.openai.com/auth'];
   if (!auth || typeof auth !== 'object') return null;
   const uid = String(auth.chatgpt_account_id || payload.sub || '').trim();
@@ -32,7 +44,7 @@ export function identityFromToken(token) {
   return {
     uid,
     plan: normalizePlan(auth.chatgpt_plan_type),
-    email: String(payload.email || '').trim(),
+    email: emailFromToken(token),
   };
 }
 
